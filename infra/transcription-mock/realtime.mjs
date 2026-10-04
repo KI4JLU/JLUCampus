@@ -1,5 +1,5 @@
 import { readBody, sendJson, sendText } from './http.mjs'
-import { answerWithPeer } from './realtime-peer.mjs'
+import { answerWithPeer, OfferRefused } from './realtime-peer.mjs'
 
 /**
  * Live transcription, below `/realtime`: the on-prem bridge's `POST /onprem/signaling` (SDP offer
@@ -8,8 +8,8 @@ import { answerWithPeer } from './realtime-peer.mjs'
  *
  * Both answer with a real WebRTC peer (`realtime-peer.mjs`, on werift) that receives the audio and
  * sends a deterministic transcript over the `oai-events` data channel, so either live mode can be
- * tried end to end. An offer that cannot connect (the admin test's, without ICE credentials) or a
- * missing werift gets a well-formed stub answer derived from the offer instead, with which no
+ * tried end to end. An offer the peer cannot negotiate is refused with 400, as by a real bridge.
+ * Only without werift does an offer get a well-formed stub answer derived from it, with which no
  * media or data channel connects. Ephemeral keys are `ek_mock_<n>` and work for `/realtime/calls`
  * only; any other bearer there answers 401.
  *
@@ -26,10 +26,9 @@ export async function handle(request, response, path) {
       sendJson(response, 400, { error: 'Expected an SDP offer' })
       return true
     }
-    sendJson(response, 200, {
-      type: 'answer',
-      sdp: (await answerWithPeer(offer)) ?? answerSdp(offer)
-    })
+    const answer = await answerOrRefusal(offer)
+    if (answer.refused) sendJson(response, 400, { error: answer.refused })
+    else sendJson(response, 200, { type: 'answer', sdp: answer.sdp })
     return true
   }
   if (path === '/openai/v1/realtime/client_secrets') {
@@ -62,11 +61,31 @@ export async function handle(request, response, path) {
       sendJson(response, 400, { error: { message: 'Expected an SDP offer' } })
       return true
     }
+    const answer = await answerOrRefusal(offer)
+    if (answer.refused) {
+      sendJson(response, 400, { error: { message: answer.refused } })
+      return true
+    }
     response.setHeader('Location', `/v1/realtime/calls/rtc_mock_${issued}`)
-    sendText(response, 201, (await answerWithPeer(offer)) ?? answerSdp(offer), 'application/sdp')
+    sendText(response, 201, answer.sdp, 'application/sdp')
     return true
   }
   return false
+}
+
+/**
+ * The peer's answer to an offer, the stub's without werift, or why the offer is refused.
+ *
+ * @param {string} offer
+ * @returns {Promise<{ sdp: string, refused?: undefined } | { refused: string }>}
+ */
+async function answerOrRefusal(offer) {
+  try {
+    return { sdp: (await answerWithPeer(offer)) ?? answerSdp(offer) }
+  } catch (error) {
+    if (error instanceof OfferRefused) return { refused: error.message }
+    throw error
+  }
 }
 
 let issued = 0

@@ -4,10 +4,12 @@ import type { TranscriptionTemplateSection } from '@justcampus/shared'
 /**
  * The template editor's AI section previews, kept in `localStorage` like kiChat's
  * `hawki_template_preview_cache` (T-53): per transcript, template name and section the output and
- * a hash of the instruction it was made with. A changed instruction makes the output stale.
- * kiChat keyed sections by heading; headings need not be unique, so Campus keys them by the
- * section's id, which the editor keeps across saves (`toEditorBlocks`). Campus keys the store by user and module, so one browser shared by several people shows
- * nobody another person's transcript, and sign-out clears it (`clearPreviewCaches`).
+ * a hash of the heading and instruction it was made with, the two things the server's prompt and
+ * cache depend on. A changed heading or instruction makes the output stale. kiChat keyed sections
+ * by heading; headings need not be unique, so Campus keys them by the section's id, which the
+ * editor keeps across saves (`toEditorBlocks`). Campus keys the store by user and module, so one
+ * browser shared by several people shows nobody another person's transcript, and sign-out clears
+ * it (`clearPreviewCaches`).
  */
 
 /** kiChat's key; Campus adds `:<user>:<module>`. */
@@ -32,6 +34,7 @@ export function stringHash(text: string): string {
   return hash.toString()
 }
 
+/** `instructionHash` keeps kiChat's name; it hashes the heading too (`sectionHash`). */
 const cachedSectionSchema = z.object({ instructionHash: z.string(), output: z.string() })
 const previewCacheSchema = z.record(
   z.string(),
@@ -87,8 +90,15 @@ export function cacheScope(transcriptId: string | null, templateName: string): [
   return [transcriptId || 'preview-default', templateName.trim() || 'default']
 }
 
-/** A section as the cache knows it: its id and the instruction its output depends on. */
-export type CachedSectionRef = Pick<TranscriptionTemplateSection, 'instruction'> & { id: string }
+/** A section as the cache knows it: its id and the heading and instruction its output depends on. */
+export type CachedSectionRef = Pick<TranscriptionTemplateSection, 'heading' | 'instruction'> & {
+  id: string
+}
+
+/** The hash an output is stored with: of the heading and the instruction it was made from. */
+export function sectionHash(section: Pick<CachedSectionRef, 'heading' | 'instruction'>): string {
+  return stringHash(JSON.stringify([section.heading, section.instruction]))
+}
 
 export function sectionPreview(
   cache: PreviewCache,
@@ -100,7 +110,7 @@ export function sectionPreview(
   const cached = cache[transcript]?.[template]?.[section.id]
   if (!cached) return { status: 'empty', output: '' }
   return {
-    status: cached.instructionHash === stringHash(section.instruction) ? 'fresh' : 'stale',
+    status: cached.instructionHash === sectionHash(section) ? 'fresh' : 'stale',
     output: cached.output
   }
 }
@@ -119,13 +129,13 @@ export function staleSections<T extends CachedSectionRef>(
 
 /**
  * The cache with the outputs of a preview answer, by section id: only for the sections that were
- * asked for, each with the hash of the instruction it was asked with.
+ * asked for, each with the hash of the heading and instruction it was asked with.
  */
 export function withPreviewResults(
   cache: PreviewCache,
   transcriptId: string | null,
   templateName: string,
-  requested: readonly { id: string; heading: string; instruction: string }[],
+  requested: readonly CachedSectionRef[],
   results: Readonly<Record<string, string>>
 ): PreviewCache {
   const [transcript, template] = cacheScope(transcriptId, templateName)
@@ -133,7 +143,7 @@ export function withPreviewResults(
   for (const section of requested) {
     const output = results[section.id]
     if (output === undefined) continue
-    sections[section.id] = { instructionHash: stringHash(section.instruction), output }
+    sections[section.id] = { instructionHash: sectionHash(section), output }
   }
   return { ...cache, [transcript]: { ...cache[transcript], [template]: sections } }
 }

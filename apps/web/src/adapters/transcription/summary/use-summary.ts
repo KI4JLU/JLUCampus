@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import {
   useMutation,
   useMutationState,
@@ -9,25 +10,39 @@ import {
 import type { TranscriptionSummary, TranscriptionSummaryRequest } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
 import { generateSummary, transcriptionKeys } from '../api'
+import { textFingerprint } from './source'
 
 /**
  * A transcript's summary by template (T-48, T-49). The stored one is looked up with `checkOnly`
- * when the summary is shown; "generate" asks without `forceRegenerate`, "regenerate" with it. All
- * of it is keyed by transcript, revision, template and template version, so an answer never shows
- * for another transcript, an edited one, another template or an older version of the template,
- * even when it arrives after a switch or an edit. The model and its settings are the server's
- * choice; its store is keyed by them too, and a lookup after a reload asks it again.
+ * when the summary is shown; "generate" asks without `forceRegenerate`, "regenerate" with it. A
+ * transcript only this browser has sends its text instead of its id (`source.ts`); the server
+ * stores nothing for it, so only what was generated here shows.
+ *
+ * Section 5 caches summaries by transcript revision, template version, model and settings, and
+ * so does the browser: the key holds the transcript and its revision (for a local one the
+ * fingerprint of the text sent), the template and its version, and the summary model the module
+ * uses (`capabilities.defaultSummaryModel`; the settings are the template's structure and the
+ * transcript's facts, which the version and revision cover). An answer never shows for another
+ * transcript, an edited one, another template, an older version of it or another model, even
+ * when it arrives after a switch, an edit or an admin's change of the model: it is filed under
+ * what it was made from (`fileSummary`).
  */
 
-/** Below `['transcription']`, which a catalogue change invalidates as a whole. */
+/** What a summary is made of in its key: a saved transcript's revision, or `text:<fingerprint>`. */
+export type SummarySourceKey = number | string
+
+/** Below `transcriptionKeys.all`. */
 export const summaryKey = (
   transcriptId: string,
-  revision: number,
+  source: SummarySourceKey,
   templateId: string,
-  templateVersion: number
-): readonly ['transcription', 'summary', string, number, string, number] =>
-  ['transcription', 'summary', transcriptId, revision, templateId, templateVersion] as const
+  templateVersion: number,
+  model: string | null
+): readonly ['transcription', 'summary', string, SummarySourceKey, string, number, string | null] =>
+  ['transcription', 'summary', transcriptId, source, templateId, templateVersion, model] as const
 type SummaryKey = ReturnType<typeof summaryKey>
+
+const NO_KEY = ['transcription', 'summary', 'none'] as const
 
 export type SummaryStatus = 'idle' | 'checking' | 'empty' | 'loading' | 'ready' | 'error'
 
@@ -43,26 +58,35 @@ export interface SummaryState {
 export interface SummaryTarget {
   transcriptId: string
   revision: number
+  /**
+   * The text of a transcript only this browser has, redactions applied, sent instead of its id;
+   * `null` for a saved one.
+   */
+  text: string | null
   templateId: string
   /** The version of the template the user sees; an edit raises it. */
   templateVersion: number
+  /** The summary model the module uses now; the answer names the one the server used. */
+  model: string | null
+}
+
+/** The source part of a target's key: its revision, or its text's fingerprint. */
+export function sourceKey(target: Pick<SummaryTarget, 'revision' | 'text'>): SummarySourceKey {
+  return target.text === null ? target.revision : `text:${textFingerprint(target.text)}`
 }
 
 /**
- * Where a generated summary belongs: under the template version and revision it was made from,
- * which can be newer than the one asked for when the template changed meanwhile. `null`: it was
- * made from text, not the saved transcript, so it belongs nowhere.
+ * Where a generated summary belongs: under the revision, template version and model it was made
+ * from, which can differ from the ones asked for when the transcript, the template or the
+ * module's model changed meanwhile. One made from text belongs to the text that was sent.
  */
-export function summaryKeyOf(
-  transcriptId: string,
-  summary: TranscriptionSummary
-): SummaryKey | null {
-  if (summary.transcriptRevision === null) return null
+export function summaryKeyOf(requested: SummaryKey, summary: TranscriptionSummary): SummaryKey {
   return summaryKey(
-    transcriptId,
-    summary.transcriptRevision,
+    requested[2],
+    summary.transcriptRevision ?? requested[3],
     summary.templateId,
-    summary.templateVersion
+    summary.templateVersion,
+    summary.model
   )
 }
 
@@ -73,21 +97,32 @@ interface Variables {
 
 export function useSummary(target: SummaryTarget | null, enabled = true): SummaryState {
   const client = useQueryClient()
+  const text = target?.text ?? null
+  const revision = target?.revision ?? 0
+  // A local transcript's text can be long; it is fingerprinted when it changes, not each render.
+  const source = useMemo(() => sourceKey({ revision, text }), [revision, text])
   const key = target
-    ? summaryKey(target.transcriptId, target.revision, target.templateId, target.templateVersion)
+    ? summaryKey(
+        target.transcriptId,
+        source,
+        target.templateId,
+        target.templateVersion,
+        target.model
+      )
     : null
 
   const stored = useQuery({
-    queryKey: key ?? ['transcription', 'summary', 'none'],
+    queryKey: key ?? NO_KEY,
     queryFn: async ({ signal }) => {
       const { summary } = await generateSummary(
         { transcriptId: target!.transcriptId, templateId: target!.templateId, checkOnly: true },
         signal
       )
-      // One stored for another version or revision is not this one's.
-      return summary && fileSummary(client, target!.transcriptId, summary, key!) ? summary : null
+      // One stored for another version, revision or model is not this one's.
+      return summary && fileSummary(client, summary, key!) ? summary : null
     },
-    enabled: enabled && key !== null,
+    // Nothing is stored for text; only a summary generated here shows.
+    enabled: enabled && key !== null && text === null,
     // kiChat shows the empty state when the lookup fails, and so does the summary here.
     retry: false,
     staleTime: Infinity,
@@ -95,15 +130,11 @@ export function useSummary(target: SummaryTarget | null, enabled = true): Summar
   })
 
   const generation = useMutation({
-    mutationKey: key ?? ['transcription', 'summary', 'none'],
+    mutationKey: key ?? NO_KEY,
     networkMode: 'always',
     mutationFn: ({ input }: Variables) => generateSummary(input),
-    onSuccess: ({ summary }, { key: requested, input }) => {
-      if (
-        summary &&
-        input.transcriptId &&
-        fileSummary(client, input.transcriptId, summary, requested)
-      ) {
+    onSuccess: ({ summary }, { key: requested }) => {
+      if (summary && fileSummary(client, summary, requested)) {
         client.setQueryData(requested, summary)
       }
     }
@@ -111,21 +142,14 @@ export function useSummary(target: SummaryTarget | null, enabled = true): Summar
   const { mutate } = generation
 
   const runs = useMutationState<MutationState<unknown, Error, Variables>>({
-    filters: { mutationKey: key ?? ['transcription', 'summary', 'none'], exact: true },
+    filters: { mutationKey: key ?? NO_KEY, exact: true },
     select: (mutation) => mutation.state as MutationState<unknown, Error, Variables>
   })
   const last = runs.at(-1)
 
   const generate = (force: boolean): void => {
     if (!target || !key) return
-    mutate({
-      key,
-      input: {
-        transcriptId: target.transcriptId,
-        templateId: target.templateId,
-        forceRegenerate: force
-      }
-    })
+    mutate({ key, input: summaryRequest(target, force) })
   }
 
   let status: SummaryStatus
@@ -144,28 +168,41 @@ export function useSummary(target: SummaryTarget | null, enabled = true): Summar
   }
 }
 
+/** The request that generates a target's summary: by id, or by text for a local transcript. */
+export function summaryRequest(target: SummaryTarget, force: boolean): TranscriptionSummaryRequest {
+  return target.text === null
+    ? { transcriptId: target.transcriptId, templateId: target.templateId, forceRegenerate: force }
+    : { transcriptText: target.text, templateId: target.templateId, forceRegenerate: force }
+}
+
 /**
- * Whether a summary belongs under `requested`. One made from another template version or revision
- * is filed under its own key instead, and the template and transcript are fetched again, so a
- * newer one moves the view there; a late answer for an older one stays under the older key.
+ * Whether a summary belongs under `requested`. One made from another template version, revision
+ * or model is filed under its own key instead, and whatever named the outdated part is fetched
+ * again (template list, transcript, capabilities), so a newer one moves the view there; a late
+ * answer for an older one stays under the older key.
  */
 export function fileSummary(
   client: QueryClient,
-  transcriptId: string,
   summary: TranscriptionSummary,
   requested: SummaryKey
 ): boolean {
-  const made = summaryKeyOf(transcriptId, summary)
-  if (!made) return false
+  const made = summaryKeyOf(requested, summary)
   if (sameKey(made, requested)) return true
   client.setQueryData(made, summary)
-  void client.invalidateQueries({ queryKey: transcriptionKeys.templates })
-  void client.invalidateQueries({ queryKey: transcriptionKeys.transcript(transcriptId) })
+  if (made[4] !== requested[4] || made[5] !== requested[5]) {
+    void client.invalidateQueries({ queryKey: transcriptionKeys.templates })
+  }
+  if (made[3] !== requested[3]) {
+    void client.invalidateQueries({ queryKey: transcriptionKeys.transcript(requested[2]) })
+  }
+  if (made[6] !== requested[6]) {
+    void client.invalidateQueries({ queryKey: transcriptionKeys.capabilities })
+  }
   return false
 }
 
-function sameKey(a: SummaryKey | null, b: SummaryKey): boolean {
-  return a !== null && a.every((part, index) => part === b[index])
+function sameKey(a: SummaryKey, b: SummaryKey): boolean {
+  return a.every((part, index) => part === b[index])
 }
 
 /** The texts of a failed generation. */

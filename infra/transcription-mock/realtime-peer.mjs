@@ -9,9 +9,10 @@
  * sentence. The browser's `input_audio_buffer.commit` (on-prem stop) finishes at once with one last
  * item, empty if no audio came since the last one, so stopping does not wait.
  *
- * An offer werift cannot take (no ICE credentials or fingerprint, as the admin connection test
- * sends) or a missing `werift` makes `answerWithPeer` return `null`; the caller then answers with
- * the signaling-only stub.
+ * An offer werift cannot take (no ICE credentials or fingerprint, say) is refused as a real bridge
+ * would refuse it: `answerWithPeer` throws `OfferRefused`. Only a missing `werift` makes it return
+ * `null`; the caller then answers with the signaling-only stub. A peer that does not connect
+ * within `CONNECT_MS` (the admin connection test's offer never does) is closed.
  */
 
 /** Seconds of received audio per transcript item. */
@@ -20,6 +21,11 @@ export const ITEM_SECONDS = 3
 const DELTA_MS = 80
 /** A session without audio for this long is closed. */
 const IDLE_MS = 120_000
+/** A peer not connected after this long is closed. */
+const CONNECT_MS = 30_000
+
+/** An offer the peer cannot negotiate; the bridge answers it with an error. */
+export class OfferRefused extends Error {}
 
 /** The script, one sentence per item, then from the start again. */
 export const SCRIPT = [
@@ -57,13 +63,15 @@ const peers = new Set()
 
 /**
  * Answers `offer` with a werift peer that transcribes as described above, after gathering its
- * candidates (nobody trickles). `null` if the offer or the environment does not allow it.
+ * candidates (nobody trickles). `null` without werift; `OfferRefused` for an offer it cannot take.
  *
  * @param {string} offer
  * @returns {Promise<string | null>}
  */
 export async function answerWithPeer(offer) {
-  if (!isNegotiable(offer)) return null
+  if (!isNegotiable(offer)) {
+    throw new OfferRefused('The offer has no ICE credentials or DTLS fingerprint')
+  }
   const lib = await loadWerift()
   if (!lib) return null
   const { RTCPeerConnection, RTCRtpCodecParameters } = lib
@@ -78,11 +86,12 @@ export async function answerWithPeer(offer) {
     await peer.setRemoteDescription({ type: 'offer', sdp: offer })
     await peer.setLocalDescription(await peer.createAnswer())
     await gathered(peer)
-    return peer.localDescription?.sdp ?? null
+    const answer = peer.localDescription?.sdp
+    if (!answer) throw new Error('The peer made no answer')
+    return answer
   } catch (error) {
-    console.error('Realtime mock peer failed', error)
     await Promise.resolve(peer.close()).catch(() => {})
-    return null
+    throw new OfferRefused(`The offer cannot be negotiated: ${error?.message ?? error}`)
   }
 }
 
@@ -129,8 +138,12 @@ class MockSession {
       if (state === 'failed' || state === 'closed' || state === 'disconnected') void this.close()
     })
     this.timer = setInterval(() => this.tick(), ITEM_SECONDS * 1000)
+    this.connectTimer = setTimeout(() => {
+      if (peer.connectionState !== 'connected') void this.close()
+    }, CONNECT_MS)
     // A forgotten session must not keep the mock (or a test run) alive.
     this.timer.unref?.()
+    this.connectTimer.unref?.()
   }
 
   tick() {
@@ -197,6 +210,7 @@ class MockSession {
     if (this.closed) return
     this.closed = true
     clearInterval(this.timer)
+    clearTimeout(this.connectTimer)
     peers.delete(this)
     await Promise.resolve(this.peer.close()).catch(() => {})
   }

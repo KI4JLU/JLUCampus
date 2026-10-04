@@ -1,37 +1,127 @@
 import { TRANSCRIPTION_API } from '@justcampus/shared'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { TEST_SDP_OFFER } from '../admin/connections.js'
 import { json, startUpstreamMock, testApp, type RunningMock } from '../transcripts/testing.js'
 import { realtimeRouter } from './index.js'
+import { probeOffer, sdpAnswerProblem } from './sdp.js'
 import { isTurnServer, sessionIceServers, turnCredential, TurnNotSetUpError } from './turn.js'
 import { clientSecretRequest, parseClientSecret, parseSignalingAnswer } from './upstream.js'
 
 const relative = (path: string): string => path.replace('/api/modules/transcription', '')
 
 describe('upstream answers', () => {
+  /** A bridge's answer to a two-section offer, credentials per section. */
+  const answer = [
+    'v=0',
+    'o=bridge 1 1 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE 0 1',
+    'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+    'c=IN IP4 0.0.0.0',
+    'a=mid:0',
+    'a=ice-ufrag:abcd',
+    'a=ice-pwd:abcdefghijklmnopqrstuvwx',
+    'a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF',
+    'a=setup:passive',
+    'a=recvonly',
+    'a=rtpmap:111 opus/48000/2',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 0.0.0.0',
+    'a=mid:1',
+    'a=ice-ufrag:abcd',
+    'a=ice-pwd:abcdefghijklmnopqrstuvwx',
+    'a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF',
+    'a=setup:passive',
+    'a=sctp-port:5000',
+    ''
+  ].join('\r\n')
+
   it('reads the bridge’s SDP answer as JSON or as SDP', () => {
-    expect(parseSignalingAnswer('{"sdp": "v=0\\r\\no=- 1"}', 'application/json')).toBe(
-      'v=0\r\no=- 1'
-    )
-    expect(parseSignalingAnswer('{"answer": {"sdp": "v=0\\no=x"}}', null)).toBe('v=0\no=x')
-    expect(parseSignalingAnswer('v=0\r\ns=-\r\n', 'application/sdp')).toBe('v=0\r\ns=-\r\n')
+    expect(parseSignalingAnswer(JSON.stringify({ sdp: answer }), 'application/json')).toBe(answer)
+    expect(parseSignalingAnswer(JSON.stringify({ answer: { sdp: answer } }), null)).toBe(answer)
+    expect(parseSignalingAnswer(answer, 'application/sdp', probeOffer())).toBe(answer)
     expect(() => parseSignalingAnswer('{"error": "busy"}', 'application/json')).toThrow(
       'without an SDP answer'
     )
     expect(() => parseSignalingAnswer('<html>', 'text/html')).toThrow()
   })
 
-  it('reads ephemeral keys of either answer shape', () => {
-    expect(parseClientSecret({ value: 'ek_1', expires_at: 1_800_000_000 })).toEqual({
+  it('refuses an SDP answer no WebRTC peer could use', () => {
+    // Only the version line, as in the review's counterexample.
+    expect(() => parseSignalingAnswer('v=0\r\n', 'application/sdp')).toThrow('unusable SDP')
+    expect(sdpAnswerProblem('v=0\r\n')).toBe('no o= line')
+    expect(sdpAnswerProblem(answer.replace(/^m=.*\r\n/gm, ''))).toBe('no media section')
+    expect(sdpAnswerProblem(answer.replaceAll('a=fingerprint:', 'a=x-fingerprint:'))).toBe(
+      'no fingerprint for audio'
+    )
+    expect(sdpAnswerProblem(answer.replaceAll('a=ice-pwd:', 'a=x-pwd:'))).toBe(
+      'no ice-pwd for audio'
+    )
+    expect(sdpAnswerProblem(answer.replace('UDP/TLS/RTP/SAVPF', 'RTP/AVP'))).toMatch(
+      /^not a WebRTC media section/
+    )
+    // One media section for an offer of two breaks RFC 3264.
+    const audioOnly = answer.slice(0, answer.indexOf('m=application'))
+    expect(sdpAnswerProblem(audioOnly, probeOffer())).toBe("1 media sections for the offer's 2")
+    // Credentials for the whole session do; a rejected section (port 0) needs none.
+    const sessionLevel = [
+      'v=0',
+      'o=- 1 1 IN IP4 127.0.0.1',
+      's=-',
+      't=0 0',
+      'a=ice-ufrag:abcd',
+      'a=ice-pwd:abcdefghijklmnopqrstuvwx',
+      'a=fingerprint:sha-256 00:11',
+      'm=audio 0 UDP/TLS/RTP/SAVPF 111',
+      'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+      ''
+    ].join('\r\n')
+    expect(sdpAnswerProblem(sessionLevel, probeOffer())).toBeNull()
+    expect(sdpAnswerProblem(sessionLevel.replace(' 9 UDP/DTLS', ' 0 UDP/DTLS'))).toBe(
+      'every media section rejected'
+    )
+  })
+
+  it('makes a fresh, browser-like offer that a WebRTC peer accepts and answers', async () => {
+    const offer = probeOffer()
+    expect(offer).toMatch(/^m=audio 9 UDP\/TLS\/RTP\/SAVPF 111$/m)
+    expect(offer).toMatch(/^m=application 9 UDP\/DTLS\/SCTP webrtc-datachannel$/m)
+    expect(offer).toMatch(/^a=ice-ufrag:\w{4}$/m)
+    expect(offer).toMatch(/^a=ice-pwd:\w{24}$/m)
+    expect(offer).toMatch(/^a=fingerprint:sha-256 ([0-9A-F]{2}:){31}[0-9A-F]{2}$/m)
+    expect(offer).toMatch(/^a=setup:actpass$/m)
+    // Every test has its own credentials, as every browser session has.
+    expect(probeOffer().match(/a=ice-pwd:.*/)?.[0]).not.toBe(offer.match(/a=ice-pwd:.*/)?.[0])
+
+    const { RTCPeerConnection } = await import('werift')
+    const peer = new RTCPeerConnection()
+    try {
+      await peer.setRemoteDescription({ type: 'offer', sdp: offer })
+      const local = await peer.createAnswer()
+      expect(local.sdp).toContain('m=audio')
+      expect(local.sdp).toContain('webrtc-datachannel')
+      expect(sdpAnswerProblem(local.sdp, offer)).toBeNull()
+    } finally {
+      await peer.close()
+    }
+  })
+
+  it('reads ephemeral keys of either answer shape, unless expired', () => {
+    const now = new Date('2026-10-04T10:00:00.000Z')
+    expect(parseClientSecret({ value: 'ek_1', expires_at: 1_800_000_000 }, now)).toEqual({
       value: 'ek_1',
       expiresAt: '2027-01-15T08:00:00.000Z'
     })
-    expect(parseClientSecret({ client_secret: { value: 'ek_2' } })).toEqual({
+    expect(parseClientSecret({ client_secret: { value: 'ek_2' } }, now)).toEqual({
       value: 'ek_2',
       expiresAt: null
     })
-    expect(() => parseClientSecret({})).toThrow()
+    expect(() => parseClientSecret({}, now)).toThrow()
+    expect(() => parseClientSecret({ value: 'expired-key', expires_at: 1 }, now)).toThrow('expired')
+    expect(() =>
+      parseClientSecret({ value: 'ek_3', expires_at: now.getTime() / 1000 }, now)
+    ).toThrow('expired')
   })
 
   it('asks for a transcription session with the admin’s model', () => {
@@ -163,7 +253,7 @@ describe('realtime routes', () => {
   it('passes the offer to the on-prem bridge and its answer back', async () => {
     const response = await testApp(realtimeRouter, config).request(
       relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
-      json('POST', { sdp: TEST_SDP_OFFER })
+      json('POST', { sdp: probeOffer() })
     )
     expect(response.status).toBe(200)
     const { sdp } = (await response.json()) as { sdp: string }
@@ -223,9 +313,28 @@ describe('realtime routes', () => {
       json('POST', { sdp: 'not sdp' })
     )
     expect(refused.status).toBe(502)
+    // An offer without ICE credentials or fingerprint is refused as a real bridge refuses it,
+    // not answered with a stand-in.
+    const bare = [
+      'v=0',
+      'o=- 0 0 IN IP4 127.0.0.1',
+      's=-',
+      't=0 0',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'c=IN IP4 0.0.0.0',
+      'a=mid:0',
+      'a=sendonly',
+      'a=rtpmap:111 opus/48000/2',
+      ''
+    ].join('\r\n')
+    const unnegotiable = await testApp(realtimeRouter, config).request(
+      relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
+      json('POST', { sdp: bare })
+    )
+    expect(unnegotiable.status).toBe(502)
     const missing = await testApp(realtimeRouter).request(
       relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
-      json('POST', { sdp: TEST_SDP_OFFER })
+      json('POST', { sdp: probeOffer() })
     )
     expect(missing.status).toBe(502)
     const empty = await testApp(realtimeRouter, config).request(
@@ -253,7 +362,7 @@ describe('realtime routes', () => {
     const call = await fetch(session.callsUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp', Authorization: `Bearer ${session.value}` },
-      body: TEST_SDP_OFFER
+      body: probeOffer()
     })
     expect(call.status).toBe(201)
     expect(await call.text()).toMatch(/^v=0\r\n/)

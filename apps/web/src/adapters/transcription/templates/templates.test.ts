@@ -21,6 +21,7 @@ import {
   PREVIEW_CACHE_KEY,
   previewCacheKey,
   readPreviewCache,
+  sectionHash,
   sectionPreview,
   staleSections,
   stringHash,
@@ -198,6 +199,23 @@ describe('preview cache', () => {
     // Another transcript or template name has its own previews.
     expect(sectionPreview(cache, 'u', 'Vorlage', section).status).toBe('empty')
     expect(sectionPreview(cache, 't', 'Andere', section).status).toBe('empty')
+  })
+
+  it('marks a section stale when its heading changes, as the server prompts with it', () => {
+    const decisions = { id: 's1', heading: 'Beschlüsse', instruction: 'Liste die Punkte.' }
+    const cache = withPreviewResults({}, 't', 'V', [decisions], { s1: 'Alte Ausgabe' })
+    expect(sectionPreview(cache, 't', 'V', decisions).status).toBe('fresh')
+    const renamed = { ...decisions, heading: 'To-dos' }
+    expect(sectionPreview(cache, 't', 'V', renamed)).toEqual({
+      status: 'stale',
+      output: 'Alte Ausgabe'
+    })
+    // "Test preview" asks for it again.
+    expect(staleSections(cache, 't', 'V', [renamed])).toEqual([renamed])
+    // Heading and instruction are hashed apart: moving text between them is a change too.
+    expect(sectionHash({ heading: 'ab', instruction: 'c' })).not.toBe(
+      sectionHash({ heading: 'a', instruction: 'bc' })
+    )
   })
 
   it('fills only the sections asked for', () => {

@@ -15,6 +15,7 @@ import { openaiRealtimeEndpoints } from '../config.js'
 import { bearer, listModels, upstreamFetch, UpstreamError, upstreamUrl } from '../http.js'
 import { parseVerboseJson } from '../jobs/asr.js'
 import { parseDiarization } from '../jobs/diarization.js'
+import { probeOffer } from '../realtime/sdp.js'
 import {
   clientSecretRequest,
   parseClientSecret,
@@ -80,25 +81,6 @@ export function silentWav(seconds = 0.5, sampleRate = 16_000): Uint8Array {
   view.setUint32(40, samples * 2, true)
   return new Uint8Array(buffer)
 }
-
-/** A minimal SDP offer with one audio track and a data channel, for the bridge test. */
-export const TEST_SDP_OFFER = [
-  'v=0',
-  'o=- 0 0 IN IP4 127.0.0.1',
-  's=-',
-  't=0 0',
-  'a=group:BUNDLE 0 1',
-  'm=audio 9 UDP/TLS/RTP/SAVPF 111',
-  'c=IN IP4 0.0.0.0',
-  'a=mid:0',
-  'a=sendonly',
-  'a=rtpmap:111 opus/48000/2',
-  'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
-  'c=IN IP4 0.0.0.0',
-  'a=mid:1',
-  'a=sctp-port:5000',
-  ''
-].join('\r\n')
 
 const TEST_TIMEOUT_MS = 15_000
 /** A speech or chat call on a slow, cold model may take longer than a listing. */
@@ -199,14 +181,24 @@ async function checkTranscription(
     signal,
     OPERATION_TIMEOUT_MS
   )
+  const body = await jsonOf(response, 'transcription')
   try {
-    parseVerboseJson(await response.json(), 1)
+    if (!transcriptionAnswerSchema.safeParse(body).success) throw new Error('Not a transcription')
+    parseVerboseJson(body, 1)
   } catch {
     throw new CheckFailed({ kind: 'invalidAnswer', expected: 'transcription' }, response.status)
   }
   checks.push({ kind: 'transcribed', model })
   return response.status
 }
+
+/**
+ * What a transcription answer has to be beyond what jobs read leniently: Whisper's `verbose_json`
+ * with its `text`, empty for silence, and no error envelope; segments, if any, as a list.
+ */
+const transcriptionAnswerSchema = z
+  .looseObject({ text: z.string(), segments: z.array(z.unknown()).optional() })
+  .refine((body) => !('error' in body))
 
 /** A one-word chat completion with `model`. */
 async function checkChat(
@@ -229,7 +221,8 @@ async function checkChat(
         model,
         messages: [{ role: 'user', content: 'Antworte nur mit: OK' }],
         temperature: 0,
-        max_tokens: 16,
+        // Room for reasoning models, which think before they answer.
+        max_tokens: 256,
         stream: false
       })
     },
@@ -243,9 +236,18 @@ async function checkChat(
   checks.push({ kind: 'chatAnswered', model })
   return response.status
 }
+/** A completion with an answer: text in the first choice, besides any thinking. */
 const chatAnswerSchema = z.object({
   choices: z
-    .array(z.object({ message: z.object({ content: z.string().nullable().optional() }) }))
+    .array(
+      z.object({
+        message: z.object({
+          content: z
+            .string()
+            .refine((content) => content.replace(/<think>[^]*?<\/think>/gi, '').trim() !== '')
+        })
+      })
+    )
     .min(1)
 })
 
@@ -319,9 +321,9 @@ export interface ConnectionContext {
 
 /**
  * Checks one upstream with the typed values, else the saved ones, by doing what the module does
- * with it: a second of audio recognised or diarised, a chat answer, an SDP answer from the bridge,
- * an ephemeral key from OpenAI (withheld), a stored object read back through signed URLs and
- * deleted. Model lists are reported besides, never as proof (section 5). `checks` names each
+ * with it: a second of audio recognised or diarised, a chat answer, a usable SDP answer from the
+ * bridge to a browser-like offer, an unexpired ephemeral key from OpenAI (withheld), a stored
+ * object read back through signed URLs and deleted. A 2xx answer of another shape fails. Model lists are reported besides, never as proof (section 5). `checks` names each
  * step; nothing in the answer is a key.
  */
 export async function testConnection(
@@ -398,6 +400,7 @@ export async function testConnection(
       case 'realtimeOnprem': {
         const url = input.url ?? config.onpremSignalingUrl
         if (!url) return notSetUp()
+        const offer = probeOffer()
         const response = await answer(
           url,
           {
@@ -406,12 +409,12 @@ export async function testConnection(
               'Content-Type': 'application/json',
               Accept: 'application/json, application/sdp'
             },
-            body: JSON.stringify({ sdp: TEST_SDP_OFFER, type: 'offer' })
+            body: JSON.stringify({ sdp: offer, type: 'offer' })
           },
           signal
         )
         try {
-          parseSignalingAnswer(await response.text(), response.headers.get('content-type'))
+          parseSignalingAnswer(await response.text(), response.headers.get('content-type'), offer)
         } catch {
           throw new CheckFailed({ kind: 'invalidAnswer', expected: 'sdpAnswer' }, response.status)
         }

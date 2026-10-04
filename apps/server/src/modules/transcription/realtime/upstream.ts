@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { bearer, ensureOk, upstreamFetch, UpstreamError } from '../http.js'
+import { sdpAnswerProblem } from './sdp.js'
 
 /**
  * The two live transcription upstreams (T-59, T-60): the on-prem bridge, which takes the
@@ -26,9 +27,14 @@ const signalingAnswerSchema = z.object({
 
 /**
  * The bridge's SDP answer from its response: JSON `{sdp}` (or `{answer}`), or the SDP itself as
- * `application/sdp` or text.
+ * `application/sdp` or text. It must be one a WebRTC peer can use (`sdpAnswerProblem`), for
+ * `offer` if given.
  */
-export function parseSignalingAnswer(body: string, contentType: string | null): string {
+export function parseSignalingAnswer(
+  body: string,
+  contentType: string | null,
+  offer: string | null = null
+): string {
   let sdp: string | undefined
   if (contentType?.includes('json') || body.trimStart().startsWith('{')) {
     let json: unknown
@@ -47,6 +53,10 @@ export function parseSignalingAnswer(body: string, contentType: string | null): 
   }
   if (!sdp || !isSdp(sdp) || sdp.length > SDP_MAX) {
     throw new UpstreamError('The signaling bridge answered without an SDP answer', 200)
+  }
+  const problem = sdpAnswerProblem(sdp.trimStart(), offer)
+  if (problem) {
+    throw new UpstreamError(`The signaling bridge answered with an unusable SDP: ${problem}`, 200)
   }
   return sdp
 }
@@ -67,7 +77,7 @@ export async function onpremSignaling(
     }),
     'The signaling bridge'
   )
-  return parseSignalingAnswer(await response.text(), response.headers.get('content-type'))
+  return parseSignalingAnswer(await response.text(), response.headers.get('content-type'), offer)
 }
 
 /** How long an ephemeral key lasts: long enough to connect, not more. */
@@ -94,13 +104,22 @@ const clientSecretSchema = z.union([
     .transform((body) => body.client_secret)
 ])
 
-/** An ephemeral key from OpenAI's answer, with its expiry (seconds since the epoch). */
-export function parseClientSecret(body: unknown): { value: string; expiresAt: string | null } {
+/**
+ * An ephemeral key from OpenAI's answer, with its expiry (seconds since the epoch). One that has
+ * already expired at `now` is no key.
+ */
+export function parseClientSecret(
+  body: unknown,
+  now: Date = new Date()
+): { value: string; expiresAt: string | null } {
   const parsed = clientSecretSchema.safeParse(body)
   if (!parsed.success) {
     throw new UpstreamError('OpenAI answered without an ephemeral key', 200)
   }
   const expires = parsed.data.expires_at
+  if (typeof expires === 'number' && expires * 1000 <= now.getTime()) {
+    throw new UpstreamError('OpenAI answered with an ephemeral key that has expired', 200)
+  }
   return {
     value: parsed.data.value,
     expiresAt: typeof expires === 'number' ? new Date(expires * 1000).toISOString() : null

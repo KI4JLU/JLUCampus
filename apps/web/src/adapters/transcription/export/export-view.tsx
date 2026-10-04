@@ -25,9 +25,10 @@ import {
 import type { TranscriptionTemplate } from '@justcampus/shared'
 import { meQuery } from '@/lib/queries'
 import { toast } from '@/lib/toast'
-import { useTranscriptionTemplates } from '../api'
+import { useTranscriptionCapabilities, useTranscriptionTemplates } from '../api'
 import { Notice } from '../notice'
 import { SummaryPanel } from '../summary'
+import { summarySource } from '../summary/source'
 import { useSummary, type SummaryState } from '../summary/use-summary'
 import { TemplateEditor, TemplateLibraryDialog } from '../templates'
 import {
@@ -132,13 +133,19 @@ function ExportPreview({
   const visibleOfTranscript = state.visibleSpeakers[transcript.id]
   const visible = useMemo(() => visibleOfTranscript ?? {}, [visibleOfTranscript])
 
+  // The summary model is part of the summary's identity; it is known once the module answered.
+  const capabilities = useTranscriptionCapabilities()
+  // A local transcript sends its current text, redactions applied (T-49).
+  const source = useMemo(() => summarySource(document), [document])
   const summary = useSummary(
-    template
+    template && !capabilities.isPending
       ? {
           transcriptId: transcript.id,
           revision: transcript.revision,
+          text: source.transcriptText,
           templateId: template.id,
-          templateVersion: template.version
+          templateVersion: template.version,
+          model: capabilities.data?.defaultSummaryModel ?? null
         }
       : null,
     category === 'summary'

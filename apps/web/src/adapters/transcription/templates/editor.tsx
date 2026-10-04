@@ -61,6 +61,7 @@ import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { previewSummary, useSaveTemplate } from '../api'
 import { Notice } from '../notice'
+import { summarySource } from '../summary/source'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import {
   fillPlaceholders,
@@ -237,11 +238,15 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
     .slice(0, TRANSCRIPTION_PREVIEW_SECTIONS_MAX)
   // The editor's key is the section's id (`toEditorBlocks`), also where a saved id collided.
   const previewOf = (block: SectionBlock): ReturnType<typeof sectionPreview> =>
-    sectionPreview(cache, transcriptId, name, { id: block.key, instruction: block.instruction })
+    sectionPreview(cache, transcriptId, name, {
+      id: block.key,
+      heading: block.heading,
+      instruction: block.instruction
+    })
   const stale = previewable.filter((block) => previewOf(block).status !== 'fresh')
 
   const runPreview = async (sections: SectionBlock[], wanted: SectionBlock[]): Promise<void> => {
-    if (!transcriptId) {
+    if (!transcriptId || !currentDocument) {
       toast({ variant: 'error', title: t('transcription.export.noTranscriptLoaded') })
       return
     }
@@ -260,7 +265,8 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
     setSectionErrors(without)
     try {
       const response = await previewSummary({
-        transcriptId,
+        // A local transcript sends its text, redactions applied (T-49, T-53).
+        ...summarySource(currentDocument),
         sections: requested,
         staleSectionIds: ids
       })

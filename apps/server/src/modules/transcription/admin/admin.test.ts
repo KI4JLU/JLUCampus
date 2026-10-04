@@ -267,6 +267,86 @@ describe('connection tests', () => {
     )
   })
 
+  it('rejects 2xx answers that parse but are no result of the operation', async () => {
+    // The review's counterexamples: each answered 200 and passed before.
+    const answers: Record<string, () => Response> = {
+      'audio/transcriptions': () => Response.json({ error: 'operation failed' }),
+      'chat/completions': () => Response.json({ choices: [{ message: {} }] }),
+      signaling: () => new Response('v=0\r\n', { headers: { 'Content-Type': 'application/sdp' } }),
+      client_secrets: () => Response.json({ value: 'expired-key', expires_at: 1 })
+    }
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const path = String(url)
+      if (path.endsWith('/models')) return Response.json({ data: [{ id: 'jlu/whisper-1' }] })
+      const match = Object.entries(answers).find(([suffix]) => path.endsWith(suffix))
+      return match ? match[1]() : new Response('?', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const invalid = (expected: string): Record<string, unknown> => ({
+      ok: false,
+      status: 200,
+      finding: { kind: 'invalidAnswer', expected }
+    })
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject(
+      invalid('transcription')
+    )
+    expect(
+      await testConnection({ target: 'llm', model: 'jlu/whisper-1' }, context())
+    ).toMatchObject(invalid('chat'))
+    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject(
+      invalid('sdpAnswer')
+    )
+    const openai = await testConnection({ target: 'realtimeOpenai' }, context())
+    expect(openai).toMatchObject(invalid('clientSecret'))
+    expect(JSON.stringify(openai)).not.toMatch(/expired-key|sk-openai/)
+
+    // Empty or thinking-only chat content is no answer either; unrelated JSON no transcription.
+    answers['chat/completions'] = () =>
+      Response.json({ choices: [{ message: { content: '<think>…</think> ' } }] })
+    answers['audio/transcriptions'] = () => Response.json({ result: 'ok' })
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject(
+      invalid('transcription')
+    )
+    expect(
+      await testConnection({ target: 'llm', model: 'jlu/whisper-1' }, context())
+    ).toMatchObject(invalid('chat'))
+
+    // Silence is a valid transcription: Whisper's shape with empty text.
+    answers['audio/transcriptions'] = () =>
+      Response.json({ task: 'transcribe', language: 'german', duration: 1, text: '', segments: [] })
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject({
+      ok: true,
+      finding: { kind: 'transcribed' }
+    })
+  })
+
+  it('offers the bridge what a browser offers and checks its answer against it', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        sdp: 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=ice-ufrag:abcd\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 00:11\r\n'
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    // One media section for the offer's audio and data channel.
+    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
+      ok: false,
+      finding: { kind: 'invalidAnswer', expected: 'sdpAnswer' }
+    })
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+    const { sdp, type } = JSON.parse(String(init.body)) as { sdp: string; type: string }
+    expect(type).toBe('offer')
+    for (const line of [
+      /^m=audio 9 UDP\/TLS\/RTP\/SAVPF 111$/m,
+      /^m=application 9 UDP\/DTLS\/SCTP webrtc-datachannel$/m,
+      /^a=ice-ufrag:/m,
+      /^a=ice-pwd:/m,
+      /^a=fingerprint:sha-256 /m,
+      /^a=setup:actpass$/m
+    ]) {
+      expect(sdp).toMatch(line)
+    }
+  })
+
   it('tests the bridge with an offer and OpenAI with a key request, never echoing keys', async () => {
     expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
       ok: true,
