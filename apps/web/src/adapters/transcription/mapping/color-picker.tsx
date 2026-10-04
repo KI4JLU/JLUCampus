@@ -8,8 +8,10 @@ import {
 } from '@justcampus/shared'
 
 /**
- * A speaker colour as a dot. DS gap: no categorical palette of ten and no coloured Avatar variant,
- * so the dot takes kiChat's speaker colour inline.
+ * A speaker colour as a dot. DS gap (a dependency for the DS repo): `AccentSwatch` draws only the
+ * six theme accents and `Avatar` takes no colour, but the ten speaker colours are data (kept per
+ * transcript by id, used by the exports), so the dot takes kiChat's colour inline. Nothing else
+ * of it is styled; the controls around it are DS Buttons in a DS Popover.
  */
 export function ColorDot({ colorId }: { colorId: TranscriptionSpeakerColorId }): React.JSX.Element {
   return (

@@ -215,10 +215,15 @@ export class TranscriptionStorage {
     await this.internal.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
   }
 
-  /** Deletes every object under `prefix`, e.g. all of one job's files. Returns how many. */
+  /**
+   * Deletes every object under `prefix`, e.g. all of one job's files. Returns how many. Objects
+   * the storage refused to delete (S3 answers `200` and lists them under `Errors`) make it throw
+   * `PartialDeleteError` once every page was tried, so callers keep the job for another attempt.
+   */
   async deletePrefix(prefix: string): Promise<number> {
     if (!prefix.endsWith('/')) throw new Error('A prefix to delete must end with "/"')
     let deleted = 0
+    const failed: PartialDeleteError['failures'] = []
     let token: string | undefined
     do {
       const page = await this.internal.send(
@@ -226,16 +231,22 @@ export class TranscriptionStorage {
       )
       const keys = (page.Contents ?? []).flatMap((object) => (object.Key ? [object.Key] : []))
       if (keys.length > 0) {
-        await this.internal.send(
+        const result = await this.internal.send(
           new DeleteObjectsCommand({
             Bucket: this.bucket,
             Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true }
           })
         )
-        deleted += keys.length
+        const errors = (result.Errors ?? []).map((error) => ({
+          key: error.Key ?? null,
+          code: error.Code ?? null
+        }))
+        failed.push(...errors)
+        deleted += keys.length - errors.length
       }
       token = page.IsTruncated ? page.NextContinuationToken : undefined
     } while (token)
+    if (failed.length > 0) throw new PartialDeleteError(prefix, failed)
     return deleted
   }
 
@@ -244,6 +255,18 @@ export class TranscriptionStorage {
     await this.internal.send(new HeadBucketCommand({ Bucket: this.bucket }), {
       abortSignal: signal
     })
+  }
+}
+
+/** Storage deleted only part of a prefix; the rest stays for the next attempt. */
+export class PartialDeleteError extends Error {
+  constructor(
+    readonly prefix: string,
+    readonly failures: { key: string | null; code: string | null }[]
+  ) {
+    const codes = [...new Set(failures.map((failure) => failure.code ?? 'unknown'))].join(', ')
+    super(`Storage kept ${failures.length} object(s) under ${prefix} (${codes})`)
+    this.name = 'PartialDeleteError'
   }
 }
 

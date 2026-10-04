@@ -88,6 +88,29 @@ describe('voicesFromSpeakers', () => {
     expect(kept[0]).toMatchObject({ id: 'A', name: 'Ada', colorId: 4, start: 1 })
   })
 
+  it('keeps voices added by hand with their samples when analysed again (T-13, T-20)', () => {
+    const bob = voice({
+      id: 'manual_1',
+      manual: true,
+      name: 'Bob',
+      colorId: 7,
+      start: null,
+      end: null,
+      samples: [{ key: 'local-1', label: 'Sample 1', start: 5, end: 10 }]
+    })
+    const kept = voicesFromSpeakers([speaker('SPEAKER_00', 0, 2)], labels, [
+      voice({ id: 'SPEAKER_00', name: 'Ada' }),
+      bob
+    ])
+    expect(kept.map((entry) => entry.name)).toEqual(['Ada', 'Bob'])
+    expect(kept[1]).toEqual(bob)
+    const dispatch = voiceDispatch(kept, 30, autoLabel)
+    expect(dispatch.mapping).toMatchObject({ SPEAKER_00: 'Ada', manual_1: 'Bob' })
+    expect(dispatch.snippets).toContainEqual({ id: 'manual_1', name: 'Bob', start: 5, end: 10 })
+    // Without `previous` (the dialog's Repeat analysis) only the analysed voices come.
+    expect(voicesFromSpeakers([speaker('SPEAKER_00', 0, 2)], labels)).toHaveLength(1)
+  })
+
   it('puts voices added by hand last (T-18, T-20)', () => {
     const manual = voice({ id: 'manual_1', manual: true, start: null, end: null })
     const ordered = orderVoices([

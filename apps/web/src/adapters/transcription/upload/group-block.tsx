@@ -1,12 +1,12 @@
 import type { DragEvent } from 'react'
-import { FilePlusIcon, FileTextIcon, FolderIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
+import { FilePlusIcon, FileTextIcon, FolderIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, Card, CardContent, Input } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_TITLE_MAX } from '@justcampus/shared'
-import { Alert, AlertAction, AlertDescription } from '@/components/ui/alert'
 import { toast } from '@/lib/toast'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { FileRow } from './file-row'
+import { Notice } from './notice'
 import { groupLocked, type FilePosition, type QueueGroup, type QueueState } from './queue'
 import { useUpload } from './use-upload'
 
@@ -134,10 +134,10 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
           )}
         </div>
         {group.saveFailed ? (
-          <Alert variant="destructive">
-            <TriangleAlertIcon aria-hidden="true" />
-            <AlertDescription>{t('transcription.upload.saveFailed')}</AlertDescription>
-            <AlertAction>
+          <Notice
+            tone="error"
+            title={t('transcription.upload.saveFailed')}
+            action={
               <Button
                 type="button"
                 variant="outline"
@@ -147,8 +147,8 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
               >
                 {t('transcription.common.retry')}
               </Button>
-            </AlertAction>
-          </Alert>
+            }
+          />
         ) : null}
         {group.files.length > 0 ? (
           <ul className="m-0 flex list-none flex-col gap-stack-md p-0">

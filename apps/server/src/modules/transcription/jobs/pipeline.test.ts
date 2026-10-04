@@ -8,6 +8,8 @@ import { Readable } from 'node:stream'
 
 import {
   TRANSCRIPTION_DEFAULT_CONFIG,
+  TRANSCRIPTION_SEGMENTS_MAX,
+  TRANSCRIPTION_WORDS_MAX,
   type TranscriptionComponentConfig,
   type TranscriptionSnippet
 } from '@justcampus/shared'
@@ -15,7 +17,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { TranscriptionStorage } from '../storage.js'
 import { cutAudio, MediaToolError, normalizeAudio, probeMedia } from './media.js'
-import { runAnalysis, runTranscription, turnsKey, type JobRun } from './pipeline.js'
+import {
+  asrCacheKey,
+  checkResultSize,
+  runAnalysis,
+  runTranscription,
+  turnsKey,
+  type JobRun
+} from './pipeline.js'
 import type { JobRow } from './rows.js'
 import { JobFailure } from './state.js'
 
@@ -354,6 +363,65 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     expect(new Set(single.result!.segments.map((segment) => segment.speaker))).toEqual(
       new Set(['Anna'])
     )
+  }, 60_000)
+
+  it('diarises again when the speaker count changed after the analysis (T-09)', async () => {
+    const id = '00000000-0000-4000-8000-0000000000a7'
+    const storage = await storageWith(id, 'talk.wav')
+    const analysis = run(
+      jobRow(id, { settings: { language: 'auto', speakerCount: 'single', llmCorrection: false } }),
+      storage
+    )
+    const analyzed = await runAnalysis(analysis)
+    expect(analyzed.speakers).toHaveLength(1)
+    const stored = JSON.parse(storage.objects.get(turnsKey(componentId, id))!.toString('utf8'))
+    expect(stored.speakerCount).toBe('single')
+
+    const multi = run(
+      {
+        ...analysis.job,
+        ...analyzed,
+        status: 'preprocessing',
+        settings: { language: 'auto', speakerCount: 'multi', llmCorrection: false }
+      } as JobRow,
+      storage
+    )
+    const done = await runTranscription(multi)
+    expect(done.status).toBe('completed')
+    expect(new Set(done.result!.segments.map((segment) => segment.speaker)).size).toBe(2)
+    const again = JSON.parse(storage.objects.get(turnsKey(componentId, id))!.toString('utf8'))
+    expect(again.speakerCount).toBe('multi')
+  }, 60_000)
+
+  it('fails a recognition longer than a transcript holds instead of cutting it', async () => {
+    const id = '00000000-0000-4000-8000-0000000000a8'
+    const storage = await storageWith(id, 'talk.wav')
+    const settings = config({ chunkSeconds: 3600, diarizationEnabled: false })
+    const analysis = run(jobRow(id), storage, settings)
+    const analyzed = await runAnalysis(analysis)
+    const count = TRANSCRIPTION_SEGMENTS_MAX + 1
+    const segments = Array.from({ length: count }, (_, index) => ({
+      start: (index * 19) / count,
+      end: ((index + 1) * 19) / count,
+      text: index === count - 1 ? 'TAIL_SHOULD_SURVIVE' : 'x',
+      seek: null,
+      temperature: null,
+      avgLogprob: null,
+      compressionRatio: null,
+      noSpeechProb: null
+    }))
+    const chunk = { index: 0, start: 0, end: analysis.job.duration! }
+    storage.objects.set(
+      asrCacheKey(componentId, id, chunk, 'jlu/whisper-1', 'auto'),
+      Buffer.from(JSON.stringify({ text: '', language: 'de', duration: 19, segments, words: [] }))
+    )
+    const failure = await runTranscription(
+      run({ ...analysis.job, ...analyzed, status: 'preprocessing' } as JobRow, storage, settings)
+    ).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(JobFailure)
+    expect(failure).toMatchObject({ code: 'too_long' })
+    expect(() => checkResultSize(TRANSCRIPTION_SEGMENTS_MAX, TRANSCRIPTION_WORDS_MAX)).not.toThrow()
+    expect(() => checkResultSize(0, TRANSCRIPTION_WORDS_MAX + 1)).toThrow(JobFailure)
   }, 60_000)
 
   it('takes the audio out of an MP4 video', async () => {

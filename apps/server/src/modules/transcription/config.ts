@@ -1,5 +1,6 @@
 import {
   TRANSCRIPTION_DEFAULT_CONFIG,
+  TRANSCRIPTION_GROUP_FILES_MAX,
   transcriptionCapabilitiesSchema,
   transcriptionComponentConfigSchema,
   type TranscriptionCapabilities,
@@ -114,7 +115,9 @@ export function capabilitiesOf(
     limits: {
       maxFileBytes: config.maxFileBytes,
       maxDurationSeconds: config.maxDurationSeconds,
-      maxFilesPerGroup: config.maxFilesPerGroup,
+      // Without the admin's limit the contract's own one applies, which the save takes at most
+      // (T-04, T-13): the browser stops at it with its alert instead of failing the save.
+      maxFilesPerGroup: config.maxFilesPerGroup ?? TRANSCRIPTION_GROUP_FILES_MAX,
       maxActiveJobs: config.maxActiveJobsPerUser
     },
     retention: {

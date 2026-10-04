@@ -1,10 +1,9 @@
-import { PlusIcon, TriangleAlertIcon } from 'lucide-react'
+import { PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, Card, CardContent, Container } from '@ki4jlu/design-system'
 import { ComponentIcon } from '@/components/component-icon'
 import { PageHeader } from '@/components/page-header'
 import { PageSidePanel } from '@/components/page-side-panel'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import type { ComponentViewProps } from '../types'
 import { useTranscriptionCapabilities } from './api'
 import { ChoiceView } from './choice'
@@ -13,7 +12,7 @@ import { HistorySection } from './history'
 import { LiveSettings, LiveView } from './live'
 import { RecordingProvider, RecordingSettings, RecordView } from './recording'
 import { ResultTools, ResultView } from './result'
-import { UploadProvider, UploadSettings, UploadView } from './upload'
+import { Notice, UploadProvider, UploadSettings, UploadView } from './upload'
 import { useTranscriptionWorkspace } from './use-workspace'
 import { TranscriptionWorkspaceProvider } from './workspace'
 
@@ -65,10 +64,10 @@ function TranscriptionLayout(): React.JSX.Element {
           }
         />
         {capabilitiesQuery.isError ? (
-          <Alert variant="destructive">
-            <TriangleAlertIcon aria-hidden="true" />
-            <AlertDescription>{t('transcription.common.loadFailed')}</AlertDescription>
-            <AlertAction>
+          <Notice
+            tone="error"
+            title={t('transcription.common.loadFailed')}
+            action={
               <Button
                 type="button"
                 variant="outline"
@@ -76,15 +75,15 @@ function TranscriptionLayout(): React.JSX.Element {
               >
                 {t('transcription.common.retry')}
               </Button>
-            </AlertAction>
-          </Alert>
+            }
+          />
         ) : null}
         {notSetUp ? (
-          <Alert variant="warning">
-            <TriangleAlertIcon aria-hidden="true" />
-            <AlertTitle>{t('transcription.common.notSetUpTitle')}</AlertTitle>
-            <AlertDescription>{t('transcription.common.notSetUpDescription')}</AlertDescription>
-          </Alert>
+          <Notice
+            tone="warning"
+            title={t('transcription.common.notSetUpTitle')}
+            description={t('transcription.common.notSetUpDescription')}
+          />
         ) : null}
         <WorkArea />
         <PageSidePanel

@@ -461,7 +461,9 @@ export type TranscriptionUploadTarget = z.infer<typeof transcriptionUploadTarget
 /** `POST TRANSCRIPTION_API.jobAnalyze`: the upload is done; the duration the browser measured. */
 export const transcriptionAnalyzeSchema = z.object({
   /** A hint only: the server measures the media itself. */
-  duration: secondsSchema.nullable().default(null)
+  duration: secondsSchema.nullable().default(null),
+  /** The speaker count chosen now, if it changed since upload (T-09); the diariser gets it. */
+  speakerCount: transcriptionSpeakerCountSchema.optional()
 })
 export type TranscriptionAnalyze = z.input<typeof transcriptionAnalyzeSchema>
 

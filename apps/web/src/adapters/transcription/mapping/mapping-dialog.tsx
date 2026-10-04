@@ -5,7 +5,6 @@ import {
   PlusIcon,
   RefreshCwIcon,
   Trash2Icon,
-  TriangleAlertIcon,
   Volume2Icon,
   XIcon
 } from 'lucide-react'
@@ -26,9 +25,12 @@ import {
   Label,
   Spinner
 } from '@ki4jlu/design-system'
-import { TRANSCRIPTION_SPEAKER_NAME_MAX } from '@justcampus/shared'
-import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  TRANSCRIPTION_SPEAKER_NAME_MAX,
+  TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+} from '@justcampus/shared'
 import { useJobAudioUrl } from '../api'
+import { Notice } from '../upload/notice'
 import { findFile, type QueueFile } from '../upload/queue'
 import { useQueueState, useUpload } from '../upload/use-upload'
 import { ColorPicker } from './color-picker'
@@ -253,10 +255,11 @@ function MappingContent({
       </DialogHeader>
 
       {player.failed ? (
-        <Alert variant="destructive">
-          <TriangleAlertIcon aria-hidden="true" />
-          <AlertDescription>{t('transcription.upload.mapping.audioUnavailable')}</AlertDescription>
-        </Alert>
+        <Notice tone="error" title={t('transcription.upload.mapping.audioUnavailable')} />
+      ) : null}
+      {/* As the queue's player says it: the sample tracks draw no waveform for such files (T-12). */}
+      {file.size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES ? (
+        <Badge appearance="text">{t('transcription.common.player.waveformUnavailable')}</Badge>
       ) : null}
 
       <div aria-busy={reanalyzing || undefined} className="flex flex-col gap-stack-md">

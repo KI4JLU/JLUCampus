@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  TRANSCRIPTION_GROUP_FILES_MAX,
   TRANSCRIPTION_PROCESSING_STATUSES,
   transcriptionAnalyzeSchema,
   transcriptionDispatchSchema,
@@ -133,10 +134,11 @@ jobsRouter.post('/jobs', async (context) => {
   if ((await countActiveJobs(componentId, userId)) >= config.maxActiveJobsPerUser) {
     throw new ApiError(429, 'rate_limited', 'Too many active transcription jobs')
   }
+  // The admin's limit, else the one a saved transcript takes at most (capabilities say the same).
+  const groupLimit = config.maxFilesPerGroup ?? TRANSCRIPTION_GROUP_FILES_MAX
   if (
     input.groupId !== null &&
-    config.maxFilesPerGroup !== null &&
-    (await countGroupJobs(componentId, userId, input.groupId)) >= config.maxFilesPerGroup
+    (await countGroupJobs(componentId, userId, input.groupId)) >= groupLimit
   ) {
     validation(['groupId'], 'The transcript has as many files as allowed')
   }
@@ -178,16 +180,17 @@ jobsRouter.get('/jobs/:id', async (context) => {
 })
 
 /**
- * Cancels the job and deletes everything it stored (T-08). Answers `204` again once it is gone,
- * also for an id that is not the user's. If storage cannot delete, the answer is `502` and the
- * job stays hidden; the next DELETE or the sweep finishes the work.
+ * Cancels the job and deletes everything it stored (T-08). Another user's job, an unknown id and
+ * one already gone answer `404` like every other job route; the browser counts that as deleted.
+ * If storage cannot delete (also only some objects), the answer is `502` and the job stays
+ * hidden; the next DELETE or the sweep finishes the work.
  */
 jobsRouter.delete('/jobs/:id', async (context) => {
   const id = context.req.param('id')
-  if (!z.uuid().safeParse(id).success) return context.body(null, 204)
+  if (!z.uuid().safeParse(id).success) throw notFound()
   const { componentId } = runtimeOf(context)
   const job = await findJobForDeletion(id, componentId, userOf(context))
-  if (!job) return context.body(null, 204)
+  if (!job) throw notFound()
   const marked = (await markDeleted(job.id)) ?? job
   const storage = transcriptionStorage()
   if (storage) {
@@ -255,6 +258,10 @@ jobsRouter.post('/jobs/:id/analyze', async (context) => {
       status: 'analyzingQueued',
       uploadedAt: job.uploadedAt ?? now,
       duration: job.normalizedKey ? job.duration : (input.duration ?? job.duration),
+      // The diariser hears the count chosen now, not the one at upload (T-09).
+      settings: input.speakerCount
+        ? { ...job.settings, speakerCount: input.speakerCount }
+        : job.settings,
       error: null,
       result: null,
       progress: progressOf('queued'),

@@ -96,7 +96,8 @@ export function orderVoices(voices: readonly VoiceDraft[]): VoiceDraft[] {
 
 /**
  * The analysis's voices as drafts, named with their localised automatic label as kiChat names
- * them. With `previous`, voices that are still there keep the name, colour and samples given.
+ * them. With `previous`, voices that are still there keep the name, colour and samples given, and
+ * the voices added by hand stay after them: only the user removes those (T-20).
  */
 export function voicesFromSpeakers(
   speakers: readonly TranscriptionSpeaker[],
@@ -104,7 +105,9 @@ export function voicesFromSpeakers(
   previous: readonly VoiceDraft[] | null = null
 ): VoiceDraft[] {
   const sorted = [...speakers].sort((a, b) => a.start - b.start || a.index - b.index)
-  return sorted.map((speaker, index) => {
+  const found = new Set(sorted.map((speaker) => speaker.id))
+  const manual = (previous ?? []).filter((voice) => voice.manual && !found.has(voice.id))
+  const analysed = sorted.map((speaker, index): VoiceDraft => {
     const kept = previous?.find((voice) => voice.id === speaker.id)
     if (kept) return { ...kept, start: speaker.start, end: speaker.end }
     return {
@@ -124,6 +127,7 @@ export function voicesFromSpeakers(
       }))
     }
   })
+  return [...analysed, ...manual]
 }
 
 /** A new voice added by hand, without samples yet (T-20); the id is unique in the file. */

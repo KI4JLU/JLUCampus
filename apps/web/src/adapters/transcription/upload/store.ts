@@ -77,6 +77,8 @@ export interface UploadQueueOptions {
   upload: SignedUpload
   /** The upload settings (T-09); `configure` keeps them current, and dispatch reads them anew. */
   settings: UploadSettings
+  /** Files one group (one transcript) may hold, as the capabilities say; `null`: no limit. */
+  maxFilesPerGroup?: number | null
   /** The automatic labels in the UI language: `Stimme 1`, `Beispiel 1`. */
   labels: QueueLabels
   /** The local file's length in seconds, `null` when the browser cannot tell. */
@@ -185,14 +187,20 @@ export class UploadQueue {
   private lifetime = new AbortController()
   /** The active jobs are fetched once per page; a fetch cut short by `dispose` runs again. */
   private restoring: 'idle' | 'running' | 'done' = 'idle'
+  /** The page's view as last reported by `showView`. */
+  private view: string | null = null
   private options: UploadQueueOptions
 
   constructor(options: UploadQueueOptions) {
     this.options = options
   }
 
-  /** Takes the current upload settings and UI language. */
-  configure(change: { settings?: UploadSettings; labels?: QueueLabels }): void {
+  /** Takes the current upload settings, UI language and file limit per group. */
+  configure(change: {
+    settings?: UploadSettings
+    labels?: QueueLabels
+    maxFilesPerGroup?: number | null
+  }): void {
     this.options = { ...this.options, ...change }
   }
 
@@ -322,7 +330,8 @@ export class UploadQueue {
     let groups = this.state.groups
     const index = groupIndex ?? dropTargetIndex(groups)
     if (groups[index]?.saved) return []
-    const result = addToGroup(groups, index, files.map(queueFileFrom))
+    const fitting = files.slice(0, this.room(groups[index]?.files.length ?? 0))
+    const result = addToGroup(groups, index, fitting.map(queueFileFrom))
     groups = renumberGroups(result.groups)
     this.set({ ...this.state, groups })
     for (const row of result.added) this.track(row)
@@ -341,11 +350,18 @@ export class UploadQueue {
       index = groups.length
       groups.push(newGroup(index, name ?? defaultGroupName(index)))
     } else if (name) groups[index] = { ...groups[index]!, name }
-    const result = addToGroup(groups, index, files.map(queueFileFrom))
+    const fitting = files.slice(0, this.room(0))
+    const result = addToGroup(groups, index, fitting.map(queueFileFrom))
     groups = renumberGroups(result.groups)
     this.set({ ...this.state, groups })
     for (const row of result.added) this.track(row)
     return result.added
+  }
+
+  /** How many more files a group of `present` files takes (T-04: the save's limit). */
+  private room(present: number): number {
+    const limit = this.options.maxFilesPerGroup
+    return limit === null || limit === undefined ? Infinity : Math.max(0, limit - present)
   }
 
   /** Measures a new row's length and starts its upload. */
@@ -438,7 +454,8 @@ export class UploadQueue {
       })
       try {
         const job = await this.options.api.analyzeJob(jobId, {
-          duration: durationHint(this.file(fileId)?.duration ?? null)
+          duration: durationHint(this.file(fileId)?.duration ?? null),
+          speakerCount: this.options.settings.speakerCount
         })
         this.patchFile(fileId, { jobStatus: job.status })
         return true
@@ -541,8 +558,9 @@ export class UploadQueue {
 
   /**
    * Runs the speaker analysis again (T-21), from the mapping dialog or before a transcription is
-   * retried. `keepVoices` keeps the names of voices that are found again. Resolves once the voices
-   * are there, or with the server's reason when it failed.
+   * retried. `keepVoices` keeps the names, colours and samples of voices found again and the voices
+   * added by hand (T-20). Resolves once the voices are there, or with the server's reason when it
+   * failed.
    */
   async reanalyze(
     fileId: string,
@@ -556,7 +574,8 @@ export class UploadQueue {
     try {
       try {
         const job = await this.options.api.analyzeJob(file.jobId, {
-          duration: durationHint(file.duration)
+          duration: durationHint(file.duration),
+          speakerCount: this.options.settings.speakerCount
         })
         this.patchFile(fileId, {
           jobStatus: job.status,
@@ -824,38 +843,57 @@ export class UploadQueue {
     }
     const jobId = file.jobId
 
-    // The job failed on the server: analyse again, keeping the names given, then transcribe.
     if (file.jobStatus === 'failed') {
-      const again = await this.reanalyze(fileId, { keepVoices: true })
-      if (!again.ok) return null
-      file = this.file(fileId)
-      if (!file || this.disposed) return null
-    }
-
-    if (file.jobStatus === null || file.jobStatus === 'analyzed') {
-      this.patchFile(fileId, {
-        phase: 'transcribing',
-        progress: PROGRESS.dispatched,
-        status: 'preprocessing',
-        tone: 'processing',
-        error: null
-      })
-      try {
-        const job = await this.options.api.dispatchJob(jobId, this.dispatchInput(file))
-        this.patchFile(fileId, { jobStatus: job.status })
-      } catch (error) {
-        // Dispatched before (the answer got lost): follow that transcription.
-        const already = error instanceof ApiRequestError && error.status === 409
-        if (!already) {
-          this.fail(fileId, 'failed', {
-            key: 'processingJobStartFailed',
-            message: messageOf(error)
-          })
+      // A failed transcription is dispatched again with the voices as they are (kiChat reuses
+      // the file's mapping and samples). Only when the server refuses that, because the analysis
+      // itself failed, is it analysed again first, keeping names, samples and added voices.
+      const outcome = file.phase === 'failed' ? await this.dispatch(fileId, jobId, file) : 'refused'
+      if (outcome === 'failed') return null
+      if (outcome === 'refused') {
+        const again = await this.reanalyze(fileId, { keepVoices: true })
+        if (!again.ok) {
+          // A refused analysis request leaves the row as the dispatch left it: say it failed.
+          if (this.file(fileId)?.phase === 'transcribing') {
+            this.fail(fileId, 'failed', { key: 'processingJobStartFailed', message: again.message })
+          }
           return null
         }
+        file = this.file(fileId)
+        if (!file || this.disposed) return null
+        if ((await this.dispatch(fileId, jobId, file)) === 'failed') return null
       }
+    } else if (file.jobStatus === null || file.jobStatus === 'analyzed') {
+      // A 409 here means it was dispatched before (the answer got lost): follow that one.
+      if ((await this.dispatch(fileId, jobId, file)) === 'failed') return null
     }
     return this.pollTranscription(fileId, jobId, { restored: false })
+  }
+
+  /**
+   * Sends a file's dispatch. `refused` is the server's `409`: dispatched already, or (for a failed
+   * job) not dispatchable before another analysis. `failed` is on the row already.
+   */
+  private async dispatch(
+    fileId: string,
+    jobId: string,
+    file: QueueFile
+  ): Promise<'sent' | 'refused' | 'failed'> {
+    this.patchFile(fileId, {
+      phase: 'transcribing',
+      progress: PROGRESS.dispatched,
+      status: 'preprocessing',
+      tone: 'processing',
+      error: null
+    })
+    try {
+      const job = await this.options.api.dispatchJob(jobId, this.dispatchInput(file))
+      this.patchFile(fileId, { jobStatus: job.status })
+      return 'sent'
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) return 'refused'
+      this.fail(fileId, 'failed', { key: 'processingJobStartFailed', message: messageOf(error) })
+      return 'failed'
+    }
   }
 
   /** Names, windows and colours of the voices with the current settings (T-09, T-18). */
@@ -1067,10 +1105,18 @@ export class UploadQueue {
     }
   }
 
-  /** kiChat's `moveFile`: nothing moves while a start runs or into or out of a saved group. */
-  moveFile(from: FilePosition, toGroupIndex: number, toFileIndex: number | null = null): void {
-    if (this.state.processing) return
+  /**
+   * kiChat's `moveFile`: nothing moves while a start runs, into or out of a saved group, or into a
+   * group that holds as many files as allowed. Resolves whether it moved.
+   */
+  moveFile(from: FilePosition, toGroupIndex: number, toFileIndex: number | null = null): boolean {
+    if (this.state.processing) return false
+    const target = this.state.groups[toGroupIndex]
+    if (from.groupIndex !== toGroupIndex && this.room(target?.files.length ?? 0) === 0) {
+      return false
+    }
     this.setGroups((groups) => moveQueueFile(groups, from, toGroupIndex, toFileIndex))
+    return true
   }
 
   /**
@@ -1091,11 +1137,7 @@ export class UploadQueue {
     if (!position || this.state.processing || position.group.saved) return true
     const jobId = position.file.jobId
     if (jobId) {
-      try {
-        await this.options.api.deleteJob(jobId)
-      } catch {
-        return false
-      }
+      if (!(await this.deleteJob(jobId))) return false
       this.options.onJobsChanged?.()
     }
     this.forget(fileId)
@@ -1111,15 +1153,7 @@ export class UploadQueue {
     const group = this.group(groupId)
     if (!group || this.state.processing || group.saved) return true
     const outcomes = await Promise.all(
-      group.files.map(async (file) => {
-        if (!file.jobId) return true
-        try {
-          await this.options.api.deleteJob(file.jobId)
-          return true
-        } catch {
-          return false
-        }
-      })
+      group.files.map((file) => (file.jobId ? this.deleteJob(file.jobId) : true))
     )
     if (group.files.some((file) => file.jobId)) this.options.onJobsChanged?.()
     const kept = new Set(group.files.filter((_, index) => !outcomes[index]).map((file) => file.id))
@@ -1134,6 +1168,16 @@ export class UploadQueue {
     }
     this.setGroups((groups) => removeQueueGroup(groups, groupId))
     return true
+  }
+
+  /** Deletes a job on the server; one already gone (`404`) counts as deleted. */
+  private async deleteJob(jobId: string): Promise<boolean> {
+    try {
+      await this.options.api.deleteJob(jobId)
+      return true
+    } catch (error) {
+      return isGone(error)
+    }
   }
 
   /** Stops everything a file does. */
@@ -1151,12 +1195,28 @@ export class UploadQueue {
   }
 
   /**
-   * Back at the entry choice the saved groups leave the queue (kiChat's reset). Work not yet saved
-   * stays, so no job is lost from view.
+   * The page shows another view. Arriving back at the entry choice clears the selection; a first
+   * or repeated report of the same view (a remount of the page) does not, so jobs restored
+   * meanwhile stay.
    */
-  clearSaved(): void {
-    if (this.state.processing) return
-    if (!this.state.groups.some((group) => group.saved)) return
-    this.setGroups((groups) => renumberGroups(groups.filter((group) => group.saved === null)))
+  showView(view: string): void {
+    const previous = this.view
+    this.view = view
+    if (view === 'choice' && previous !== null && previous !== 'choice') this.resetSelection()
+  }
+
+  /**
+   * Back at the entry choice the selection is cleared unless a start runs (kiChat's
+   * `resetUploadSelectionState` in `showTranscriptChoice`, T-01): saved groups and unfinished
+   * files alike, so the next file starts a new transcript. The jobs stay on the server: running
+   * uploads finish and start their analysis, and the next visit of the page restores them (T-15).
+   */
+  resetSelection(): void {
+    if (this.state.processing || this.state.groups.length === 0) return
+    for (const controller of this.flows.values()) controller.abort()
+    this.flows.clear()
+    for (const timer of this.creeps.values()) clearInterval(timer)
+    this.creeps.clear()
+    this.set({ ...this.state, groups: [] })
   }
 }

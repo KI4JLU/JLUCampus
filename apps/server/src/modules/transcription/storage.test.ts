@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
+import { describe, expect, it, vi } from 'vitest'
 
-import { objectKeys, storageSettingsFromEnv, TranscriptionStorage } from './storage.js'
+import {
+  objectKeys,
+  PartialDeleteError,
+  storageSettingsFromEnv,
+  TranscriptionStorage
+} from './storage.js'
 
 const storage = new TranscriptionStorage({
   endpoint: 'http://minio:9000',
@@ -51,6 +57,39 @@ describe('TranscriptionStorage', () => {
 
   it('refuses to delete a prefix that is not a folder', async () => {
     await expect(storage.deletePrefix('transcription/c/jobs/j')).rejects.toThrow('must end with')
+  })
+
+  it('reports objects S3 refused to delete instead of counting them', async () => {
+    const stubbed = new TranscriptionStorage({
+      endpoint: 'http://minio:9000',
+      publicEndpoint: 'http://localhost:9100',
+      region: 'us-east-1',
+      bucket: 'b',
+      accessKeyId: 'access',
+      secretAccessKey: 'secret',
+      forcePathStyle: true
+    })
+    const send = vi.fn(async (command: unknown): Promise<Record<string, unknown>> => {
+      if (command instanceof ListObjectsV2Command) {
+        return { Contents: [{ Key: 'job/source' }, { Key: 'job/normalized.wav' }] }
+      }
+      if (command instanceof DeleteObjectsCommand) {
+        return { Errors: [{ Key: 'job/source', Code: 'AccessDenied' }] }
+      }
+      throw new Error('unexpected command')
+    })
+    ;(stubbed as unknown as { internal: { send: typeof send } }).internal.send = send
+    const failure = await stubbed.deletePrefix('job/').catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(PartialDeleteError)
+    expect((failure as PartialDeleteError).failures).toEqual([
+      { key: 'job/source', code: 'AccessDenied' }
+    ])
+    expect(send).toHaveBeenCalledTimes(2)
+
+    send.mockImplementation(async (command: unknown) =>
+      command instanceof ListObjectsV2Command ? { Contents: [{ Key: 'job/source' }] } : {}
+    )
+    await expect(stubbed.deletePrefix('job/')).resolves.toBe(1)
   })
 })
 

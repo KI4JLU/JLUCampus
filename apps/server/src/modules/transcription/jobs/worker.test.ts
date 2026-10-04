@@ -2,7 +2,7 @@ import { TRANSCRIPTION_DEFAULT_CONFIG } from '@justcampus/shared'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { TranscriptionRuntime } from '../config.js'
-import type { TranscriptionStorage } from '../storage.js'
+import { PartialDeleteError, type TranscriptionStorage } from '../storage.js'
 import type { JobRow } from './rows.js'
 import { JobFailure } from './state.js'
 import type { JobChanges } from './store.js'
@@ -172,7 +172,11 @@ describe('sweepJobs', () => {
     const deletePrefix = vi
       .fn()
       .mockResolvedValueOnce(2)
-      .mockRejectedValueOnce(new Error('storage down'))
+      .mockRejectedValueOnce(
+        new PartialDeleteError('transcription/c/jobs/b/', [
+          { key: 'transcription/c/jobs/b/source', code: 'AccessDenied' }
+        ])
+      )
     const purged = await sweepJobs({ deletePrefix } as unknown as TranscriptionStorage, 24)
     expect(purged).toBe(1)
     expect(deletePrefix).toHaveBeenNthCalledWith(1, 'transcription/c/jobs/a/')

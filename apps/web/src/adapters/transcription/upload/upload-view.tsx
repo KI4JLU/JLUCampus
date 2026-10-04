@@ -30,7 +30,7 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 export function UploadView(): React.JSX.Element {
   const { t } = useTranslation()
   const headingId = useId()
-  const { queue, addFiles, start } = useUpload()
+  const { queue, addFiles, moveFile, start } = useUpload()
   const state = useQueueState()
   const { capabilities } = useTranscriptionWorkspace()
   const input = useRef<HTMLInputElement>(null)
@@ -74,7 +74,7 @@ export function UploadView(): React.JSX.Element {
     setDropTarget(null)
     const from = dragged.current
     dragged.current = null
-    if (from) queue.moveFile(from, groupIndex, fileIndex)
+    if (from) moveFile(from, groupIndex, fileIndex)
     else if (event.dataTransfer.files.length > 0) {
       void addFiles(Array.from(event.dataTransfer.files), groupIndex)
     }

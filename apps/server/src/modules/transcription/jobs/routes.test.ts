@@ -323,9 +323,9 @@ describe('ownership', () => {
     expect(dispatch.status).toBe(404)
     const list = await bob.request(local(TRANSCRIPTION_API.jobs))
     await expect(list.json()).resolves.toEqual({ jobs: [] })
-    // Deleting it is a quiet no-op for Bob.
+    // Bob cannot delete it either: the job does not exist for him.
     const deleted = await bob.request(local(TRANSCRIPTION_API.job(id)), { method: 'DELETE' })
-    expect(deleted.status).toBe(204)
+    expect(deleted.status).toBe(404)
     expect(state.rows.has(id)).toBe(true)
     expect(state.storage.deletePrefix).not.toHaveBeenCalled()
     expect((await app('bob').request(local(TRANSCRIPTION_API.job('not-a-uuid')))).status).toBe(404)
@@ -398,6 +398,17 @@ describe('analysis', () => {
       post('')
     )
     expect(busy.status).toBe(409)
+  })
+
+  it('takes the speaker count chosen since the upload (T-09)', async () => {
+    const { body } = await createJob()
+    expect(state.rows.get(body.job.id)!.settings.speakerCount).toBe('auto')
+    const response = await app('alice').request(
+      local(TRANSCRIPTION_API.jobAnalyze(body.job.id)),
+      post('', { duration: 11.24, speakerCount: 'multi' })
+    )
+    expect(response.status).toBe(200)
+    expect(state.rows.get(body.job.id)!.settings).toMatchObject({ speakerCount: 'multi' })
   })
 
   it('refuses a malformed body', async () => {
@@ -575,7 +586,7 @@ describe('status, list and media', () => {
 })
 
 describe('deletion', () => {
-  it('cancels, deletes the audio and answers the same again', async () => {
+  it('cancels, deletes the audio and answers 404 once it is gone', async () => {
     const { body } = await createJob()
     const id = body.job.id
     const first = await app('alice').request(local(TRANSCRIPTION_API.job(id)), { method: 'DELETE' })
@@ -587,8 +598,12 @@ describe('deletion', () => {
     const second = await app('alice').request(local(TRANSCRIPTION_API.job(id)), {
       method: 'DELETE'
     })
-    expect(second.status).toBe(204)
+    expect(second.status).toBe(404)
     expect((await app('alice').request(local(TRANSCRIPTION_API.job(id)))).status).toBe(404)
+    const malformed = await app('alice').request(local(TRANSCRIPTION_API.job('not-a-uuid')), {
+      method: 'DELETE'
+    })
+    expect(malformed.status).toBe(404)
   })
 
   it('leaves a running job’s row to the sweep, hidden at once', async () => {

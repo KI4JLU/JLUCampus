@@ -1,4 +1,8 @@
-import { TRANSCRIPTION_DEFAULT_CONFIG, type TranscriptionComponentConfig } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_DEFAULT_CONFIG,
+  TRANSCRIPTION_GROUP_FILES_MAX,
+  type TranscriptionComponentConfig
+} from '@justcampus/shared'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -94,6 +98,14 @@ describe('capabilitiesOf', () => {
       defaults: { language: 'auto', speakerCount: 'auto', llmCorrection: false },
       retention: { transcriptHours: null, unsavedJobHours: 24 }
     })
+  })
+
+  it('names the file limit per transcript the save takes, unless the admin set a lower one', () => {
+    expect(capabilitiesOf(TRANSCRIPTION_DEFAULT_CONFIG, noSecrets, true).limits).toMatchObject({
+      maxFilesPerGroup: TRANSCRIPTION_GROUP_FILES_MAX
+    })
+    const limited = { ...TRANSCRIPTION_DEFAULT_CONFIG, maxFilesPerGroup: 5 }
+    expect(capabilitiesOf(limited, noSecrets, true).limits.maxFilesPerGroup).toBe(5)
   })
 
   it('needs storage for uploads', () => {

@@ -5,8 +5,10 @@ import {
   TRANSCRIPTION_SEGMENTS_MAX,
   TRANSCRIPTION_WORDS_MAX,
   transcriptionResultSchema,
+  transcriptionSpeakerCountSchema,
   type TranscriptionJobPhase,
-  type TranscriptionJobStatus
+  type TranscriptionJobStatus,
+  type TranscriptionSpeakerCount
 } from '@justcampus/shared'
 import { z } from 'zod'
 
@@ -289,9 +291,38 @@ async function diarize(run: JobRun, path: string, duration: number): Promise<Spe
   return normalizeTurns(turns, duration)
 }
 
-const storedTurnsSchema = z.array(
+const turnListSchema = z.array(
   z.object({ start: z.number(), end: z.number(), speaker: z.string() })
 )
+
+/**
+ * The diarised turns as the analysis keeps them, with the speaker count the diariser was asked
+ * for: a transcription with another count must not reuse them (T-09).
+ */
+const storedTurnsSchema = z.object({
+  speakerCount: transcriptionSpeakerCountSchema,
+  turns: turnListSchema
+})
+type StoredTurns = z.infer<typeof storedTurnsSchema>
+
+/** The kept turns, or `null` when there are none or they are unreadable. */
+async function readTurns(run: JobRun): Promise<StoredTurns | null> {
+  const stored = await readObject(run, turnsKey(run.job.componentId, run.job.id))
+  if (!stored) return null
+  const parsed = storedTurnsSchema.safeParse(parseJson(stored))
+  return parsed.success ? parsed.data : null
+}
+
+/**
+ * Whether turns diarised for `analysed` serve a transcription with `wanted`: the same count, or
+ * `single`, which collapses any turns onto the dominant voice anyway.
+ */
+export function turnsServe(
+  analysed: TranscriptionSpeakerCount,
+  wanted: TranscriptionSpeakerCount
+): boolean {
+  return analysed === wanted || wanted === 'single'
+}
 
 function parseJson(body: Buffer): unknown {
   try {
@@ -380,8 +411,9 @@ export async function runAnalysis(run: JobRun): Promise<JobChanges> {
       )
     }
     const key = turnsKey(job.componentId, job.id)
-    if (turns.length > 0) await writeJson(run, key, turns)
-    else await storageStep(signal, () => storage.delete(key))
+    if (turns.length > 0) {
+      await writeJson(run, key, { speakerCount: run.job.settings.speakerCount, turns })
+    } else await storageStep(signal, () => storage.delete(key))
 
     return {
       status: 'analyzed',
@@ -407,6 +439,18 @@ export function singleSpeakerTurns(turns: readonly SpeakerTurn[]): SpeakerTurn[]
   }
   const dominant = [...spoken.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
   return dominant ? turns.map((turn) => ({ ...turn, speaker: dominant })) : []
+}
+
+/**
+ * Fails a recognition with more segments or words than a transcript holds (the shared result
+ * limits): cutting the tail off would claim a complete transcript that is not.
+ */
+export function checkResultSize(segments: number, words: number): void {
+  if (segments <= TRANSCRIPTION_SEGMENTS_MAX && words <= TRANSCRIPTION_WORDS_MAX) return
+  throw new JobFailure(
+    'too_long',
+    `Die Aufnahme ergibt mehr Text, als ein Transkript fassen kann (höchstens ${TRANSCRIPTION_SEGMENTS_MAX.toLocaleString('de-DE')} Abschnitte und ${TRANSCRIPTION_WORDS_MAX.toLocaleString('de-DE')} Wörter). Bitte die Datei in kürzere Teile schneiden.`
+  )
 }
 
 /** The cached recognition of a chunk, if a previous run left one. */
@@ -496,14 +540,18 @@ export async function runTranscription(run: JobRun): Promise<JobChanges> {
       recognized.push({ plan: chunk, result })
     }
     const merged = mergeChunks(recognized)
+    // Nothing is cut off silently: a result beyond what a transcript holds fails clearly (before
+    // the diarisation and correction would spend more on it).
+    checkResultSize(merged.segments.length, merged.words.length)
 
     await advance(run, 'transcribing', 'diarizing', plan.length, plan.length, 90)
     let turns: SpeakerTurn[] = []
-    const stored = await readObject(run, turnsKey(job.componentId, job.id))
-    const parsedTurns = stored ? storedTurnsSchema.safeParse(parseJson(stored)) : null
-    if (parsedTurns?.success) {
-      turns = normalizeTurns(parsedTurns.data, duration)
+    const speakerCount = run.job.settings.speakerCount
+    const stored = await readTurns(run)
+    if (stored && turnsServe(stored.speakerCount, speakerCount)) {
+      turns = normalizeTurns(stored.turns, duration)
     } else if (diarizationConfigured(run)) {
+      // No turns yet, or diarised for another count than the one chosen at dispatch: ask again.
       try {
         turns = await diarize(run, path, duration)
       } catch (error) {
@@ -515,9 +563,14 @@ export async function runTranscription(run: JobRun): Promise<JobChanges> {
           )
         })
       }
-      if (turns.length > 0) await writeJson(run, turnsKey(job.componentId, job.id), turns)
+      if (turns.length > 0) {
+        await writeJson(run, turnsKey(job.componentId, job.id), { speakerCount, turns })
+      }
+    } else if (stored) {
+      // The diariser was switched off since the analysis: its turns are all there is.
+      turns = normalizeTurns(stored.turns, duration)
     }
-    if (run.job.settings.speakerCount === 'single') turns = singleSpeakerTurns(turns)
+    if (speakerCount === 'single') turns = singleSpeakerTurns(turns)
     const names = resolveSpeakerNames(turns, run.job.speakers, run.job.mapping, run.job.snippets)
     const named = assignSpeakers(merged.segments, merged.words, turns, names, run.job.snippets)
 
@@ -553,13 +606,13 @@ export async function runTranscription(run: JobRun): Promise<JobChanges> {
       }
     }
 
-    segments = segments.slice(0, TRANSCRIPTION_SEGMENTS_MAX)
+    checkResultSize(segments.length, named.words.length)
     const result = transcriptionResultSchema.parse({
       text: joinText(segments),
       language: merged.language ?? (language === 'auto' ? null : language),
       duration,
       segments,
-      words: named.words.slice(0, TRANSCRIPTION_WORDS_MAX),
+      words: named.words,
       model: model.id,
       provider: config.providerName
     })

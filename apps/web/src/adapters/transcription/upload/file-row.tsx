@@ -18,14 +18,15 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger
+  DropdownMenuTrigger,
+  Spinner
 } from '@ki4jlu/design-system'
 import { useJobAudioUrl } from '../api'
 import { WaveformPlayer } from '../audio'
 import { unidentifiedVoiceCount } from '../mapping/speakers'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import type { FilePosition, QueueFile, QueueGroup } from './queue'
-import { errorText, statusText, TONE } from './texts'
+import { errorText, percentText, statusText, TONE } from './texts'
 import { useUpload } from './use-upload'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
@@ -53,7 +54,7 @@ export interface FileRowProps {
  */
 export function FileRow(props: FileRowProps): React.JSX.Element {
   const { file, position, groups, locked, processing } = props
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { queue, dialogs, start } = useUpload()
   const { capabilities } = useTranscriptionWorkspace()
   const group = groups[position.groupIndex]
@@ -179,24 +180,25 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
           )}
         </div>
       </div>
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         {/*
-         * DS gap: no Progress component. The native bar (role progressbar, its value announced)
-         * takes the state's token as its accent colour, as in the translator's document list.
+         * The DS has no Progress component and none may be made up: the row shows a Spinner while
+         * it works and the percentage as a Badge, which carries the progressbar role for assistive
+         * technology. The status beside it is announced as it changes.
          */}
-        <progress
+        {file.tone === 'processing' ? <Spinner size="sm" aria-hidden="true" /> : null}
+        <Badge
+          appearance="filled"
+          tone={TONE[file.tone]}
+          role="progressbar"
           aria-label={t('transcription.upload.progressOf', { name: file.name })}
-          max={100}
-          value={Math.round(file.progress)}
-          className={
-            file.tone === 'error'
-              ? 'min-w-0 flex-1 accent-error'
-              : file.tone === 'success'
-                ? 'min-w-0 flex-1 accent-success'
-                : 'min-w-0 flex-1 accent-primary'
-          }
-        />
-        <span aria-live="polite" className="shrink-0">
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(file.progress)}
+        >
+          {percentText(i18n.language, file.progress)}
+        </Badge>
+        <span aria-live="polite" className="min-w-0">
           <Badge appearance="text" tone={TONE[file.tone]}>
             {status}
           </Badge>
@@ -228,7 +230,7 @@ function MoveMenu({
   groups: readonly QueueGroup[]
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const { queue } = useUpload()
+  const { moveFile } = useUpload()
   const group = groups[position.groupIndex]
   const count = group?.files.length ?? 0
   const targets = groups
@@ -252,7 +254,7 @@ function MoveMenu({
         <DropdownMenuItem
           disabled={position.fileIndex === 0}
           onSelect={() =>
-            queue.moveFile(position, position.groupIndex, Math.max(0, position.fileIndex - 1))
+            moveFile(position, position.groupIndex, Math.max(0, position.fileIndex - 1))
           }
         >
           <ArrowUpIcon {...ICON} />
@@ -260,14 +262,14 @@ function MoveMenu({
         </DropdownMenuItem>
         <DropdownMenuItem
           disabled={position.fileIndex >= count - 1}
-          onSelect={() => queue.moveFile(position, position.groupIndex, position.fileIndex + 1)}
+          onSelect={() => moveFile(position, position.groupIndex, position.fileIndex + 1)}
         >
           <ArrowDownIcon {...ICON} />
           {t('transcription.upload.moveDown')}
         </DropdownMenuItem>
         {targets.length > 0 ? <DropdownMenuSeparator /> : null}
         {targets.map(({ candidate, index }) => (
-          <DropdownMenuItem key={candidate.id} onSelect={() => queue.moveFile(position, index)}>
+          <DropdownMenuItem key={candidate.id} onSelect={() => moveFile(position, index)}>
             <FolderInputIcon {...ICON} />
             {t('transcription.upload.moveToGroup', { name: candidate.name })}
           </DropdownMenuItem>

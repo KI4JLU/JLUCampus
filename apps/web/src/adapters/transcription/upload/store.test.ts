@@ -196,7 +196,8 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
       })
     )
     expect(upload).toHaveBeenCalledOnce()
-    expect(api.analyzeJob).toHaveBeenCalledWith('job-1', { duration: 12 })
+    // The speaker count chosen now goes along, as it may have changed since the upload (T-09).
+    expect(api.analyzeJob).toHaveBeenCalledWith('job-1', { duration: 12, speakerCount: 'multi' })
     expect(file).toMatchObject({
       jobId: 'job-1',
       uploaded: true,
@@ -286,11 +287,8 @@ describe('UploadQueue: start, merge and save (T-13, T-14)', () => {
       error: { key: 'transcriptionError', message: 'boom' }
     })
 
-    // The retry analyses the failed job again, dispatches only it, and saves the group.
-    api.analyzeJob.mockImplementationOnce(async (id: string) => {
-      script(id, { status: 'analyzed', speakers: SPEAKERS })
-      return job(id, { status: 'analyzingQueued' })
-    })
+    // The retry dispatches only the failed job again, without a new analysis, and saves the group.
+    const analyses = api.analyzeJob.mock.calls.length
     api.dispatchJob.mockImplementationOnce(async (id: string) => {
       script(id, { status: 'completed', result: result('B', 4) })
       return job(id, { status: 'preprocessing' })
@@ -301,6 +299,7 @@ describe('UploadQueue: start, merge and save (T-13, T-14)', () => {
     expect(second).toEqual({ status: 'done', savedIds: ['transcript-2'], failed: false })
     expect(api.dispatchJob).toHaveBeenCalledTimes(4)
     expect(api.dispatchJob.mock.calls[3]?.[0]).toBe('job-2')
+    expect(api.analyzeJob).toHaveBeenCalledTimes(analyses)
     const saved = api.createTranscript.mock.calls[1]?.[0]
     expect(saved).toMatchObject({ title: 'Transcript 1', jobIds: ['job-1', 'job-2'], duration: 9 })
     expect(saved?.segments.map((segment) => [segment.start, segment.end])).toEqual([
@@ -312,6 +311,55 @@ describe('UploadQueue: start, merge and save (T-13, T-14)', () => {
       [5, 9]
     ])
     expect(row(queue, 'a.wav').status).toBe('done')
+  })
+
+  it('keeps voices added by hand when a failed transcription is retried (T-20)', async () => {
+    const { api, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    const fileId = row(queue, 'a.wav').id
+    const analysed = row(queue, 'a.wav').voices!
+    const bob = {
+      id: 'manual_1',
+      manual: true,
+      name: 'Bob',
+      colorId: 7 as const,
+      start: null,
+      end: null,
+      samples: [{ key: 'local-1', label: 'Sample 1', start: 5, end: 10 }]
+    }
+    queue.saveVoices(fileId, [...analysed, bob])
+
+    script('job-1', { status: 'failed', error: { code: 'asr_failed', message: 'boom' } })
+    expect(await queue.start()).toMatchObject({ failed: true })
+    const bobDispatched = {
+      mapping: expect.objectContaining({ manual_1: 'Bob' }),
+      snippets: expect.arrayContaining([{ id: 'manual_1', name: 'Bob', start: 5, end: 10 }]),
+      colors: expect.objectContaining({ manual_1: 7 })
+    }
+    expect(api.dispatchJob).toHaveBeenLastCalledWith(
+      'job-1',
+      expect.objectContaining(bobDispatched)
+    )
+
+    // The server refuses the dispatch (its analysis failed): analysed again, Bob stays.
+    api.dispatchJob.mockRejectedValueOnce(new ApiRequestError(409, null))
+    api.analyzeJob.mockImplementationOnce(async (id: string) => {
+      script(id, { status: 'analyzed', speakers: SPEAKERS })
+      return job(id, { status: 'analyzingQueued' })
+    })
+    api.dispatchJob.mockImplementationOnce(async (id: string) => {
+      script(id, { status: 'completed', result: result('A', 5) })
+      return job(id, { status: 'preprocessing' })
+    })
+    expect(await queue.start()).toMatchObject({ failed: false })
+    expect(api.dispatchJob).toHaveBeenLastCalledWith(
+      'job-1',
+      expect.objectContaining(bobDispatched)
+    )
+    expect(row(queue, 'a.wav').voices?.map((voice) => voice.name)).toEqual(['Voice 1', 'Bob'])
   })
 
   it('reports an empty queue', async () => {
@@ -338,6 +386,17 @@ describe('UploadQueue: removing (T-08)', () => {
     expect(await queue.removeFile(id)).toBe(true)
     expect(api.deleteJob).toHaveBeenLastCalledWith('job-1')
     expect(queue.getSnapshot().groups).toEqual([])
+  })
+
+  it('counts a job the server no longer has as deleted', async () => {
+    const { api, script } = server()
+    script('job-1', { status: 'analyzed', speakers: [] })
+    const queue = makeQueue(api)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav')?.phase === 'ready')
+    api.deleteJob.mockRejectedValueOnce(new ApiRequestError(404, null))
+    expect(await queue.removeFile(row(queue, 'a.wav').id)).toBe(true)
+    expect(rows(queue)).toEqual([])
   })
 
   it('keeps a group with the files whose jobs could not be deleted', async () => {
@@ -435,6 +494,59 @@ describe('UploadQueue: while a start runs (T-11)', () => {
     expect(await queue.removeFile(rows(queue)[0]!.id)).toBe(true)
     expect(rows(queue)).toHaveLength(2)
     expect(api.deleteJob).not.toHaveBeenCalled()
+    queue.dispose()
+  })
+})
+
+describe('UploadQueue: back at the entry choice (T-01)', () => {
+  it('clears an unfinished selection, so the next file starts a new transcript', async () => {
+    const { api, script } = server()
+    script('job-1', { status: 'failed', error: { code: 'analysis_failed', message: 'x' } })
+    const queue = makeQueue(api)
+    queue.addFiles([wav('old.wav')])
+    await until(() => row(queue, 'old.wav').phase === 'analysisFailed')
+    // The page mounted at the choice, went to the upload and back; a remount reports it again.
+    queue.showView('choice')
+    queue.showView('upload')
+    expect(rows(queue)).toHaveLength(1)
+    queue.showView('choice')
+    expect(queue.getSnapshot().groups).toEqual([])
+    // The job stays on the server for the next visit to restore.
+    expect(api.deleteJob).not.toHaveBeenCalled()
+    queue.addFiles([wav('new.wav')])
+    expect(queue.getSnapshot().groups.map((group) => group.files.map((file) => file.name))).toEqual(
+      [['new.wav']]
+    )
+    queue.dispose()
+  })
+
+  it('keeps everything while a start runs', async () => {
+    const { api, script } = server()
+    script('job-1', { status: 'analyzed' })
+    const queue = makeQueue(api)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    api.dispatchJob.mockImplementation(() => new Promise(() => undefined))
+    void queue.start()
+    queue.resetSelection()
+    expect(rows(queue).map((file) => file.name)).toEqual(['a.wav'])
+    queue.dispose()
+  })
+})
+
+describe('UploadQueue: files per transcript (T-04, T-13)', () => {
+  it('adds and moves no more files into a group than a transcript takes', async () => {
+    const { api } = server()
+    const queue = makeQueue(api)
+    queue.configure({ maxFilesPerGroup: 2 })
+    expect(queue.addFiles([wav('a.wav'), wav('b.wav'), wav('c.wav')], 0)).toHaveLength(2)
+    queue.addGroup()
+    queue.addFiles([wav('d.wav')], 1)
+    expect(queue.moveFile({ groupIndex: 1, fileIndex: 0 }, 0)).toBe(false)
+    expect(queue.moveFile({ groupIndex: 0, fileIndex: 1 }, 0, 0)).toBe(true)
+    expect(queue.getSnapshot().groups.map((group) => group.files.map((file) => file.name))).toEqual(
+      [['b.wav', 'a.wav'], ['d.wav']]
+    )
     queue.dispose()
   })
 })

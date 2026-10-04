@@ -10,7 +10,11 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { TRANSCRIPTION_MAX_FILE_BYTES, type TranscriptionTranscript } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_GROUP_FILES_MAX,
+  TRANSCRIPTION_MAX_FILE_BYTES,
+  type TranscriptionTranscript
+} from '@justcampus/shared'
 import {
   analyzeJob,
   createJob,
@@ -27,7 +31,7 @@ import {
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { UploadDialog } from './dialogs'
 import { useDialogHost } from './use-dialog-host'
-import { dropTargetIndex } from './queue'
+import { dropTargetIndex, type FilePosition } from './queue'
 import { UploadQueue, type QueueLabels } from './store'
 import { UploadContext } from './use-upload'
 import { limitMegabytes, partitionFiles } from './validation'
@@ -63,7 +67,7 @@ function measureDuration(file: File): Promise<number | null> {
  * Holds the upload queue for as long as the page lives, so it survives switching views; it wraps
  * the whole page, side column included. On arrival it restores the user's active jobs (T-15),
  * takes the files other areas hand over (recorded takes, T-58) and, back at the entry choice,
- * lets the saved groups go (T-01).
+ * clears the selection unless a start runs (T-01).
  */
 export function UploadProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const { t } = useTranslation()
@@ -111,17 +115,22 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     return created
   })
 
+  const { capabilities, openTranscript } = workspace
+  const maxBytes = capabilities?.limits.maxFileBytes ?? TRANSCRIPTION_MAX_FILE_BYTES
+  // A saved transcript combines at most this many files; the server says if the admin set fewer.
+  const maxFiles = capabilities?.limits.maxFilesPerGroup ?? TRANSCRIPTION_GROUP_FILES_MAX
+
   useEffect(() => {
-    queue.configure({ settings: workspace.uploadSettings, labels: labelsOf(t) })
-  }, [queue, t, workspace.uploadSettings])
+    queue.configure({
+      settings: workspace.uploadSettings,
+      labels: labelsOf(t),
+      maxFilesPerGroup: maxFiles
+    })
+  }, [maxFiles, queue, t, workspace.uploadSettings])
 
   useEffect(() => {
     queue.attach()
   }, [queue])
-
-  const { capabilities, openTranscript } = workspace
-  const maxBytes = capabilities?.limits.maxFileBytes ?? TRANSCRIPTION_MAX_FILE_BYTES
-  const maxFiles = capabilities?.limits.maxFilesPerGroup ?? null
 
   /** The catalog's alert for refused files, with their names; the admin's limit if changed. */
   const checkFiles = useCallback(
@@ -148,7 +157,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
   /** Files beyond the admin's limit per transcript are not added; the alert says so. */
   const fitGroup = useCallback(
     async (files: File[], present: number): Promise<File[]> => {
-      if (maxFiles === null || present + files.length <= maxFiles) return files
+      if (present + files.length <= maxFiles) return files
       await dialogs.alert({
         title: t('transcription.common.error'),
         message: t('transcription.upload.groupFull', { count: maxFiles })
@@ -167,6 +176,18 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
       queue.addFiles(await fitGroup(accepted, present), groupIndex)
     },
     [checkFiles, fitGroup, queue]
+  )
+
+  /** Moves a file; one refused because the target group is full gets the catalog's alert. */
+  const moveFile = useCallback(
+    (from: FilePosition, toGroupIndex: number, toFileIndex: number | null = null): void => {
+      if (queue.moveFile(from, toGroupIndex, toFileIndex) || queue.getSnapshot().processing) return
+      void dialogs.alert({
+        title: t('transcription.common.error'),
+        message: t('transcription.upload.groupFull', { count: maxFiles })
+      })
+    },
+    [dialogs, maxFiles, queue, t]
   )
 
   const start = useCallback(async (): Promise<void> => {
@@ -198,12 +219,12 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
   }, [checkFiles, fitGroup, pendingUploads, processing, queue, takePendingUploads])
 
   useEffect(() => {
-    if (workspace.view === 'choice') queue.clearSaved()
+    queue.showView(workspace.view)
   }, [queue, workspace.view])
 
   const value = useMemo(
-    () => ({ queue, dialogs, addFiles, start }),
-    [addFiles, dialogs, queue, start]
+    () => ({ queue, dialogs, addFiles, moveFile, start }),
+    [addFiles, dialogs, moveFile, queue, start]
   )
   return (
     <UploadContext.Provider value={value}>

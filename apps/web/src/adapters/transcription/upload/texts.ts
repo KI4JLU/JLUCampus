@@ -40,6 +40,12 @@ export function errorText(t: TFunction, error: FileError): string {
   return detail ? `${base} ${detail}` : base
 }
 
+/** A row's progress as the UI language writes a percentage: `42 %`, `42%`. */
+export function percentText(language: string, progress: number): string {
+  const value = Math.max(0, Math.min(100, Math.round(progress)))
+  return new Intl.NumberFormat(language, { style: 'percent' }).format(value / 100)
+}
+
 /** The badge tone of a row's look. */
 export const TONE: Record<RowTone, NonNullable<BadgeProps['tone']>> = {
   ready: 'neutral',

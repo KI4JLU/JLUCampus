@@ -1,6 +1,6 @@
 import { createContext, useContext, useSyncExternalStore } from 'react'
 import type { UploadDialogs } from './use-dialog-host'
-import type { QueueState } from './queue'
+import type { FilePosition, QueueState } from './queue'
 import type { UploadQueue } from './store'
 
 export interface UploadContextValue {
@@ -11,6 +11,8 @@ export interface UploadContextValue {
    * alert for those refused (T-04).
    */
   addFiles: (files: readonly File[], groupIndex: number | null) => Promise<void>
+  /** Moves a file within or between groups (T-07); alerts when the target group is full. */
+  moveFile: (from: FilePosition, toGroupIndex: number, toFileIndex?: number | null) => void
   /** Starts the transcription; a single transcript saved without failures opens (T-13). */
   start: () => Promise<void>
 }
