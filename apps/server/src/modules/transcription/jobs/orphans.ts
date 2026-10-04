@@ -1,5 +1,5 @@
 import { jobOfKey, objectKeys, type TranscriptionStorage } from '../storage.js'
-import { jobsKeepingObjects } from './store.js'
+import { existingJobs } from './store.js'
 
 /**
  * The orphan sweep (T-08): storage itself is the list of what to delete, not the jobs table. A
@@ -7,8 +7,14 @@ import { jobsKeepingObjects } from './store.js'
  * so a slow transfer may store audio long after its job was deleted and its row purged. No time
  * limit on the jobs table can rule that out; listing the objects can. Each sweep reads one page of
  * keys below `objectKeys.root`, from where the last one stopped, and deletes every job object whose
- * job is gone, deleted or expired. Only objects older than `ORPHAN_MIN_AGE_MS` go, so clocks that
- * differ between storage and server cannot remove what a job just stored.
+ * job row no longer exists. Only objects older than `ORPHAN_MIN_AGE_MS` go, so clocks that differ
+ * between storage and server cannot remove what a job just stored.
+ *
+ * Objects of a job that still has a row stay, even when the job is deleted or expired: until the
+ * cleanup claims it (`claimJobsForCleanup` in `sweepJobs`), it may still be saved or analysed
+ * again, and that claim, not this sweep, decides. A missing row is final, since job ids are random
+ * and a row is written before its upload URL leaves the server, so the existence check made right
+ * before the deletion cannot turn stale.
  */
 
 export const ORPHAN_MIN_AGE_MS = 15 * 60_000
@@ -48,7 +54,7 @@ export async function sweepOrphanObjects(
   })
   const ids = [...new Set(candidates.map((candidate) => candidate.id))]
   const kept = new Set(
-    (await jobsKeepingObjects(ids, now)).map((row) => `${row.componentId}/${row.id.toLowerCase()}`)
+    (await existingJobs(ids)).map((row) => `${row.componentId}/${row.id.toLowerCase()}`)
   )
   const orphans = candidates
     .filter((candidate) => !kept.has(`${candidate.componentId}/${candidate.id}`))

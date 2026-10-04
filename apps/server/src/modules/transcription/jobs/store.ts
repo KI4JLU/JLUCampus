@@ -31,8 +31,12 @@ import { WORK_STATUSES } from './state.js'
 export type JobInsert = typeof transcriptionJob.$inferInsert
 export type JobChanges = Partial<Omit<JobInsert, 'id' | 'componentId' | 'userId' | 'createdAt'>>
 
-/** Not deleted, and saved or not yet expired. */
-function visible(now: Date): SQL {
+/**
+ * Not deleted, and saved or not yet expired. `deleted_at` is never cleared: once the cleanup
+ * claimed a job (`claimJobsForCleanup`), no query here finds it again, so nothing can save,
+ * analyse or dispatch it while its objects are being deleted.
+ */
+export function visibleJob(now: Date): SQL {
   return and(
     isNull(transcriptionJob.deletedAt),
     or(
@@ -57,7 +61,7 @@ export async function findJob(
   const [row] = await db
     .select()
     .from(transcriptionJob)
-    .where(and(eq(transcriptionJob.id, id), owned(componentId, userId), visible(now)))
+    .where(and(eq(transcriptionJob.id, id), owned(componentId, userId), visibleJob(now)))
     .limit(1)
   return row
 }
@@ -85,7 +89,7 @@ export async function listJobs(
   return db
     .select()
     .from(transcriptionJob)
-    .where(and(owned(componentId, userId), isNull(transcriptionJob.transcriptId), visible(now)))
+    .where(and(owned(componentId, userId), isNull(transcriptionJob.transcriptId), visibleJob(now)))
     .orderBy(asc(transcriptionJob.createdAt), asc(transcriptionJob.groupOrder))
 }
 
@@ -113,7 +117,7 @@ export async function countActiveJobs(
           )
         ),
         isNull(transcriptionJob.transcriptId),
-        visible(now)
+        visibleJob(now)
       )
     )
   return row?.value ?? 0
@@ -133,8 +137,10 @@ export function unchangedSince(updatedAt: Date): SQL {
 }
 
 /**
- * Moves a job on if it is still in one of `from` (and `where`, if given); `undefined` when another
- * request was first. This makes repeated analysis and dispatch safe.
+ * Moves a job on if it is still in one of `from` (and `where`, if given) and neither deleted nor
+ * expired; `undefined` when another request or the cleanup was first. This makes repeated analysis
+ * and dispatch safe, and an expiry extension cannot revive a job the cleanup claimed: the
+ * conditional `UPDATE` waits for the claim's row lock and then sees `deleted_at` set.
  */
 export async function transitionJob(
   id: string,
@@ -142,14 +148,15 @@ export async function transitionJob(
   changes: JobChanges,
   where?: SQL
 ): Promise<JobRow | undefined> {
+  const now = changes.updatedAt ?? new Date()
   const [row] = await db
     .update(transcriptionJob)
-    .set({ ...changes, updatedAt: changes.updatedAt ?? new Date() })
+    .set({ ...changes, updatedAt: now })
     .where(
       and(
         eq(transcriptionJob.id, id),
         inArray(transcriptionJob.status, [...from]),
-        isNull(transcriptionJob.deletedAt),
+        visibleJob(now),
         where
       )
     )
@@ -159,7 +166,7 @@ export async function transitionJob(
 
 /**
  * Hides a job and asks its worker to stop: a running job becomes `cancelled`. The row stays until
- * its objects are gone (`purgeJob`).
+ * its objects are gone (`sweepJobs`).
  */
 export async function markDeleted(id: string, now = new Date()): Promise<JobRow | undefined> {
   const [row] = await db
@@ -299,51 +306,71 @@ export async function releaseClaim(id: string, claimedAt: Date): Promise<void> {
  * Jobs whose objects and row go now (T-08, retention): deleted ones, unsaved ones past their
  * expiry, and ones whose transcript was deleted (`transcript_id` set to null by the foreign key,
  * `expires_at` cleared when saved) once `orphanBefore` passed. Jobs a worker still holds wait.
+ */
+export function cleanupDue(now: Date, leaseMs: number, orphanBefore: Date): SQL {
+  return and(
+    or(
+      isNotNull(transcriptionJob.deletedAt),
+      and(isNull(transcriptionJob.transcriptId), lt(transcriptionJob.expiresAt, now)),
+      and(
+        isNull(transcriptionJob.transcriptId),
+        isNull(transcriptionJob.expiresAt),
+        lt(transcriptionJob.updatedAt, orphanBefore)
+      )
+    ),
+    or(
+      isNull(transcriptionJob.claimedAt),
+      isNull(transcriptionJob.heartbeatAt),
+      lt(transcriptionJob.heartbeatAt, new Date(now.getTime() - leaseMs))
+    )
+  )!
+}
+
+/**
+ * Claims up to `limit` jobs due for cleanup (`cleanupDue`) before any of their objects go: one
+ * conditional `UPDATE` marks them deleted, which no later save, analysis, dispatch or worker write
+ * accepts (they all require `deleted_at` null). Rows a save or analysis has locked are skipped, and
+ * the condition is checked again on the row as the lock leaves it, so a job saved or given a new
+ * expiry meanwhile is not claimed. Only the returned jobs' objects may be deleted.
  * What a signed upload stores after its row went, `sweepOrphanObjects` finds by listing storage.
  */
-export async function purgeCandidates(
+export async function claimJobsForCleanup(
   now: Date,
   leaseMs: number,
   orphanBefore: Date,
   limit = 50
 ): Promise<Array<Pick<JobRow, 'id' | 'componentId'>>> {
-  return db
-    .select({ id: transcriptionJob.id, componentId: transcriptionJob.componentId })
+  const due = cleanupDue(now, leaseMs, orphanBefore)
+  const candidate = db
+    .select({ id: transcriptionJob.id })
     .from(transcriptionJob)
-    .where(
-      and(
-        or(
-          isNotNull(transcriptionJob.deletedAt),
-          and(isNull(transcriptionJob.transcriptId), lt(transcriptionJob.expiresAt, now)),
-          and(
-            isNull(transcriptionJob.transcriptId),
-            isNull(transcriptionJob.expiresAt),
-            lt(transcriptionJob.updatedAt, orphanBefore)
-          )
-        ),
-        or(
-          isNull(transcriptionJob.claimedAt),
-          isNull(transcriptionJob.heartbeatAt),
-          lt(transcriptionJob.heartbeatAt, new Date(now.getTime() - leaseMs))
-        )
-      )
-    )
+    .where(due)
     .limit(limit)
+    .for('update', { skipLocked: true })
+  return db
+    .update(transcriptionJob)
+    .set({
+      deletedAt: sql`coalesce(${transcriptionJob.deletedAt}, ${now.toISOString()}::timestamp)`,
+      updatedAt: now
+    })
+    .where(and(inArray(transcriptionJob.id, candidate), due))
+    .returning({ id: transcriptionJob.id, componentId: transcriptionJob.componentId })
 }
 
 /**
- * Of the job ids, those whose job still keeps its objects: not deleted, and saved or not yet
- * expired. The orphan sweep deletes the objects of every other id.
+ * Of the job ids, those that still have a row, in whatever state. The orphan sweep deletes only
+ * the objects of the others: a row never comes back once purged, while an existing row (even one
+ * expired or deleted) may still be saved, analysed or in cleanup, which `claimJobsForCleanup`
+ * decides.
  */
-export async function jobsKeepingObjects(
-  ids: readonly string[],
-  now: Date
+export async function existingJobs(
+  ids: readonly string[]
 ): Promise<Array<Pick<JobRow, 'id' | 'componentId'>>> {
   if (ids.length === 0) return []
   return db
     .select({ id: transcriptionJob.id, componentId: transcriptionJob.componentId })
     .from(transcriptionJob)
-    .where(and(inArray(transcriptionJob.id, [...ids]), visible(now)))
+    .where(inArray(transcriptionJob.id, [...ids]))
 }
 
 /** Asks the worker of an expired job to stop, so the sweep can remove it. */

@@ -296,12 +296,19 @@ authenticated routes; signed URLs are never stored. The analysis also stores the
 (20 peaks per second) right after normalising, before diarisation, for files too large for
 the browser to decode; the upload queue asks for it once the analysis ended, failed or not.
 All of a job's objects lie below `transcription/<component>/jobs/<job>/`. Deleting a job
-deletes that prefix and the row. A signed upload's URL is checked only when its `PUT`
-starts, so a slow transfer may still store audio after that. The orphan sweep
-(`jobs/orphans.ts`) therefore lists the storage itself: every minute one page of up to 1000
-keys below `transcription/`, continuing after the last key, and deletes job objects older
-than 15 minutes whose job no longer exists, is deleted or has expired. It needs no row and
-no assumed transfer time.
+deletes that prefix and the row. The job sweep (`sweepJobs`) removes deleted, expired and
+orphaned jobs the same way, but first claims each with one conditional `UPDATE` that sets
+`deleted_at` (`claimJobsForCleanup`, skipping rows another transaction locks). Saving
+(`SELECT … FOR UPDATE`), analysis, dispatch and worker writes only touch jobs neither deleted
+nor expired, so a job is either saved or given a new expiry before the claim, and then not
+claimed, or claimed, and then no longer saved or revived. A saved transcript's audio stays
+until the transcript is deleted or its retention expires. A signed upload's URL is checked
+only when its `PUT` starts, so a slow transfer may still store audio after that. The orphan
+sweep (`jobs/orphans.ts`) therefore lists the storage itself: every minute one page of up to
+1000 keys below `transcription/`, continuing after the last key, and deletes job objects
+older than 15 minutes whose job row no longer exists. Objects of an existing row, even a
+deleted or expired one, are left to the job sweep's claim. A purged row never returns, so
+the sweep needs no assumed transfer time.
 The number of files per transcript is limited only by the admin's optional setting (and a
 generous anti-abuse bound in the contract), checked when the group is saved. Upstream calls (`http.ts`) refuse redirects,
 time out and follow the caller's abort; failures answer `502 module_unavailable`.

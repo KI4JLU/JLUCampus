@@ -12,6 +12,18 @@ const state = vi.hoisted(() => ({
   released: [] as string[],
   lost: false,
   purgeRows: [] as Array<{ id: string; componentId: string }>,
+  /**
+   * A jobs table for the cleanup claim, when set: the mock claims what `cleanupDue` would and
+   * marks it deleted, as the conditional `UPDATE` does; rows a save holds locked are skipped.
+   */
+  table: null as Array<{
+    id: string
+    componentId: string
+    transcriptId: string | null
+    expiresAt: Date | null
+    deletedAt: Date | null
+    locked: boolean
+  }> | null,
   deletedRows: [] as string[],
   cancelledExpired: 0
 }))
@@ -29,7 +41,17 @@ vi.mock('./store.js', () => ({
   cancelExpiredClaims: async () => {
     state.cancelledExpired++
   },
-  purgeCandidates: async () => state.purgeRows,
+  claimJobsForCleanup: async (now: Date) => {
+    if (!state.table) return state.purgeRows
+    const due = state.table.filter(
+      (row) =>
+        !row.locked &&
+        (row.deletedAt !== null ||
+          (row.transcriptId === null && row.expiresAt !== null && row.expiresAt < now))
+    )
+    for (const row of due) row.deletedAt ??= now
+    return due.map(({ id, componentId }) => ({ id, componentId }))
+  },
   deleteJobRow: async (id: string) => {
     state.deletedRows.push(id)
   },
@@ -60,6 +82,7 @@ beforeEach(() => {
   state.released = []
   state.lost = false
   state.purgeRows = []
+  state.table = null
   state.deletedRows = []
   state.cancelledExpired = 0
 })
@@ -184,5 +207,79 @@ describe('sweepJobs', () => {
     // The row whose objects could not go stays for the next sweep.
     expect(state.deletedRows).toEqual(['a'])
     expect(state.cancelledExpired).toBe(1)
+  })
+
+  describe('with a save or analysis at the same time (F-2)', () => {
+    const now = new Date('2026-10-04T12:00:00.000Z')
+    const past = new Date(now.getTime() - 60_000)
+    type TableRow = NonNullable<typeof state.table>[number]
+
+    function table(): TableRow {
+      const row: TableRow = {
+        id: 'job',
+        componentId: 'c',
+        transcriptId: null,
+        expiresAt: past,
+        deletedAt: null,
+        locked: false
+      }
+      state.table = [row]
+      return row
+    }
+
+    /** What `saveTranscript` and `transitionJob` require of a row: neither deleted nor expired. */
+    function accepts(row: TableRow, at: Date): boolean {
+      return (
+        row.deletedAt === null &&
+        (row.transcriptId !== null || row.expiresAt === null || row.expiresAt > at)
+      )
+    }
+
+    it('leaves a job alone that a save holds locked, then finds it saved', async () => {
+      const row = table()
+      // The save read the job before it expired and holds its row lock across the expiry.
+      row.locked = true
+      const deletePrefix = vi.fn(async () => 0)
+      await sweepJobs({ deletePrefix } as unknown as TranscriptionStorage, 24, now)
+      row.transcriptId = 'transcript'
+      row.expiresAt = null
+      row.locked = false
+      await sweepJobs({ deletePrefix } as unknown as TranscriptionStorage, 24, now)
+      expect(deletePrefix).not.toHaveBeenCalled()
+      expect(state.deletedRows).toEqual([])
+      expect(row.deletedAt).toBeNull()
+    })
+
+    it('claims an expired job before deleting anything, so a later save is refused', async () => {
+      const row = table()
+      const saves: boolean[] = []
+      const deletePrefix = vi.fn(async () => {
+        // A save arriving while the objects go finds the job claimed.
+        saves.push(accepts(row, now))
+        return 4
+      })
+      await sweepJobs({ deletePrefix } as unknown as TranscriptionStorage, 24, now)
+      expect(row.deletedAt).toEqual(now)
+      expect(saves).toEqual([false])
+      expect(deletePrefix).toHaveBeenCalledWith('transcription/c/jobs/job/')
+      expect(state.deletedRows).toEqual(['job'])
+    })
+
+    it('leaves a job whose analysis extended its expiry first, and refuses one claimed first', async () => {
+      const row = table()
+      const deletePrefix = vi.fn(async () => 0)
+      // The analysis, just before the job expired, committed its new expiry before the claim.
+      const before = new Date(past.getTime() - 1)
+      expect(accepts(row, before)).toBe(true)
+      row.expiresAt = new Date(now.getTime() + 24 * 3_600_000)
+      await sweepJobs({ deletePrefix } as unknown as TranscriptionStorage, 24, now)
+      expect(deletePrefix).not.toHaveBeenCalled()
+
+      // Now the other order: the claim first, the analysis' conditional update after it.
+      row.expiresAt = past
+      await sweepJobs({ deletePrefix } as unknown as TranscriptionStorage, 24, now)
+      expect(accepts(row, before)).toBe(false)
+      expect(deletePrefix).toHaveBeenCalledOnce()
+    })
   })
 })

@@ -14,6 +14,7 @@ import { and, desc, eq, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm'
 
 import { db } from '../../../db/index.js'
 import { transcriptionJob, transcriptionTranscript } from '../../../db/schema.js'
+import { visibleJob } from '../jobs/store.js'
 
 /**
  * Saved transcripts (history entries). Every query names the module instance and the user, so
@@ -151,9 +152,11 @@ export interface NewTranscript {
 
 /**
  * Saves a group's result once. The transcript saved first under `idempotencyKey` comes back
- * (`created: false`) instead of a second one. Otherwise the user's jobs of the group are locked and
- * handed to `build`, which checks them (throwing to refuse) and returns the columns; the jobs then
- * point at the new transcript and no longer expire.
+ * (`created: false`) instead of a second one. Otherwise the user's jobs of the group are locked
+ * (`FOR UPDATE`) and handed to `build`, which checks them (throwing to refuse) and returns the
+ * columns; the jobs then point at the new transcript and no longer expire. Only jobs neither deleted
+ * nor expired are found, so a job the cleanup claimed (`claimJobsForCleanup`) cannot be saved, and
+ * while the lock is held the cleanup cannot claim the jobs.
  */
 export async function saveTranscript(
   componentId: string,
@@ -185,7 +188,7 @@ export async function saveTranscript(
           eq(transcriptionJob.componentId, componentId),
           eq(transcriptionJob.userId, userId),
           inArray(transcriptionJob.id, [...jobIds]),
-          isNull(transcriptionJob.deletedAt)
+          visibleJob(new Date())
         )
       )
       .for('update')

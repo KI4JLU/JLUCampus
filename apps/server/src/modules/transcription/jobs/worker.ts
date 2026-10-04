@@ -11,9 +11,9 @@ import { jobExpiry, type JobRow } from './rows.js'
 import { failureOf, JobFailure, stageOf } from './state.js'
 import {
   cancelExpiredClaims,
+  claimJobsForCleanup,
   claimNextJob,
   deleteJobRow,
-  purgeCandidates,
   releaseClaim,
   renewClaim,
   updateClaimedJob,
@@ -27,7 +27,7 @@ import {
  * overlap; each claims jobs while fewer than `workerConcurrency` run in this process. Deleting a
  * job stops its run at the next renewal or write. Every minute a sweep deletes the objects and
  * rows of deleted, expired and orphaned jobs, then the orphan sweep deletes one listing page's
- * worth of objects whose job is gone (`sweepOrphanObjects`).
+ * worth of objects whose job row no longer exists (`sweepOrphanObjects`).
  */
 
 export const CLAIM_LEASE_MS = 2 * 60_000
@@ -139,7 +139,9 @@ export async function processJob(
 
 /**
  * Deletes the objects and rows of deleted jobs, of unsaved jobs past their expiry (T-08, kiChat's
- * 24 hours) and of jobs whose transcript is gone. A job whose objects cannot be deleted stays for
+ * 24 hours) and of jobs whose transcript is gone. Each job is claimed first
+ * (`claimJobsForCleanup`), so a job saved or analysed again at the same time is either left alone
+ * or can no longer be saved or analysed. A job whose objects cannot be deleted stays claimed for
  * the next sweep.
  */
 export async function sweepJobs(
@@ -149,7 +151,7 @@ export async function sweepJobs(
 ): Promise<number> {
   await cancelExpiredClaims(now)
   const orphanBefore = new Date(now.getTime() - retentionHours * 60 * 60 * 1000)
-  const rows = await purgeCandidates(now, CLAIM_LEASE_MS, orphanBefore)
+  const rows = await claimJobsForCleanup(now, CLAIM_LEASE_MS, orphanBefore)
   let purged = 0
   for (const row of rows) {
     try {
