@@ -25,7 +25,7 @@ import {
   transcriptionStorage,
   type TranscriptionStorage
 } from '../storage.js'
-import { jobExpiry, publicJob, uploadSettled, type JobRow } from './rows.js'
+import { jobExpiry, publicJob, type JobRow } from './rows.js'
 import { jobActions, progressOf } from './state.js'
 import {
   claimHeld,
@@ -182,8 +182,8 @@ jobsRouter.get('/jobs/:id', async (context) => {
  * Cancels the job and deletes everything it stored (T-08). Another user's job, an unknown id and
  * one already gone answer `404` like every other job route; the browser counts that as deleted.
  * If storage cannot delete (also only some objects), the answer is `502` and the job stays
- * hidden; the next DELETE or the sweep finishes the work. A job whose signed upload could still
- * arrive also stays hidden until the sweep's final cleanup (`uploadSettled`).
+ * hidden; the next DELETE or the sweep finishes the work. Audio a signed upload still stores
+ * after this is found by the orphan sweep (`sweepOrphanObjects`), which needs no row.
  */
 jobsRouter.delete('/jobs/:id', async (context) => {
   const id = context.req.param('id')
@@ -198,10 +198,9 @@ jobsRouter.delete('/jobs/:id', async (context) => {
       storage.deletePrefix(objectKeys.jobPrefix(componentId, job.id))
     )
   }
-  // A worker still running stops at its next write, and a signed upload stays valid after this
-  // deletion: its PUT may still store the audio again. Then the row stays, hidden, and the sweep
-  // deletes what was stored meanwhile and the row once the worker let go and the upload settled.
-  if (!claimHeld(marked, CLAIM_LEASE_MS) && uploadSettled(job.createdAt)) {
+  // A worker still running stops at its next write; its row stays, hidden, until the sweep
+  // removes it with whatever the worker stored meanwhile.
+  if (!claimHeld(marked, CLAIM_LEASE_MS)) {
     await deleteJobRow(job.id)
   }
   return context.body(null, 204)

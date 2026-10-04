@@ -1,12 +1,9 @@
-import {
-  TRANSCRIPTION_DEFAULT_CONFIG,
-  TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS
-} from '@justcampus/shared'
+import { TRANSCRIPTION_DEFAULT_CONFIG } from '@justcampus/shared'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { TranscriptionRuntime } from '../config.js'
 import { PartialDeleteError, type TranscriptionStorage } from '../storage.js'
-import { UPLOAD_SETTLE_MS, uploadSettled, type JobRow } from './rows.js'
+import type { JobRow } from './rows.js'
 import { JobFailure } from './state.js'
 import type { JobChanges } from './store.js'
 
@@ -187,16 +184,5 @@ describe('sweepJobs', () => {
     // The row whose objects could not go stays for the next sweep.
     expect(state.deletedRows).toEqual(['a'])
     expect(state.cancelledExpired).toBe(1)
-  })
-
-  it('waits for a signed upload to settle before a row may go (T-08)', () => {
-    const now = new Date('2026-10-04T12:00:00.000Z')
-    // The URL lives an hour; a PUT started just before then may still be transferring.
-    expect(UPLOAD_SETTLE_MS).toBeGreaterThan(TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS * 1000)
-    expect(uploadSettled(new Date(now.getTime() - UPLOAD_SETTLE_MS), now)).toBe(true)
-    expect(uploadSettled(new Date(now.getTime() - UPLOAD_SETTLE_MS + 1), now)).toBe(false)
-    expect(
-      uploadSettled(new Date(now.getTime() - TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS * 1000), now)
-    ).toBe(false)
   })
 })

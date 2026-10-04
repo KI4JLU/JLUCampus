@@ -1,5 +1,4 @@
 import {
-  TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS,
   transcriptionJobSchema,
   type TranscriptionJob,
   type TranscriptionJobStatus
@@ -12,20 +11,6 @@ export type JobRow = typeof transcriptionJob.$inferSelect
 /** When an unsaved job and its audio go: `hours` after its last step (as kiChat, 24 h). */
 export function jobExpiry(hours: number, now = new Date()): Date {
   return new Date(now.getTime() + hours * 60 * 60 * 1000)
-}
-
-/**
- * How long after a job's creation its signed upload may still write the audio: the URL's lifetime,
- * plus time for a `PUT` started just before it expired (500 MB at about 1 Mbit/s take 70 min).
- */
-export const UPLOAD_SETTLE_MS = (TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS + 2 * 60 * 60) * 1000
-
-/**
- * Whether no signed upload of a job created then can store anything any more (T-08): until then a
- * deleted job's row stays, so the sweep deletes what such an upload stored after the deletion.
- */
-export function uploadSettled(createdAt: Date, now = new Date()): boolean {
-  return createdAt.getTime() <= now.getTime() - UPLOAD_SETTLE_MS
 }
 
 /**

@@ -56,6 +56,12 @@ export function storageSettingsFromEnv(): StorageSettings | null {
   }
 }
 
+/** One page of a listing (`TranscriptionStorage.listObjects`). */
+export interface ObjectPage {
+  objects: Array<{ key: string; lastModified: Date | null }>
+  truncated: boolean
+}
+
 /** An object's size and type, as storage reports them. */
 export interface StoredObject {
   size: number
@@ -216,9 +222,51 @@ export class TranscriptionStorage {
   }
 
   /**
+   * One page of the objects under `prefix`, in key order, from after `startAfter`. A page holds at
+   * most `maxKeys` (S3 caps it at 1000); `truncated` says whether more follow.
+   */
+  async listObjects(
+    prefix: string,
+    options: { startAfter?: string; maxKeys?: number } = {}
+  ): Promise<ObjectPage> {
+    const page = await this.internal.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        StartAfter: options.startAfter,
+        MaxKeys: options.maxKeys
+      })
+    )
+    return {
+      objects: (page.Contents ?? []).flatMap((object) =>
+        object.Key ? [{ key: object.Key, lastModified: object.LastModified ?? null }] : []
+      ),
+      truncated: page.IsTruncated === true
+    }
+  }
+
+  /**
+   * Deletes the objects, at most 1000 (one S3 request). Returns the keys the storage refused to
+   * delete (S3 answers `200` and lists them under `Errors`).
+   */
+  async deleteObjects(keys: readonly string[]): Promise<PartialDeleteError['failures']> {
+    if (keys.length === 0) return []
+    const result = await this.internal.send(
+      new DeleteObjectsCommand({
+        Bucket: this.bucket,
+        Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true }
+      })
+    )
+    return (result.Errors ?? []).map((error) => ({
+      key: error.Key ?? null,
+      code: error.Code ?? null
+    }))
+  }
+
+  /**
    * Deletes every object under `prefix`, e.g. all of one job's files. Returns how many. Objects
-   * the storage refused to delete (S3 answers `200` and lists them under `Errors`) make it throw
-   * `PartialDeleteError` once every page was tried, so callers keep the job for another attempt.
+   * the storage refused to delete make it throw `PartialDeleteError` once every page was tried, so
+   * callers keep the job for another attempt.
    */
   async deletePrefix(prefix: string): Promise<number> {
     if (!prefix.endsWith('/')) throw new Error('A prefix to delete must end with "/"')
@@ -230,20 +278,9 @@ export class TranscriptionStorage {
         new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ContinuationToken: token })
       )
       const keys = (page.Contents ?? []).flatMap((object) => (object.Key ? [object.Key] : []))
-      if (keys.length > 0) {
-        const result = await this.internal.send(
-          new DeleteObjectsCommand({
-            Bucket: this.bucket,
-            Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true }
-          })
-        )
-        const errors = (result.Errors ?? []).map((error) => ({
-          key: error.Key ?? null,
-          code: error.Code ?? null
-        }))
-        failed.push(...errors)
-        deleted += keys.length - errors.length
-      }
+      const errors = await this.deleteObjects(keys)
+      failed.push(...errors)
+      deleted += keys.length - errors.length
       token = page.IsTruncated ? page.NextContinuationToken : undefined
     } while (token)
     if (failed.length > 0) throw new PartialDeleteError(prefix, failed)
@@ -293,6 +330,8 @@ export function transcriptionStorage(): TranscriptionStorage | null {
  * `…/samples/<sample>.wav`, `…/peaks.json`.
  */
 export const objectKeys = {
+  /** Everything the module stores, of every component. */
+  root: 'transcription/',
   jobPrefix: (componentId: string, jobId: string): string =>
     `transcription/${componentId}/jobs/${jobId}/`,
   source: (componentId: string, jobId: string): string =>
@@ -306,4 +345,12 @@ export const objectKeys = {
     `${objectKeys.jobPrefix(componentId, jobId)}chunks/${String(index).padStart(3, '0')}.wav`,
   sample: (componentId: string, jobId: string, sampleId: string): string =>
     `${objectKeys.jobPrefix(componentId, jobId)}samples/${encodeURIComponent(sampleId)}.wav`
+}
+
+const JOB_KEY = /^transcription\/([^/]+)\/jobs\/([^/]+)\/./
+
+/** The component and job an object key belongs to, or `null` for keys outside `jobPrefix`. */
+export function jobOfKey(key: string): { componentId: string; jobId: string } | null {
+  const match = JOB_KEY.exec(key)
+  return match ? { componentId: match[1]!, jobId: match[2]! } : null
 }

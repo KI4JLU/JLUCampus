@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../../../api.js'
 import type { AppEnvironment } from '../../types.js'
-import { UPLOAD_SETTLE_MS, type JobRow } from './rows.js'
+import type { JobRow } from './rows.js'
 import type { JobChanges, JobInsert } from './store.js'
 
 /** The jobs table in memory, with the store's ownership and status rules. */
@@ -599,13 +599,6 @@ describe('status, list and media', () => {
   })
 })
 
-/** A job created so long ago that its signed upload can no longer store anything. */
-async function settledJob(): Promise<string> {
-  const { body } = await createJob()
-  setRow(body.job.id, { createdAt: new Date(Date.now() - UPLOAD_SETTLE_MS - 1000) })
-  return body.job.id
-}
-
 describe('server waveform (T-12, T-19)', () => {
   it('answers the peaks the analysis stored, else 404', async () => {
     const { body } = await createJob()
@@ -630,7 +623,8 @@ describe('server waveform (T-12, T-19)', () => {
 
 describe('deletion', () => {
   it('cancels, deletes the audio and answers 404 once it is gone', async () => {
-    const id = await settledJob()
+    const { body } = await createJob()
+    const id = body.job.id
     const first = await app('alice').request(local(TRANSCRIPTION_API.job(id)), { method: 'DELETE' })
     expect(first.status).toBe(204)
     expect(state.storage.deletePrefix).toHaveBeenCalledWith(
@@ -661,33 +655,9 @@ describe('deletion', () => {
     expect((await app('alice').request(local(TRANSCRIPTION_API.job(id)))).status).toBe(404)
   })
 
-  it('keeps a job whose signed upload may still arrive for the sweep (T-08)', async () => {
-    // The browser's PUT may store the audio after this deletion; the hidden row lets the sweep
-    // find and delete it once the upload URL can no longer be used.
+  it('reports a storage failure and finishes on the next try', async () => {
     const { body } = await createJob()
     const id = body.job.id
-    const response = await app('alice').request(local(TRANSCRIPTION_API.job(id)), {
-      method: 'DELETE'
-    })
-    expect(response.status).toBe(204)
-    expect(state.storage.deletePrefix).toHaveBeenCalledWith(
-      `transcription/${componentId}/jobs/${id}/`
-    )
-    expect(state.rows.get(id)).toMatchObject({ status: 'cancelled' })
-    expect(state.rows.get(id)!.deletedAt).not.toBeNull()
-    expect((await app('alice').request(local(TRANSCRIPTION_API.job(id)))).status).toBe(404)
-    expect((await app('alice').request(local(TRANSCRIPTION_API.jobs))).status).toBe(200)
-    expect(
-      (
-        (await (await app('alice').request(local(TRANSCRIPTION_API.jobs))).json()) as {
-          jobs: unknown[]
-        }
-      ).jobs
-    ).toEqual([])
-  })
-
-  it('reports a storage failure and finishes on the next try', async () => {
-    const id = await settledJob()
     state.storage.deletePrefix.mockRejectedValueOnce(new Error('storage down'))
     const failed = await app('alice').request(local(TRANSCRIPTION_API.job(id)), {
       method: 'DELETE'

@@ -12,7 +12,6 @@ import {
   isNotNull,
   isNull,
   lt,
-  lte,
   or,
   sql,
   type SQL
@@ -20,7 +19,7 @@ import {
 
 import { db } from '../../../db/index.js'
 import { transcriptionJob } from '../../../db/schema.js'
-import { UPLOAD_SETTLE_MS, type JobRow } from './rows.js'
+import type { JobRow } from './rows.js'
 import { WORK_STATUSES } from './state.js'
 
 /**
@@ -299,9 +298,8 @@ export async function releaseClaim(id: string, claimedAt: Date): Promise<void> {
 /**
  * Jobs whose objects and row go now (T-08, retention): deleted ones, unsaved ones past their
  * expiry, and ones whose transcript was deleted (`transcript_id` set to null by the foreign key,
- * `expires_at` cleared when saved) once `orphanBefore` passed. Jobs a worker still holds wait, and
- * so do jobs whose signed upload may still store audio (`uploadSettled`): removing their row
- * earlier would leave that audio without anything that finds it.
+ * `expires_at` cleared when saved) once `orphanBefore` passed. Jobs a worker still holds wait.
+ * What a signed upload stores after its row went, `sweepOrphanObjects` finds by listing storage.
  */
 export async function purgeCandidates(
   now: Date,
@@ -327,11 +325,25 @@ export async function purgeCandidates(
           isNull(transcriptionJob.claimedAt),
           isNull(transcriptionJob.heartbeatAt),
           lt(transcriptionJob.heartbeatAt, new Date(now.getTime() - leaseMs))
-        ),
-        lte(transcriptionJob.createdAt, new Date(now.getTime() - UPLOAD_SETTLE_MS))
+        )
       )
     )
     .limit(limit)
+}
+
+/**
+ * Of the job ids, those whose job still keeps its objects: not deleted, and saved or not yet
+ * expired. The orphan sweep deletes the objects of every other id.
+ */
+export async function jobsKeepingObjects(
+  ids: readonly string[],
+  now: Date
+): Promise<Array<Pick<JobRow, 'id' | 'componentId'>>> {
+  if (ids.length === 0) return []
+  return db
+    .select({ id: transcriptionJob.id, componentId: transcriptionJob.componentId })
+    .from(transcriptionJob)
+    .where(and(inArray(transcriptionJob.id, [...ids]), visible(now)))
 }
 
 /** Asks the worker of an expired job to stop, so the sweep can remove it. */

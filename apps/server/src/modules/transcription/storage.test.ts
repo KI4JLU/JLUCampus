@@ -2,6 +2,7 @@ import { DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  jobOfKey,
   objectKeys,
   PartialDeleteError,
   storageSettingsFromEnv,
@@ -90,6 +91,41 @@ describe('TranscriptionStorage', () => {
       command instanceof ListObjectsV2Command ? { Contents: [{ Key: 'job/source' }] } : {}
     )
     await expect(stubbed.deletePrefix('job/')).resolves.toBe(1)
+  })
+})
+
+describe('listing (orphan sweep, T-08)', () => {
+  it('lists one page from after a key, with modification times', async () => {
+    let listed: unknown
+    const send = vi.fn(async (command: unknown) => {
+      listed = command
+      return {
+        Contents: [{ Key: 'transcription/c/jobs/j/source', LastModified: now }, {}],
+        IsTruncated: true
+      }
+    })
+    ;(storage as unknown as { internal: { send: typeof send } }).internal.send = send
+    const page = await storage.listObjects(objectKeys.root, { startAfter: 'a', maxKeys: 2 })
+    expect(page).toEqual({
+      objects: [{ key: 'transcription/c/jobs/j/source', lastModified: now }],
+      truncated: true
+    })
+    expect((listed as ListObjectsV2Command).input).toMatchObject({
+      Bucket: 'justcampus-transcription',
+      Prefix: 'transcription/',
+      StartAfter: 'a',
+      MaxKeys: 2
+    })
+  })
+
+  it('finds the component and job of a job object, and nothing for other keys', () => {
+    expect(jobOfKey(objectKeys.sample('c', 'j', 'SPEAKER_00-1'))).toEqual({
+      componentId: 'c',
+      jobId: 'j'
+    })
+    expect(jobOfKey('transcription/c/jobs/j/')).toBeNull()
+    expect(jobOfKey('transcription/c/connection-tests/x.txt')).toBeNull()
+    expect(jobOfKey('other/c/jobs/j/source')).toBeNull()
   })
 })
 

@@ -68,6 +68,11 @@ export interface WaveformPlayerProps {
    * drawn instead (T-12).
    */
   jobId?: string | null
+  /**
+   * Asks for the job's computed waveform again when it changes, e.g. once the analysis ended; a
+   * waveform not found before is not remembered.
+   */
+  jobRevision?: string
   /** The speaker timeline, coloured per speaker. */
   segments?: readonly WaveformSegment[]
   region?: WaveformRegion | null
@@ -104,6 +109,7 @@ export function WaveformPlayer({
   name,
   size,
   jobId = null,
+  jobRevision,
   segments,
   region,
   compact = false,
@@ -163,7 +169,8 @@ export function WaveformPlayer({
       if (!controller.signal.aborted) setDecoded({ source, waveform: result })
     })
     return () => controller.abort()
-  }, [jobId, source, tooLarge])
+    // `jobRevision` only asks again; `jobWaveform` keeps what it found.
+  }, [jobId, jobRevision, source, tooLarge])
 
   const knownDuration = duration || waveform?.duration || 0
   useEffect(() => {

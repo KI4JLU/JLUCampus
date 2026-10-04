@@ -293,9 +293,15 @@ the text with an OpenAI-compatible chat endpoint, which also writes summaries, s
 and speaker optimisations. Diarised speakers get the name of the user's voice whose sample
 windows overlap them most. Playback and samples use fresh signed `GET` URLs from
 authenticated routes; signed URLs are never stored. The analysis also stores the waveform
-(20 peaks per second) for files too large for the browser to decode. All of a job's objects
-lie below `transcription/<component>/jobs/<job>/`; a deleted job's row stays hidden until
-its signed upload can no longer write, so the sweep removes anything that upload stored.
+(20 peaks per second) right after normalising, before diarisation, for files too large for
+the browser to decode; the upload queue asks for it once the analysis ended, failed or not.
+All of a job's objects lie below `transcription/<component>/jobs/<job>/`. Deleting a job
+deletes that prefix and the row. A signed upload's URL is checked only when its `PUT`
+starts, so a slow transfer may still store audio after that. The orphan sweep
+(`jobs/orphans.ts`) therefore lists the storage itself: every minute one page of up to 1000
+keys below `transcription/`, continuing after the last key, and deletes job objects older
+than 15 minutes whose job no longer exists, is deleted or has expired. It needs no row and
+no assumed transfer time.
 The number of files per transcript is limited only by the admin's optional setting (and a
 generous anti-abuse bound in the contract), checked when the group is saved. Upstream calls (`http.ts`) refuse redirects,
 time out and follow the caller's abort; failures answer `502 module_unavailable`.

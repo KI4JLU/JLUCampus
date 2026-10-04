@@ -14,7 +14,9 @@ import {
   removeGroup,
   renumberGroups,
   restoredGroupName,
+  serverWaveform,
   totalBytes,
+  type QueueFile,
   type QueueGroup
 } from './queue'
 
@@ -166,5 +168,37 @@ describe('moving and removing (T-07, T-08)', () => {
     expect(names(groups)).toEqual([['a', 'b', 'c']])
     expect(findFile(groups, 'b')).toMatchObject({ groupIndex: 0, fileIndex: 1 })
     expect(findFile(groups, 'd')).toBeNull()
+  })
+})
+
+describe('the server waveform of a file (T-12)', () => {
+  const uploaded = (change: Partial<QueueFile>): QueueFile => ({
+    ...queueFileFrom(file('large.wav')),
+    jobId: 'job',
+    uploaded: true,
+    ...change
+  })
+
+  it('is asked for once the analysis ended, with or without voices', () => {
+    expect(serverWaveform(uploaded({ phase: 'analysisFailed', voices: null }))).toEqual({
+      jobId: 'job',
+      revision: 'analysisFailed'
+    })
+    expect(serverWaveform(uploaded({ phase: 'ready', voices: [] }))?.jobId).toBe('job')
+    expect(serverWaveform(uploaded({ phase: 'failed' }))?.jobId).toBe('job')
+    expect(serverWaveform(uploaded({ phase: 'completed' }))?.jobId).toBe('job')
+  })
+
+  it('is not asked for before the analysis could store it', () => {
+    expect(serverWaveform(uploaded({ phase: 'uploading' }))).toBeNull()
+    expect(serverWaveform(uploaded({ phase: 'analyzing' }))).toBeNull()
+    expect(serverWaveform(uploaded({ phase: 'analysisFailed', uploaded: false }))).toBeNull()
+    expect(serverWaveform(uploaded({ phase: 'ready', jobId: null }))).toBeNull()
+  })
+
+  it('changes its revision with the phase, so a missing waveform is asked for again', () => {
+    const failed = serverWaveform(uploaded({ phase: 'analysisFailed' }))
+    const ready = serverWaveform(uploaded({ phase: 'ready' }))
+    expect(failed?.revision).not.toBe(ready?.revision)
   })
 })

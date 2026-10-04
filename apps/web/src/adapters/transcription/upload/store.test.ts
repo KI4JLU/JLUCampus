@@ -8,7 +8,7 @@ import type {
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
 import { SignedUploadError } from '../api'
-import { allFiles, findFile, type QueueFile } from './queue'
+import { allFiles, findFile, serverWaveform, type QueueFile } from './queue'
 import { UploadQueue, type SignedUpload, type UploadApi } from './store'
 
 const NOW = '2026-10-04T10:00:00.000Z'
@@ -224,6 +224,21 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
       progress: 100,
       error: { key: 'analysisError', message: 'Diarization-Server antwortete mit Status 415' }
     })
+  })
+
+  it('still shows the server waveform after the speaker analysis failed (T-12)', async () => {
+    const { api, script } = server()
+    script('job-1', {
+      status: 'failed',
+      error: { code: 'analysis_failed', message: 'Sprecheranalyse fehlgeschlagen (503)' }
+    })
+    const queue = makeQueue(api)
+    queue.addFiles([wav('large.wav')])
+    await until(() => row(queue, 'large.wav').phase === 'analysisFailed')
+    const file = row(queue, 'large.wav')
+    expect(file).toMatchObject({ uploaded: true, voices: null })
+    // The peaks were stored after normalising, before the diariser failed.
+    expect(serverWaveform(file)).toEqual({ jobId: 'job-1', revision: 'analysisFailed' })
   })
 
   it('tells storage errors and session errors apart', async () => {

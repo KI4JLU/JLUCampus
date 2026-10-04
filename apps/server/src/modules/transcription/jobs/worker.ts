@@ -5,6 +5,7 @@ import {
 
 import { loadTranscriptionRuntime, type TranscriptionRuntime } from '../config.js'
 import { objectKeys, transcriptionStorage, type TranscriptionStorage } from '../storage.js'
+import { sweepOrphanObjects } from './orphans.js'
 import { runAnalysis, runTranscription, type JobRun } from './pipeline.js'
 import { jobExpiry, type JobRow } from './rows.js'
 import { failureOf, JobFailure, stageOf } from './state.js'
@@ -25,7 +26,8 @@ import {
  * server process takes the job up again; after `MAX_ATTEMPTS` claims it fails instead. Ticks never
  * overlap; each claims jobs while fewer than `workerConcurrency` run in this process. Deleting a
  * job stops its run at the next renewal or write. Every minute a sweep deletes the objects and
- * rows of deleted, expired and orphaned jobs.
+ * rows of deleted, expired and orphaned jobs, then the orphan sweep deletes one listing page's
+ * worth of objects whose job is gone (`sweepOrphanObjects`).
  */
 
 export const CLAIM_LEASE_MS = 2 * 60_000
@@ -179,6 +181,8 @@ export function startJobWorker(): () => void {
   let again = false
   let stopped = false
   let lastSweep = 0
+  // Where the orphan sweep goes on; each sweep lists one page, the next one continues.
+  let orphanCursor: string | null = null
 
   async function tick(): Promise<void> {
     if (stopped) return
@@ -210,6 +214,7 @@ export function startJobWorker(): () => void {
           storage,
           runtime?.config.unsavedJobRetentionHours ?? TRANSCRIPTION_UNSAVED_JOB_TTL_HOURS
         )
+        orphanCursor = (await sweepOrphanObjects(storage, orphanCursor)).cursor
       }
     } catch (error) {
       console.error('Transcription job worker failed', error)

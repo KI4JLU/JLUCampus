@@ -365,3 +365,20 @@ export function groupLocked(state: QueueState, group: QueueGroup): boolean {
 export function analysisPending(file: QueueFile): boolean {
   return file.phase === 'idle' || file.phase === 'uploading' || file.phase === 'analyzing'
 }
+
+/** The job whose waveform the server computed, and when to ask for it again (T-12). */
+export interface ServerWaveform {
+  jobId: string
+  /** Changes with the file's phase, so a waveform still missing is asked for again. */
+  revision: FilePhase
+}
+
+/**
+ * Where the player of a file too large to decode finds its waveform: the server stores it right
+ * after normalising, before the speaker analysis, so it is there once the analysis ended, also
+ * when that failed and no voices came (T-12). `null` while nothing can have been computed.
+ */
+export function serverWaveform(file: QueueFile): ServerWaveform | null {
+  if (!file.jobId || !file.uploaded || analysisPending(file)) return null
+  return { jobId: file.jobId, revision: file.phase }
+}
