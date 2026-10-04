@@ -14,6 +14,9 @@ import {
   type TranscriptionTranscriptSummary
 } from '@justcampus/shared'
 import { meQuery } from '@/lib/queries'
+import { sameContent } from '../result/compare'
+import { buildSpeakerBlocks } from '../segments/blocks'
+import { cleanupOrphanedPlaceholders } from '../segments/edit'
 import { buildTranscriptText } from '../segments/text'
 import type { HistoryEntry } from './model'
 
@@ -35,6 +38,13 @@ export function isLocalTranscriptId(id: string): boolean {
 export interface LocalHistoryRecord extends HistoryEntry {
   /** The transcript itself, for records only this browser has; else `null`. */
   transcript: TranscriptionTranscript | null
+  /**
+   * For a save that did not reach the server: its jobs that no successful save has carried yet. A
+   * retry after a reload comes with another idempotency key, so these tell which copy it was
+   * (T-39). Empty once the copy stands on its own; missing on records stored before, when the
+   * transcript's source files tell.
+   */
+  pendingJobIds?: string[]
 }
 
 /** kiChat's key; Campus adds `:<module>:<user>`. */
@@ -96,7 +106,8 @@ const recordSchema = z.object({
   createdAt: stringOrNull,
   updatedAt: stringOrNull,
   local: z.boolean().catch(false),
-  transcript: storedTranscriptSchema.nullable().catch(null)
+  transcript: storedTranscriptSchema.nullable().catch(null),
+  pendingJobIds: z.array(z.string()).optional().catch(undefined)
 })
 
 /** The records in a stored value; broken ones are dropped, and local ones without a transcript. */
@@ -226,10 +237,68 @@ export function localTranscriptFromCreate(
   }
 }
 
+/** The jobs of a local copy that no successful save has carried yet. */
+export function pendingJobsOf(record: LocalHistoryRecord): string[] {
+  if (!record.local || !record.transcript) return []
+  return (
+    record.pendingJobIds ??
+    record.transcript.sourceFiles.flatMap((file) => (file.jobId ? [file.jobId] : []))
+  )
+}
+
+/** When a local copy last changed, record and transcript; any edit or rename moves it. */
+export function editStamp(record: LocalHistoryRecord): string {
+  return `${record.updatedAt ?? ''}|${record.transcript?.updatedAt ?? ''}`
+}
+
+/** Whether the user changed a local copy since the failed save made it (text, speakers, title). */
+export function isLocallyEdited(record: LocalHistoryRecord): boolean {
+  const transcript = record.transcript
+  return (
+    record.updatedAt !== record.createdAt ||
+    (transcript !== null && transcript.updatedAt !== transcript.createdAt)
+  )
+}
+
+/** Segments and colours as an opened session keeps them, so opening alone changes nothing. */
+function openedDocument(
+  transcript: Pick<TranscriptionTranscript, 'segments' | 'speakerColors'>
+): Pick<TranscriptionTranscript, 'segments' | 'speakerColors'> {
+  const segments = cleanupOrphanedPlaceholders(transcript.segments) ?? transcript.segments
+  return {
+    segments,
+    speakerColors: buildSpeakerBlocks(segments, transcript.speakerColors).speakerColors
+  }
+}
+
+/** A user's title (and subtitle) of a local copy that still has to reach its server transcript. */
+export interface TitleMerge {
+  localId: string
+  transcriptId: string
+  title: string
+  /** Only one the user wrote; `null` leaves the server's. */
+  subtitle: string | null
+  /** The copy's `editStamp` when the merge was planned: a later edit keeps the copy. */
+  stamp: string
+}
+
+/** The history after a save of a new transcript, and what became of the local copies. */
+export interface SaveReconciliation {
+  records: LocalHistoryRecord[]
+  /** Unedited copies that went, each with the server transcript now holding it. */
+  replaced: { localId: string; transcriptId: string }[]
+  /** Renamed copies whose content the server now holds: the title still has to go there. */
+  merges: TitleMerge[]
+  /** Copies with edits of their own: they stay next to the server transcript. */
+  kept: string[]
+}
+
 /**
- * The records after a save of a new transcript: a failed one is kept as a transcript only this
- * browser has (once per idempotency key, an earlier copy stays as it is); once a retry reached the
- * server, that copy goes again, unless the user changed it meanwhile.
+ * The records after a save of a new transcript (T-39). A failed one is kept as a transcript only
+ * this browser has, once per idempotency key and once per set of jobs, so a retry after a reload
+ * adds no second copy. Once a save carrying its jobs reached the server, the copy goes, whichever
+ * key that save had; one the user changed meanwhile never goes silently: renamed only, its title
+ * is to be carried to the server first (`merges`), else it stays as a copy of its own (`kept`).
  */
 export function recordSaveOutcome(
   records: readonly LocalHistoryRecord[],
@@ -237,16 +306,101 @@ export function recordSaveOutcome(
     | { input: TranscriptionTranscriptCreate; transcript: TranscriptionTranscript }
     | { input: TranscriptionTranscriptCreate; error: unknown },
   now: Date
-): LocalHistoryRecord[] {
+): SaveReconciliation {
   const id = localIdFor(outcome.input.idempotencyKey)
-  const existing = records.find((record) => record.id === id)
-  if ('transcript' in outcome) {
-    const copy = existing?.transcript
-    if (!existing || (copy && copy.updatedAt !== copy.createdAt)) return [...records]
-    return withoutRecord(records, id)
+  const jobs = new Set(outcome.input.jobIds)
+  const result: SaveReconciliation = { records: [], replaced: [], merges: [], kept: [] }
+  if (!('transcript' in outcome)) {
+    const known = records.some(
+      (record) =>
+        record.id === id || (jobs.size > 0 && record.local && sameJobs(pendingJobsOf(record), jobs))
+    )
+    const created = localRecord(localTranscriptFromCreate(outcome.input, now), [...jobs])
+    result.records = known ? [...records] : [created, ...records]
+    return result
   }
-  if (existing) return [...records]
-  return [localRecord(localTranscriptFromCreate(outcome.input, now)), ...records]
+  const saved = outcome.transcript
+  let sent: Pick<TranscriptionTranscript, 'segments' | 'speakerColors'> | null = null
+  for (const record of records) {
+    const copy = record.local ? record.transcript : null
+    const pending = pendingJobsOf(record)
+    // A copy that stands on its own is no save's any more.
+    const own = record.pendingJobIds !== undefined && record.pendingJobIds.length === 0
+    const sameSave = record.id === id
+    if (!copy || own || (!sameSave && !pending.some((job) => jobs.has(job)))) {
+      result.records.push(record)
+      continue
+    }
+    const remaining = sameSave ? [] : pending.filter((job) => !jobs.has(job))
+    if (!isLocallyEdited(record)) {
+      if (remaining.length > 0) result.records.push({ ...record, pendingJobIds: remaining })
+      else result.replaced.push({ localId: record.id, transcriptId: saved.id })
+      continue
+    }
+    sent ??= openedDocument(localTranscriptFromCreate(outcome.input, now))
+    if (remaining.length === 0 && sameContent(openedDocument(copy), sent)) {
+      const subtitle = copy.subtitle && copy.subtitle !== saved.subtitle ? copy.subtitle : null
+      if (copy.title === saved.title && !subtitle) {
+        result.replaced.push({ localId: record.id, transcriptId: saved.id })
+        continue
+      }
+      result.merges.push({
+        localId: record.id,
+        transcriptId: saved.id,
+        title: copy.title,
+        subtitle,
+        stamp: editStamp(record)
+      })
+      result.records.push(record)
+      continue
+    }
+    result.kept.push(record.id)
+    result.records.push({ ...record, pendingJobIds: [] })
+  }
+  return result
+}
+
+function sameJobs(a: readonly string[], b: ReadonlySet<string>): boolean {
+  return a.length === b.size && a.every((job) => b.has(job))
+}
+
+export type TitleMergeOutcome = 'merged' | 'kept' | 'gone'
+
+/**
+ * The records once a planned title merge ended: carried to the server and not changed since, the
+ * local copy goes (`merged`); else it stays as a copy of its own (`kept`); deleted meanwhile,
+ * nothing changes (`gone`).
+ */
+export function settleTitleMerge(
+  records: readonly LocalHistoryRecord[],
+  merge: TitleMerge,
+  carried: boolean
+): { records: LocalHistoryRecord[]; outcome: TitleMergeOutcome } {
+  const record = records.find((candidate) => candidate.id === merge.localId)
+  if (!record) return { records: [...records], outcome: 'gone' }
+  if (carried && editStamp(record) === merge.stamp) {
+    return { records: withoutRecord(records, merge.localId), outcome: 'merged' }
+  }
+  return {
+    records: updateRecord(records, merge.localId, (other) => ({ ...other, pendingJobIds: [] })),
+    outcome: 'kept'
+  }
+}
+
+/** A local copy renamed in the history: a change like any other edit, newest first again. */
+export function renameLocalRecord(
+  records: readonly LocalHistoryRecord[],
+  id: string,
+  title: string,
+  now: Date
+): LocalHistoryRecord[] {
+  const at = now.toISOString()
+  return updateRecord(records, id, (record) => ({
+    ...record,
+    title,
+    updatedAt: at,
+    transcript: record.transcript ? { ...record.transcript, title, updatedAt: at } : null
+  }))
 }
 
 export function withoutRecord(
@@ -266,14 +420,18 @@ export function updateRecord(
 }
 
 /** A record of a transcript only this browser has, newest first in the list. */
-export function localRecord(transcript: TranscriptionTranscript): LocalHistoryRecord {
+export function localRecord(
+  transcript: TranscriptionTranscript,
+  pendingJobIds?: string[]
+): LocalHistoryRecord {
   return {
     id: transcript.id,
     title: transcript.title,
     createdAt: transcript.createdAt,
     updatedAt: transcript.updatedAt,
     local: true,
-    transcript
+    transcript,
+    ...(pendingJobIds ? { pendingJobIds } : {})
   }
 }
 

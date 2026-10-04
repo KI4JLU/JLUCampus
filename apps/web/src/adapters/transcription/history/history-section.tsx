@@ -35,8 +35,8 @@ import { useResultSession } from '../result/session'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import {
   changeLocalHistory,
+  renameLocalRecord,
   syncLocalHistory,
-  updateRecord,
   useLocalHistory,
   withoutRecord
 } from './local-store'
@@ -85,13 +85,16 @@ export function HistorySection(): React.JSX.Element {
     networkMode: 'always'
   })
   const { key, records } = useLocalHistory(component.id)
-  // A save that fails while the page is open lands here as a transcript of this browser.
-  useLocalSaveFallback(key)
   const now = useNow()
   const remove = useDeleteTranscript()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<HistoryEntry | null>(null)
   const activeId = view === 'result' ? transcriptId : null
+  // A save that fails while the page is open lands here as a transcript of this browser; an open
+  // copy that a retry brought to the server is swapped for the server's transcript.
+  useLocalSaveFallback(key, (localId, savedId) => {
+    if (activeId === localId) void openTranscript(savedId)
+  })
   // The admin may have saved transcripts deleted after a while; users are told (default: never).
   const retentionHours = capabilities?.retention.transcriptHours ?? null
 
@@ -112,13 +115,8 @@ export function HistorySection(): React.JSX.Element {
     if (entry.local) {
       if (open) await open.setTitle(title)
       else if (key) {
-        changeLocalHistory(key, (stored) =>
-          updateRecord(stored, entry.id, (record) => ({
-            ...record,
-            title,
-            transcript: record.transcript ? { ...record.transcript, title } : null
-          }))
-        )
+        // A change like any other edit: it moves up, and a later retry of the save keeps it.
+        changeLocalHistory(key, (stored) => renameLocalRecord(stored, entry.id, title, new Date()))
       }
       return
     }

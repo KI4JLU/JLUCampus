@@ -4,6 +4,7 @@ import type {
   TranscriptionTranscriptCreate,
   TranscriptionTranscriptSummary
 } from '@justcampus/shared'
+import { buildSpeakerBlocks } from '../segments/blocks'
 import {
   clearLocalHistories,
   isLocalTranscriptId,
@@ -14,13 +15,18 @@ import {
   normalizeSegments,
   parseLocalHistory,
   readLocalHistory,
+  editStamp,
+  isLocallyEdited,
   recordSaveOutcome,
+  renameLocalRecord,
   serverCopy,
+  settleTitleMerge,
   syncLocalHistory,
   updateRecord,
   withoutRecord,
   writeLocalHistory,
-  type LocalHistoryRecord
+  type LocalHistoryRecord,
+  type TitleMerge
 } from './local-store'
 import {
   entryDate,
@@ -31,6 +37,7 @@ import {
   sortHistory,
   type HistoryEntry
 } from './model'
+import { carryLocalTitle } from './save-fallback'
 
 const NOW = new Date(2026, 9, 4, 15, 30)
 
@@ -273,11 +280,30 @@ describe('saves that did not reach the server', () => {
   }
   const now = new Date('2026-10-04T12:00:00.000Z')
 
+  const failed = { input, error: new Error('offline') }
+  /** The same group's save after a reload: the restored group has another idempotency key. */
+  const afterReload: TranscriptionTranscriptCreate = {
+    ...input,
+    idempotencyKey: '3f2b1c8e-9d4a-4e6f-8b7c-5a1d2e3f4a5b',
+    title: 'a.wav'
+  }
+  const server = (title = 'Gruppe 1'): TranscriptionTranscript => ({
+    ...detail('5d1e3c9a-2b4f-4a6e-8c7d-9e0f1a2b3c4d', 1),
+    title,
+    subtitle: null
+  })
+  const reload = (records: LocalHistoryRecord[]): LocalHistoryRecord[] =>
+    parseLocalHistory(JSON.stringify(records))
+
   it('keeps a failed save once as a transcript of this browser that opens after a reload', () => {
-    const records = recordSaveOutcome([], { input, error: new Error('offline') }, now)
+    const { records } = recordSaveOutcome([], failed, now)
     expect(records).toHaveLength(1)
     const record = records[0]!
-    expect(record).toMatchObject({ id: localIdFor(input.idempotencyKey), local: true })
+    expect(record).toMatchObject({
+      id: localIdFor(input.idempotencyKey),
+      local: true,
+      pendingJobIds: input.jobIds
+    })
     expect(isLocalTranscriptId(record.id)).toBe(true)
     expect(record.transcript).toMatchObject({
       title: 'Gruppe 1',
@@ -285,20 +311,239 @@ describe('saves that did not reach the server', () => {
       createdAt: now.toISOString(),
       segments: [{ text: 'Hallo zusammen', speaker: 'Anna', redactions: [] }]
     })
-    // A second failure of the same save adds nothing.
-    expect(recordSaveOutcome(records, { input, error: new Error('again') }, now)).toEqual(records)
+    // A second failure of the same save adds nothing, nor does one after a reload (another key).
+    expect(recordSaveOutcome(records, { input, error: new Error('again') }, now).records).toEqual(
+      records
+    )
+    const again = { input: afterReload, error: new Error('again') }
+    expect(recordSaveOutcome(reload(records), again, now).records).toEqual(records)
     // After a reload the record is read back with its whole transcript.
-    expect(parseLocalHistory(JSON.stringify(records))).toEqual(records)
+    expect(reload(records)).toEqual(records)
   })
 
-  it('drops the copy once a retry reached the server, unless the user changed it', () => {
-    const records = recordSaveOutcome([], { input, error: new Error('offline') }, now)
-    const saved = { input, transcript: detail('0b7c2a4e-6f4d-4b8e-9a51-1d1f1c3e5a77') }
-    expect(recordSaveOutcome(records, saved, now)).toEqual([])
+  it('drops an unchanged copy once a retry with the same key reached the server', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    const outcome = recordSaveOutcome(records, { input, transcript: server() }, now)
+    expect(outcome.records).toEqual([])
+    expect(outcome.replaced).toEqual([{ localId: records[0]!.id, transcriptId: server().id }])
+    expect(outcome.merges).toEqual([])
+    expect(outcome.kept).toEqual([])
+  })
+
+  it('drops an unchanged copy once the same jobs were saved after a reload, under another key', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    const saved = { input: afterReload, transcript: server('a.wav') }
+    const outcome = recordSaveOutcome(reload(records), saved, now)
+    expect(outcome.records).toEqual([])
+    expect(outcome.replaced).toEqual([{ localId: records[0]!.id, transcriptId: server().id }])
+    // The merged history lists the transcript once, from the server.
+    const merged = mergeHistory([summary(server().id, 'a.wav', now.toISOString())], outcome.records)
+    expect(merged.map((item) => item.id)).toEqual([server().id])
+  })
+
+  it('reads copies stored before by the jobs of their source files', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    // Undefined fields are not stored.
+    const legacy = records.map((record) => ({ ...record, pendingJobIds: undefined }))
+    expect(reload(legacy)[0]!.pendingJobIds).toBeUndefined()
+    const saved = { input: afterReload, transcript: server('a.wav') }
+    expect(recordSaveOutcome(reload(legacy), saved, now).records).toEqual([])
+  })
+
+  it('drops a copy of several files only once every one of its jobs reached the server', () => {
+    const second = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const group: TranscriptionTranscriptCreate = {
+      ...input,
+      jobIds: [...input.jobIds, second],
+      sourceFiles: [
+        ...input.sourceFiles,
+        { ...input.sourceFiles[0]!, name: 'b.wav', jobId: second }
+      ]
+    }
+    const { records } = recordSaveOutcome([], { input: group, error: new Error('offline') }, now)
+    const first = recordSaveOutcome(records, { input: afterReload, transcript: server() }, now)
+    expect(first.replaced).toEqual([])
+    expect(first.records[0]).toMatchObject({ id: records[0]!.id, pendingJobIds: [second] })
+    const other = { ...afterReload, idempotencyKey: '1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e' }
+    const saved = { input: { ...other, jobIds: [second] }, transcript: server() }
+    const last = recordSaveOutcome(first.records, saved, now)
+    expect(last.records).toEqual([])
+    expect(last.replaced).toEqual([{ localId: records[0]!.id, transcriptId: server().id }])
+  })
+
+  it('counts a rename from the history as a change and moves the copy up', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    const later = new Date('2026-10-04T12:05:00.000Z')
+    const renamed = renameLocalRecord(records, records[0]!.id, 'Interview Meier', later)
+    expect(renamed[0]).toMatchObject({ title: 'Interview Meier', updatedAt: later.toISOString() })
+    expect(renamed[0]!.transcript).toMatchObject({
+      title: 'Interview Meier',
+      updatedAt: later.toISOString()
+    })
+    expect(isLocallyEdited(records[0]!)).toBe(false)
+    expect(isLocallyEdited(renamed[0]!)).toBe(true)
+  })
+
+  it('keeps a renamed copy until its title reached the server, after a retry with either key', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    const later = new Date('2026-10-04T12:05:00.000Z')
+    const renamed = renameLocalRecord(records, records[0]!.id, 'Interview Meier', later)
+    for (const retry of [input, afterReload]) {
+      const outcome = recordSaveOutcome(
+        reload(renamed),
+        { input: retry, transcript: server(retry.title) },
+        now
+      )
+      expect(outcome.records).toEqual(renamed)
+      expect(outcome.replaced).toEqual([])
+      expect(outcome.merges).toEqual([
+        {
+          localId: renamed[0]!.id,
+          transcriptId: server().id,
+          title: 'Interview Meier',
+          subtitle: null,
+          stamp: editStamp(renamed[0]!)
+        }
+      ])
+      const merge = outcome.merges[0]!
+      // Carried: one entry, the server's. Refused: the copy stays on its own.
+      expect(settleTitleMerge(outcome.records, merge, true)).toEqual({
+        records: [],
+        outcome: 'merged'
+      })
+      const refused = settleTitleMerge(outcome.records, merge, false)
+      expect(refused.outcome).toBe('kept')
+      expect(refused.records[0]).toMatchObject({ title: 'Interview Meier', pendingJobIds: [] })
+      // A later save of the same jobs leaves a copy of its own alone.
+      const next = recordSaveOutcome(refused.records, { input: retry, transcript: server() }, now)
+      expect(next.records).toEqual(refused.records)
+      expect(next.merges).toEqual([])
+    }
+  })
+
+  it('carries a title set in the open copy, whose colours the session filled in', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    const at = '2026-10-04T12:05:00.000Z'
+    const opened = updateRecord(records, records[0]!.id, (record) => ({
+      ...record,
+      title: 'Interview Meier',
+      updatedAt: at,
+      transcript: {
+        ...record.transcript!,
+        title: 'Interview Meier',
+        // What the session's `saveLocally` stores: every speaker shown gets a colour.
+        speakerColors: buildSpeakerBlocks(record.transcript!.segments, {}).speakerColors,
+        updatedAt: at
+      }
+    }))
+    expect(opened[0]!.transcript!.speakerColors).not.toEqual({})
+    const outcome = recordSaveOutcome(opened, { input, transcript: server() }, now)
+    expect(outcome.merges).toHaveLength(1)
+    expect(outcome.kept).toEqual([])
+  })
+
+  it('keeps a copy edited after the merge was planned', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    const renamed = renameLocalRecord(records, records[0]!.id, 'Interview Meier', new Date(1))
+    const { merges } = recordSaveOutcome(renamed, { input, transcript: server() }, now)
+    const edited = renameLocalRecord(renamed, records[0]!.id, 'Interview Schulz', new Date(2))
+    const settled = settleTitleMerge(edited, merges[0]!, true)
+    expect(settled.outcome).toBe('kept')
+    expect(settled.records[0]).toMatchObject({ title: 'Interview Schulz', pendingJobIds: [] })
+    expect(settleTitleMerge([], merges[0]!, true)).toEqual({ records: [], outcome: 'gone' })
+  })
+
+  it('keeps a copy whose text the user changed next to the server transcript', () => {
+    const { records } = recordSaveOutcome([], failed, now)
+    const at = '2026-10-04T12:05:00.000Z'
     const edited = updateRecord(records, records[0]!.id, (record) => ({
       ...record,
-      transcript: { ...record.transcript!, updatedAt: '2026-10-04T12:05:00.000Z' }
+      updatedAt: at,
+      transcript: {
+        ...record.transcript!,
+        segments: [{ ...record.transcript!.segments[0]!, text: 'Hallo alle zusammen' }],
+        updatedAt: at
+      }
     }))
-    expect(recordSaveOutcome(edited, saved, now)).toEqual(edited)
+    const outcome = recordSaveOutcome(
+      reload(edited),
+      { input: afterReload, transcript: server() },
+      now
+    )
+    expect(outcome.kept).toEqual([records[0]!.id])
+    expect(outcome.replaced).toEqual([])
+    expect(outcome.merges).toEqual([])
+    expect(outcome.records).toEqual([{ ...edited[0]!, pendingJobIds: [] }])
+  })
+})
+
+describe('carryLocalTitle', () => {
+  const map = new Map<string, string>()
+  const key = localHistoryKey('module', 'alice')
+  const merge: TitleMerge = {
+    localId: 'local-1',
+    transcriptId: 's-1',
+    title: 'Interview Meier',
+    subtitle: 'Meine Notiz',
+    stamp: '2026-10-04T12:05:00.000Z|2026-10-04T12:05:00.000Z'
+  }
+  const copy: LocalHistoryRecord = {
+    id: 'local-1',
+    title: 'Interview Meier',
+    createdAt: '2026-10-04T12:00:00.000Z',
+    updatedAt: '2026-10-04T12:05:00.000Z',
+    local: true,
+    transcript: {
+      ...detail('local-1'),
+      title: 'Interview Meier',
+      createdAt: '2026-10-04T12:00:00.000Z',
+      updatedAt: '2026-10-04T12:05:00.000Z'
+    },
+    pendingJobIds: ['0b7c2a4e-6f4d-4b8e-9a51-1d1f1c3e5a77']
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    map.clear()
+  })
+
+  function stubStorage(): void {
+    vi.stubGlobal('window', {
+      localStorage: {
+        get length() {
+          return map.size
+        },
+        key: (index: number) => [...map.keys()][index] ?? null,
+        getItem: (name: string) => map.get(name) ?? null,
+        setItem: (name: string, value: string) => void map.set(name, value),
+        removeItem: (name: string) => void map.delete(name)
+      }
+    })
+  }
+
+  it('sends the title on the latest revision and then drops the copy', async () => {
+    stubStorage()
+    writeLocalHistory(key, [copy])
+    const get = vi.fn(async () => detail('s-1', 4))
+    const patch = vi.fn(async () => ({ ...detail('s-1', 5), title: 'Interview Meier' }))
+    const result = await carryLocalTitle(key, merge, { get, patch })
+    expect(patch).toHaveBeenCalledWith('s-1', {
+      baseRevision: 4,
+      title: 'Interview Meier',
+      subtitle: 'Meine Notiz'
+    })
+    expect(result.outcome).toBe('merged')
+    expect(result.saved?.revision).toBe(5)
+    expect(readLocalHistory(key)).toEqual([])
+  })
+
+  it('keeps the copy on its own when the server refuses', async () => {
+    stubStorage()
+    writeLocalHistory(key, [copy])
+    const get = vi.fn(async () => detail('s-1', 4))
+    const patch = vi.fn(async () => Promise.reject(new Error('offline')))
+    const result = await carryLocalTitle(key, merge, { get, patch })
+    expect(result).toEqual({ outcome: 'kept', saved: null })
+    expect(readLocalHistory(key)).toEqual([{ ...copy, pendingJobIds: [] }])
   })
 })

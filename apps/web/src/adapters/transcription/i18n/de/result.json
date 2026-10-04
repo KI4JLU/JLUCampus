@@ -41,6 +41,8 @@
   "leaveDescription": "Die letzten Änderungen wurden nicht gespeichert. Trotzdem verlassen und sie verwerfen?",
   "leaveDiscard": "Verwerfen",
   "leaveTitle": "Ungespeicherte Änderungen",
+  "localCopyKept": "Das Transkript ist jetzt auf dem Server gespeichert. Deine bearbeitete Kopie bleibt zusätzlich nur auf diesem Gerät.",
+  "localTitleCarried": "Das Transkript ist jetzt auf dem Server gespeichert, mit dem Titel, den du ihm gegeben hast.",
   "moveDown": "Nach unten schieben",
   "moveSentenceDown": "Satz nach unten verschieben",
   "moveSentenceUp": "Satz nach oben verschieben",
