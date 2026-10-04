@@ -260,6 +260,28 @@ export function isLocallyEdited(record: LocalHistoryRecord): boolean {
   )
 }
 
+/**
+ * Local copies open in this tab, each with whether its session holds edits the browser did not take
+ * (T-35, T-39): such a copy is not the stored record any more, so reconciliation never lets it go.
+ */
+const openCopies = new Map<string, () => boolean>()
+
+/**
+ * Registers the open session of a local copy with its unsaved-edits check; the returned function
+ * unregisters it again.
+ */
+export function registerOpenLocalCopy(id: string, hasUnsavedChanges: () => boolean): () => void {
+  openCopies.set(id, hasUnsavedChanges)
+  return () => {
+    if (openCopies.get(id) === hasUnsavedChanges) openCopies.delete(id)
+  }
+}
+
+/** Whether a local copy is open with edits only its session holds (in memory, not stored). */
+export function hasUnsavedOpenCopy(id: string): boolean {
+  return openCopies.get(id)?.() ?? false
+}
+
 /** Segments and colours as an opened session keeps them, so opening alone changes nothing. */
 function openedDocument(
   transcript: Pick<TranscriptionTranscript, 'segments' | 'speakerColors'>
@@ -303,14 +325,17 @@ export interface SaveReconciliation {
  * the place of unedited copies whose jobs it all holds. So a job waits in one unedited copy at
  * most. Once a save carrying its jobs reached the server, the copy goes, whichever key that save
  * had; one the user changed meanwhile never goes silently: renamed only, its title is to be
- * carried to the server first (`merges`), else it stays as a copy of its own (`kept`).
+ * carried to the server first (`merges`), else it stays as a copy of its own (`kept`). A copy open
+ * with edits the browser did not take yet (`unsaved`) is never replaced either: the failed save of
+ * a larger group leaves it next to the new copy, a successful save keeps it as a copy of its own.
  */
 export function recordSaveOutcome(
   records: readonly LocalHistoryRecord[],
   outcome:
     | { input: TranscriptionTranscriptCreate; transcript: TranscriptionTranscript }
     | { input: TranscriptionTranscriptCreate; error: unknown },
-  now: Date
+  now: Date,
+  unsaved: (id: string) => boolean = hasUnsavedOpenCopy
 ): SaveReconciliation {
   const id = localIdFor(outcome.input.idempotencyKey)
   const jobs = new Set(outcome.input.jobIds)
@@ -328,7 +353,8 @@ export function recordSaveOutcome(
     result.records.push(created)
     for (const record of records) {
       const held = pendingJobsOf(record)
-      if (held.length > 0 && !isLocallyEdited(record) && held.every((job) => jobs.has(job))) {
+      const replaceable = held.length > 0 && !isLocallyEdited(record) && !unsaved(record.id)
+      if (replaceable && held.every((job) => jobs.has(job))) {
         result.replaced.push({ localId: record.id, transcriptId: created.id })
       } else result.records.push(record)
     }
@@ -344,6 +370,12 @@ export function recordSaveOutcome(
     const sameSave = record.id === id
     if (!copy || own || (!sameSave && !pending.some((job) => jobs.has(job)))) {
       result.records.push(record)
+      continue
+    }
+    // Its edits are in an open session only: what is stored says nothing about them.
+    if (unsaved(record.id)) {
+      result.kept.push(record.id)
+      result.records.push({ ...record, pendingJobIds: [] })
       continue
     }
     const remaining = sameSave ? [] : pending.filter((job) => !jobs.has(job))
@@ -379,17 +411,18 @@ export type TitleMergeOutcome = 'merged' | 'kept' | 'gone'
 
 /**
  * The records once a planned title merge ended: carried to the server and not changed since, the
- * local copy goes (`merged`); else it stays as a copy of its own (`kept`); deleted meanwhile,
- * nothing changes (`gone`).
+ * local copy goes (`merged`); else, also when it is open with unsaved edits, it stays as a copy of
+ * its own (`kept`); deleted meanwhile, nothing changes (`gone`).
  */
 export function settleTitleMerge(
   records: readonly LocalHistoryRecord[],
   merge: TitleMerge,
-  carried: boolean
+  carried: boolean,
+  unsaved: (id: string) => boolean = hasUnsavedOpenCopy
 ): { records: LocalHistoryRecord[]; outcome: TitleMergeOutcome } {
   const record = records.find((candidate) => candidate.id === merge.localId)
   if (!record) return { records: [...records], outcome: 'gone' }
-  if (carried && editStamp(record) === merge.stamp) {
+  if (carried && editStamp(record) === merge.stamp && !unsaved(merge.localId)) {
     return { records: withoutRecord(records, merge.localId), outcome: 'merged' }
   }
   return {
@@ -419,6 +452,25 @@ export function withoutRecord(
   id: string
 ): LocalHistoryRecord[] {
   return records.filter((record) => record.id !== id)
+}
+
+/**
+ * The records with the whole document of an open local copy stored (T-35, T-39): its record takes
+ * it, or, gone meanwhile (another tab's reconciliation, say), it comes back as a copy of its own.
+ */
+export function storeLocalTranscript(
+  records: readonly LocalHistoryRecord[],
+  transcript: TranscriptionTranscript
+): LocalHistoryRecord[] {
+  if (!records.some((record) => record.id === transcript.id)) {
+    return [localRecord(transcript, []), ...records]
+  }
+  return updateRecord(records, transcript.id, (record) => ({
+    ...record,
+    title: transcript.title,
+    updatedAt: transcript.updatedAt,
+    transcript
+  }))
 }
 
 /** The records with one changed; unknown ids change nothing. */
@@ -527,6 +579,16 @@ export function changeLocalHistory(
   change: (records: LocalHistoryRecord[]) => LocalHistoryRecord[]
 ): boolean {
   return writeLocalHistory(key, change(readLocalHistory(key)))
+}
+
+/**
+ * Stores an open local copy's document under a key (a local session's `saveLocal`); `true` only
+ * once the browser took the records holding it.
+ */
+export function saveLocalCopy(key: string | null, transcript: TranscriptionTranscript): boolean {
+  return (
+    key !== null && changeLocalHistory(key, (stored) => storeLocalTranscript(stored, transcript))
+  )
 }
 
 function subscribe(listener: () => void): () => void {

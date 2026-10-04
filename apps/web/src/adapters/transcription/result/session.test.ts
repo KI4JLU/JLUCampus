@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   TRANSCRIPTION_EMPTY_SPEAKER_TEXT,
   type TranscriptionTranscript,
+  type TranscriptionTranscriptCreate,
   type TranscriptionTranscriptPatch
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
@@ -10,10 +11,17 @@ import { seg } from '../segments/test-fixtures'
 import {
   changeLocalHistory,
   localHistoryKey,
+  localIdFor,
   localRecord,
   readLocalHistory,
-  updateRecord,
-  writeLocalHistory
+  recordSaveOutcome,
+  registerOpenLocalCopy,
+  saveLocalCopy,
+  settleTitleMerge,
+  withoutRecord,
+  writeLocalHistory,
+  type LocalHistoryRecord,
+  type SaveReconciliation
 } from '../history/local-store'
 import { stableStringify } from './compare'
 import { ResultSession, type SessionDeps } from './session'
@@ -458,15 +466,7 @@ describe('local transcripts', () => {
         stored,
         {
           ...server.deps,
-          saveLocal: (changed) =>
-            changeLocalHistory(key, (records) =>
-              updateRecord(records, changed.id, (record) => ({
-                ...record,
-                title: changed.title,
-                updatedAt: changed.updatedAt,
-                transcript: changed
-              }))
-            )
+          saveLocal: (changed) => saveLocalCopy(key, changed)
         },
         true
       )
@@ -502,6 +502,175 @@ describe('local transcripts', () => {
       const kept = readLocalHistory(key)[0]!.transcript!
       expect(kept.segments.map((segment) => segment.speaker)).toEqual(['Dora', 'Cem'])
       expect(kept.subtitle).toBe('Notiz')
+    })
+
+    describe('while a save of the same jobs is reconciled', () => {
+      const jobA = '0b7c2a4e-6f4d-4b8e-9a51-1d1f1c3e5a77'
+      const jobB = '9d3e2f1a-4b5c-4d6e-8f7a-1b2c3d4e5f60'
+      const file = (
+        name: string,
+        jobId: string,
+        startTime: number
+      ): TranscriptionTranscriptCreate['sourceFiles'][number] => ({
+        name,
+        size: 12,
+        duration: 5,
+        startTime,
+        endTime: startTime + 5,
+        jobId
+      })
+      const groupA: TranscriptionTranscriptCreate = {
+        idempotencyKey: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        title: 'Group A',
+        jobIds: [jobA],
+        language: 'de',
+        duration: 10,
+        segments: [seg(0, 0, 5, 'Hallo.', 'Anna'), seg(1, 5, 10, 'Tag.', 'Ben')],
+        sourceFiles: [file('a.wav', jobA, 0)]
+      }
+      /** A and B regrouped after A failed: another key, a larger group. */
+      const groupAB: TranscriptionTranscriptCreate = {
+        ...groupA,
+        idempotencyKey: '3f2b1c8e-9d4a-4e6f-8b7c-5a1d2e3f4a5b',
+        title: 'Group A+B',
+        jobIds: [jobA, jobB],
+        duration: 15,
+        segments: [...groupA.segments, seg(2, 10, 15, 'Moin.', 'Cem')],
+        sourceFiles: [file('a.wav', jobA, 0), file('b.wav', jobB, 10)]
+      }
+      const now = new Date('2026-10-04T12:00:00.000Z')
+      const idA = localIdFor(groupA.idempotencyKey)
+      const idAB = localIdFor(groupAB.idempotencyKey)
+      let unregister: (() => void) | null = null
+
+      afterEach(() => {
+        unregister?.()
+        unregister = null
+      })
+
+      /** The failed save of A kept locally and opened as the result view opens it. */
+      function openFallbackA(register = true): ResultSession {
+        changeLocalHistory(
+          key,
+          (records) =>
+            recordSaveOutcome(records, { input: groupA, error: new Error('offline') }, now).records
+        )
+        const stored = readLocalHistory(key).find((record) => record.id === idA)!.transcript!
+        const session = new ResultSession(
+          stored,
+          { ...fakeServer(stored).deps, saveLocal: (changed) => saveLocalCopy(key, changed) },
+          true
+        )
+        if (register) unregister = registerOpenLocalCopy(idA, () => session.hasUnsavedChanges())
+        return session
+      }
+
+      /** The save-fallback listener's step for a save outcome. */
+      function reconcile(
+        outcome: Parameters<typeof recordSaveOutcome>[1]
+      ): SaveReconciliation | null {
+        let result: SaveReconciliation | null = null
+        changeLocalHistory(key, (records) => {
+          result = recordSaveOutcome(records, outcome, now)
+          return result.records
+        })
+        return result
+      }
+
+      const failAB = { input: groupAB, error: new Error('offline') }
+      const stored = (id: string): LocalHistoryRecord | undefined =>
+        readLocalHistory(key).find((record) => record.id === id)
+
+      it('keeps an open copy whose title the storage refused when a larger group fails', async () => {
+        const session = openFallbackA()
+        full = true
+        expect(await session.setTitle('Unsaved user edit')).toBe(false)
+        full = false
+        const result = reconcile(failAB)!
+        expect(result.replaced).toEqual([])
+        expect(readLocalHistory(key).map((record) => record.id)).toEqual([idAB, idA])
+        expect(stored(idA)!.title).toBe('Group A')
+        // The retry stores the edit in the copy that is still there.
+        session.retry()
+        expect(session.getState().saveStatus).toBe('saved')
+        expect(session.hasUnsavedChanges()).toBe(false)
+        expect(stored(idA)!.transcript!.title).toBe('Unsaved user edit')
+        expect(stored(idAB)!.title).toBe('Group A+B')
+      })
+
+      it('keeps an open copy with refused segment edits, also when the save reaches the server', () => {
+        const session = openFallbackA()
+        full = true
+        rename(session, 1, 'Dora')
+        expect(session.hasUnsavedChanges()).toBe(true)
+        full = false
+        expect(reconcile(failAB)!.replaced).toEqual([])
+        const saved = transcript({ id: '5d1e3c9a-2b4f-4a6e-8c7d-9e0f1a2b3c4d' })
+        const success = reconcile({ input: groupA, transcript: saved })!
+        expect(success.replaced).toEqual([])
+        expect(success.kept).toEqual([idA])
+        expect(stored(idA)!.pendingJobIds).toEqual([])
+        session.retry()
+        expect(session.hasUnsavedChanges()).toBe(false)
+        expect(stored(idA)!.transcript!.segments.map((segment) => segment.speaker)).toEqual([
+          'Anna',
+          'Dora'
+        ])
+      })
+
+      it('does not settle a title merge into the server while the open copy holds unsaved edits', () => {
+        const session = openFallbackA()
+        full = true
+        rename(session, 0, 'Dora')
+        full = false
+        const merge = {
+          localId: idA,
+          transcriptId: 's-1',
+          title: 'Group A',
+          subtitle: null,
+          stamp: `${stored(idA)!.updatedAt}|${stored(idA)!.transcript!.updatedAt}`
+        }
+        expect(settleTitleMerge(readLocalHistory(key), merge, true).outcome).toBe('kept')
+      })
+
+      it('still replaces the copy when it is not open, or open without unsaved edits', () => {
+        openFallbackA(false)
+        expect(reconcile(failAB)!.replaced).toEqual([{ localId: idA, transcriptId: idAB }])
+        expect(readLocalHistory(key).map((record) => record.id)).toEqual([idAB])
+
+        map.clear()
+        const session = openFallbackA()
+        rename(session, 1, 'Dora')
+        // Stored: nothing only in memory, so the stored record speaks for it; edited, it stays.
+        expect(session.hasUnsavedChanges()).toBe(false)
+        expect(reconcile(failAB)!.replaced).toEqual([])
+      })
+
+      it('stores the whole document again when its record went meanwhile', async () => {
+        const session = openFallbackA()
+        full = true
+        expect(await session.setTitle('Unsaved user edit')).toBe(false)
+        rename(session, 1, 'Dora')
+        full = false
+        // Another tab's reconciliation removed it.
+        changeLocalHistory(key, (records) => withoutRecord(records, idA))
+        // Refused again: no success is claimed for a record that is not there.
+        full = true
+        session.retry()
+        expect(session.getState().saveStatus).toBe('failed')
+        expect(session.hasUnsavedChanges()).toBe(true)
+        expect(stored(idA)).toBeUndefined()
+        full = false
+        session.retry()
+        expect(session.getState().saveStatus).toBe('saved')
+        expect(session.hasUnsavedChanges()).toBe(false)
+        const back = stored(idA)!
+        expect(back).toMatchObject({ local: true, title: 'Unsaved user edit', pendingJobIds: [] })
+        expect(back.transcript!.segments.map((segment) => segment.speaker)).toEqual([
+          'Anna',
+          'Dora'
+        ])
+      })
     })
   })
 })

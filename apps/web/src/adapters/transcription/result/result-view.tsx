@@ -29,8 +29,9 @@ import {
   changeLocalHistory,
   isLocalTranscriptId,
   keepServerCopy,
+  registerOpenLocalCopy,
+  saveLocalCopy,
   serverCopy,
-  updateRecord,
   useLocalHistory,
   withoutRecord
 } from '../history/local-store'
@@ -220,22 +221,23 @@ function LocalResult({ id }: { id: string }): React.JSX.Element {
       get: notAvailable,
       generateSubtitle: notAvailable,
       optimize: (request) => optimizeSpeakers(request),
-      saveLocal: (changed) =>
-        key !== null &&
-        changeLocalHistory(key, (stored) =>
-          updateRecord(stored, changed.id, (record) => ({
-            ...record,
-            title: changed.title,
-            updatedAt: changed.updatedAt,
-            transcript: changed
-          }))
-        )
+      saveLocal: (changed) => saveLocalCopy(key, changed)
     }),
     [key]
   )
   const session = useOpenSession(id, transcript, deps, true)
 
-  if (!transcript) return <NotFound onStartNew={() => void newTranscription()} />
+  // While its edits are only in the session, a save's reconciliation leaves the copy alone (T-39).
+  useEffect(() => {
+    if (!session) return
+    return registerOpenLocalCopy(session.id, () => session.hasUnsavedChanges())
+  }, [session])
+
+  // A copy gone from the storage meanwhile stays open while it holds unsaved edits: a retry stores
+  // it again, and leaving still asks first.
+  if (!transcript && !session?.hasUnsavedChanges()) {
+    return <NotFound onStartNew={() => void newTranscription()} />
+  }
   if (!session) return <Loading />
   return <ResultWorkspace session={session} />
 }

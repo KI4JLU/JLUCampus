@@ -70,8 +70,9 @@ export async function carryLocalTitle(
  * after a reload. Once a save of the same jobs reached the server, also with another idempotency
  * key after a reload, an unchanged copy goes again and `onReplaced` hears of it; a copy the user
  * renamed gets its title carried to the server first, and one with other edits stays, with a
- * notice either way. When the browser does not take the copy either, the user is told. `key` is
- * the history's storage key, `null` while the user is not known.
+ * notice either way; so does one open with edits the browser did not take yet (its session is
+ * registered, `registerOpenLocalCopy`). When the browser does not take the copy either, the user is
+ * told. `key` is the history's storage key, `null` while the user is not known.
  */
 export function useLocalSaveFallback(
   key: string | null,
