@@ -138,7 +138,8 @@ async function jsonOf(
 
 /**
  * Lists the endpoint's models: the count, or that the chosen model is not among them. A failed
- * listing is only noted for speech endpoints, many of which list nothing; the operation decides.
+ * listing is only noted: many endpoints list nothing, and models can be configured by hand
+ * (section 5). The operation with the model decides, and fails for a wrong key as well.
  */
 async function listedModels(
   checks: Finding[],
@@ -152,7 +153,7 @@ async function listedModels(
   try {
     models = await discoverModels(kind, baseUrl, apiKey, signal)
   } catch (error) {
-    if (kind === 'llm' || signal?.aborted) throw error
+    if (signal?.aborted) throw error
     checks.push({ kind: 'modelsUnlisted' })
     return
   }

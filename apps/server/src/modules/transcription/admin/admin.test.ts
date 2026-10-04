@@ -233,6 +233,36 @@ describe('connection tests', () => {
     })
   })
 
+  it('tests a chat model configured by hand on an endpoint without a model list', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) =>
+      String(url).endsWith('/models')
+        ? new Response('Not found', { status: 404 })
+        : Response.json({ choices: [{ message: { content: 'OK' } }] })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testConnection({ target: 'llm', model: 'manual-chat' }, context())).toMatchObject({
+      ok: true,
+      status: 200,
+      checks: [{ kind: 'modelsUnlisted' }, { kind: 'chatAnswered', model: 'manual-chat' }],
+      message: null
+    })
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      `${mock.origin}/llm/v1/models`,
+      `${mock.origin}/llm/v1/chat/completions`
+    ])
+    // A wrong key still fails, at the operation that decides.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('Unauthorized', { status: 401 }))
+    )
+    expect(await testConnection({ target: 'llm', model: 'manual-chat' }, context())).toMatchObject({
+      ok: false,
+      status: 401,
+      checks: [{ kind: 'modelsUnlisted' }],
+      message: 'Status 401: Unauthorized'
+    })
+  })
+
   it('rejects 2xx answers of the wrong shape', async () => {
     vi.stubGlobal(
       'fetch',
@@ -345,6 +375,36 @@ describe('connection tests', () => {
     ]) {
       expect(sdp).toMatch(line)
     }
+  })
+
+  it('fails a bridge whose answer has every transport attribute but no usable value', async () => {
+    const section = (media: string, mid: number): string[] => [
+      media,
+      'c=IN IP4 0.0.0.0',
+      `a=mid:${mid}`,
+      'a=ice-ufrag:',
+      'a=ice-pwd:',
+      'a=fingerprint:',
+      'a=setup:passive'
+    ]
+    const sdp = [
+      'v=0',
+      'o=- 1 1 IN IP4 127.0.0.1',
+      's=-',
+      't=0 0',
+      ...section('m=audio 9 UDP/TLS/RTP/SAVPF 111', 0),
+      ...section('m=application 9 UDP/DTLS/SCTP webrtc-datachannel', 1),
+      ''
+    ].join('\r\n')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ sdp }))
+    )
+    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
+      ok: false,
+      status: 200,
+      finding: { kind: 'invalidAnswer', expected: 'sdpAnswer' }
+    })
   })
 
   it('tests the bridge with an offer and OpenAI with a key request, never echoing keys', async () => {

@@ -249,12 +249,39 @@ describe('summaries', () => {
     })
   })
 
+  it('names the title it filled in, and goes stale when a generated title replaces it', async () => {
+    const first = await summarise({ transcriptId, templateId: 'interview' })
+    expect(first.body.summary).toMatchObject({
+      transcriptRevision: 1,
+      transcriptTitle: 'Teamsitzung'
+    })
+    expect(
+      (await summarise({ transcriptId, templateId: 'interview', checkOnly: true })).body.summary
+    ).toMatchObject({ transcriptTitle: 'Teamsitzung', cached: true })
+    // The chat model's title arrives after saving, without a new revision.
+    fake.transcripts[0]!.title = 'Planung der Klausurtagung'
+    expect(
+      (await summarise({ transcriptId, templateId: 'interview', checkOnly: true })).body
+    ).toEqual({ summary: null })
+    const second = await summarise({ transcriptId, templateId: 'interview' })
+    expect(second.body.summary).toMatchObject({
+      transcriptRevision: 1,
+      transcriptTitle: 'Planung der Klausurtagung',
+      cached: false
+    })
+    expect(String(second.body.summary!.markdown)).toMatch(/^# Interview: Planung der Klausurtagung/)
+  })
+
   it('summarises unsaved text without storing it', async () => {
     const { body } = await summarise({
       transcriptText: 'Anna: Hallo [AUSGEBLENDET].\nBen: Tschüss.',
       templateId: 'focus-group'
     })
-    expect(body.summary).toMatchObject({ transcriptRevision: null, cached: false })
+    expect(body.summary).toMatchObject({
+      transcriptRevision: null,
+      transcriptTitle: null,
+      cached: false
+    })
     expect(String(body.summary!.markdown)).toMatch(
       /^# Fokusgruppe: Transkript\n\nDatum: \d\d\.\d\d\.\d{4} · Teilnehmer: Anna, Ben/
     )

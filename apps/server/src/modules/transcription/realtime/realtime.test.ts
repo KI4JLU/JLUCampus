@@ -72,7 +72,8 @@ describe('upstream answers', () => {
       't=0 0',
       'a=ice-ufrag:abcd',
       'a=ice-pwd:abcdefghijklmnopqrstuvwx',
-      'a=fingerprint:sha-256 00:11',
+      `a=fingerprint:sha-1 ${Array(20).fill('ab').join(':')}`,
+      'a=setup:active',
       'm=audio 0 UDP/TLS/RTP/SAVPF 111',
       'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
       ''
@@ -80,6 +81,49 @@ describe('upstream answers', () => {
     expect(sdpAnswerProblem(sessionLevel, probeOffer())).toBeNull()
     expect(sdpAnswerProblem(sessionLevel.replace(' 9 UDP/DTLS', ' 0 UDP/DTLS'))).toBe(
       'every media section rejected'
+    )
+  })
+
+  it('refuses transport values no WebRTC peer could negotiate with', () => {
+    const problem = (from: string | RegExp, to: string): string | null =>
+      sdpAnswerProblem(answer.replaceAll(from, to), probeOffer())
+    // The review's counterexample: every attribute there, every value empty.
+    expect(problem(/^a=(ice-ufrag|ice-pwd|fingerprint):.*$/gm, 'a=$1:')).toBe(
+      'invalid ice-ufrag for audio: '
+    )
+    expect(problem('a=ice-ufrag:abcd', 'a=ice-ufrag:abc')).toBe('invalid ice-ufrag for audio: abc')
+    expect(problem('a=ice-ufrag:abcd', 'a=ice-ufrag:ab cd')).toMatch(/^invalid ice-ufrag/)
+    expect(problem('a=ice-pwd:abcdefghijklmnopqrstuvwx', 'a=ice-pwd:short')).toBe(
+      'invalid ice-pwd for audio: short'
+    )
+    expect(problem('a=fingerprint:sha-256 ', 'a=fingerprint:')).toMatch(/^invalid fingerprint/)
+    expect(problem('a=fingerprint:sha-256 ', 'a=fingerprint:sha-999 ')).toMatch(
+      /^invalid fingerprint/
+    )
+    // Too few bytes for SHA-256, and no hex.
+    expect(problem(/ 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:/g, ' 00:')).toMatch(
+      /^invalid fingerprint/
+    )
+    expect(problem(/AA:BB/g, 'XX:YY')).toMatch(/^invalid fingerprint/)
+    // The answerer takes a DTLS role; `actpass` is the offerer's, and none is none.
+    expect(problem('a=setup:passive', 'a=setup:actpass')).toBe('invalid setup for audio: actpass')
+    expect(problem('a=setup:passive', 'a=setup:holdconn')).toMatch(/^invalid setup/)
+    expect(problem('a=setup:passive\r\n', '')).toBe('no setup for audio')
+    expect(problem('a=setup:passive', 'a=setup:active')).toBeNull()
+    expect(problem(/AA:BB:CC:DD:EE:FF/g, 'aa:bb:cc:dd:ee:ff')).toBeNull()
+  })
+
+  it('takes bundled transport from the section that carries it', () => {
+    // RFC 8843: the answer may give transport only in the BUNDLE-tagged section.
+    const [head, data] = answer.split('m=application')
+    const bundled = `${head}m=application${data!.replace(
+      /^a=(ice-ufrag|ice-pwd|fingerprint|setup):.*\r\n/gm,
+      ''
+    )}`
+    expect(sdpAnswerProblem(bundled, probeOffer())).toBeNull()
+    // Without the group the data channel has no transport of its own.
+    expect(sdpAnswerProblem(bundled.replace('a=group:BUNDLE 0 1\r\n', ''), probeOffer())).toBe(
+      'no ice-ufrag for application'
     )
   })
 
@@ -102,6 +146,9 @@ describe('upstream answers', () => {
       expect(local.sdp).toContain('m=audio')
       expect(local.sdp).toContain('webrtc-datachannel')
       expect(sdpAnswerProblem(local.sdp, offer)).toBeNull()
+      // The same answer with empty transport values is one no peer takes, nor this check.
+      const emptied = local.sdp.replace(/^a=(ice-ufrag|ice-pwd|fingerprint):.*$/gm, 'a=$1:')
+      expect(sdpAnswerProblem(emptied, offer)).toMatch(/^invalid ice-ufrag/)
     } finally {
       await peer.close()
     }

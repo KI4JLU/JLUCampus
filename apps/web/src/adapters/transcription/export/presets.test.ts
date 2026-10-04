@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { TRANSCRIPT_PRESET_IDS, TRANSCRIPT_PRESETS } from '@justcampus/shared'
+import {
+  TRANSCRIPT_PRESET_IDS,
+  TRANSCRIPT_PRESETS,
+  TRANSCRIPTION_FORMAT_NAME_MAX,
+  transcriptionFormatInputSchema
+} from '@justcampus/shared'
 import { exportFilename, formatsOf, FORMAT_EXTENSIONS, FORMAT_TYPES } from './files'
 import { formatDetails, presetFlags, uniqueFormatName } from './presets'
 import { exportActions, exportStore } from './store'
@@ -86,6 +91,30 @@ describe('format names', () => {
     expect(uniqueFormatName('   ', formats, null)).toBeNull()
     expect(uniqueFormatName(' Neu ', formats, null)).toBe('Neu')
     expect(uniqueFormatName('INTERVIEW', formats, null)).toBe('INTERVIEW (2)')
+  })
+
+  it('keeps a numbered name of the longest allowed one within the limit', () => {
+    const longest = 'x'.repeat(TRANSCRIPTION_FORMAT_NAME_MAX)
+    const taken = [
+      { id: 'a', name: longest },
+      { id: 'b', name: `${'x'.repeat(TRANSCRIPTION_FORMAT_NAME_MAX - 4)} (1)` }
+    ]
+    const name = uniqueFormatName(longest, taken, null)!
+    expect(name).toBe(`${'x'.repeat(TRANSCRIPTION_FORMAT_NAME_MAX - 4)} (2)`)
+    expect(name).toHaveLength(TRANSCRIPTION_FORMAT_NAME_MAX)
+    // What the browser sends is what the server accepts.
+    expect(
+      transcriptionFormatInputSchema.safeParse({
+        id: null,
+        name,
+        ...TRANSCRIPT_PRESETS.dialog_standard
+      }).success
+    ).toBe(true)
+    // A space where the base is cut does not stay before the suffix.
+    const spaced = `${'y'.repeat(TRANSCRIPTION_FORMAT_NAME_MAX - 5)} zzzz`
+    expect(uniqueFormatName(spaced, [{ id: 'a', name: spaced }], null)).toBe(
+      `${'y'.repeat(TRANSCRIPTION_FORMAT_NAME_MAX - 5)} (1)`
+    )
   })
 
   it('lets the format being changed keep its name', () => {

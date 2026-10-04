@@ -99,7 +99,8 @@ async function summarySource(
 /**
  * A summary by template (T-48, T-49). A stored one for the same revision, template version, model
  * and settings answers unless `forceRegenerate`; `checkOnly` only looks one up and answers
- * `summary: null` without. Unsaved text is never stored.
+ * `summary: null` without. Unsaved text is never stored. The answer names the title the
+ * placeholders were filled with, which a generated title changes without a new revision.
  */
 summariesRouter.post('/summaries', async (context) => {
   const input = await parseBody(context, transcriptionSummaryRequestSchema)
@@ -127,7 +128,7 @@ summariesRouter.post('/summaries', async (context) => {
   const answer = (summary: TranscriptionSummary | null): Response =>
     context.json(transcriptionSummaryResponseSchema.parse({ summary }))
 
-  if (key && !input.forceRegenerate) {
+  if (key && transcript && !input.forceRegenerate) {
     const stored = await findSummary(key)
     if (stored) {
       return answer({
@@ -135,6 +136,7 @@ summariesRouter.post('/summaries', async (context) => {
         templateId: template.id,
         templateVersion: template.version,
         transcriptRevision: key.transcriptRevision,
+        transcriptTitle: transcript.title,
         model: key.model,
         generatedAt: stored.generatedAt.toISOString(),
         cached: true
@@ -157,6 +159,7 @@ summariesRouter.post('/summaries', async (context) => {
     templateId: template.id,
     templateVersion: template.version,
     transcriptRevision: transcript?.revision ?? null,
+    transcriptTitle: transcript?.title ?? null,
     model: chat.model,
     generatedAt: generatedAt.toISOString(),
     cached: false

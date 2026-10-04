@@ -25,7 +25,7 @@ import {
 import type { TranscriptionTemplate } from '@justcampus/shared'
 import { meQuery } from '@/lib/queries'
 import { toast } from '@/lib/toast'
-import { useTranscriptionCapabilities, useTranscriptionTemplates } from '../api'
+import { transcriptQuery, useTranscriptionCapabilities, useTranscriptionTemplates } from '../api'
 import { Notice } from '../notice'
 import { SummaryPanel } from '../summary'
 import { summarySource } from '../summary/source'
@@ -137,11 +137,19 @@ function ExportPreview({
   const capabilities = useTranscriptionCapabilities()
   // A local transcript sends its current text, redactions applied (T-49).
   const source = useMemo(() => summarySource(document), [document])
+  // The server fills `{{title}}` with its copy's title, which a generated title replaces without a
+  // new revision; the result view keeps that copy in the cache and fetches it again on request.
+  const serverTitle = useQuery({
+    ...transcriptQuery(transcript.id),
+    enabled: false,
+    select: (saved) => saved.title
+  }).data
   const summary = useSummary(
     template && !capabilities.isPending
       ? {
           transcriptId: transcript.id,
           revision: transcript.revision,
+          title: serverTitle ?? transcript.title,
           text: source.transcriptText,
           templateId: template.id,
           templateVersion: template.version,

@@ -1,5 +1,6 @@
 import {
   TRANSCRIPT_PRESETS,
+  TRANSCRIPTION_FORMAT_NAME_MAX,
   type TranscriptFormatFlags,
   type TranscriptionFormat,
   type TranscriptPresetId
@@ -36,8 +37,9 @@ export function isChoice(choice: TranscriptFormatChoice, other: TranscriptFormat
 
 /**
  * The name a saved format gets (T-45): the trimmed name, and if another of the user's formats
- * already has it in any case, ` (1)`, ` (2)` … until it is free. The format being changed does not
- * count against its own name. `null` for a blank name.
+ * already has it in any case, ` (1)`, ` (2)` … until it is free, the name shortened where the
+ * suffix would pass the length limit, as the server does. The format being changed does not count
+ * against its own name. `null` for a blank name.
  */
 export function uniqueFormatName(
   name: string,
@@ -51,7 +53,10 @@ export function uniqueFormatName(
       (format) => format.id !== editingId && format.name.toLowerCase() === candidate.toLowerCase()
     )
   let result = base
-  for (let counter = 1; taken(result); counter++) result = `${base} (${counter})`
+  for (let counter = 1; taken(result); counter++) {
+    const suffix = ` (${counter})`
+    result = `${base.slice(0, TRANSCRIPTION_FORMAT_NAME_MAX - suffix.length).trimEnd()}${suffix}`
+  }
   return result
 }
 

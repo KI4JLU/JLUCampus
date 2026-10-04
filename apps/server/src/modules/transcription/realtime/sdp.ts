@@ -32,10 +32,56 @@ function parseSdp(sdp: string): ParsedSdp {
 const WEBRTC_MEDIA =
   /^m=(audio|video|application) (\d+) (UDP\/TLS\/RTP\/SAVPF|UDP\/DTLS\/SCTP|TCP\/DTLS\/SCTP|DTLS\/SCTP) \S/
 
+/** `ice-char` (RFC 8839): letters, digits, `+` and `/`. */
+const ICE_CHARS = /^[A-Za-z0-9+/]+$/
+
+/** Bytes of a digest by hash function (RFC 8122, RFC 8842); WebRTC uses SHA-2 or legacy SHA-1. */
+const DIGEST_BYTES: Readonly<Record<string, number>> = {
+  'sha-1': 20,
+  'sha-224': 28,
+  'sha-256': 32,
+  'sha-384': 48,
+  'sha-512': 64
+}
+
+/** `<hash-func> <hex pairs>` with as many pairs as the hash function has bytes. */
+function validFingerprint(value: string): boolean {
+  const match = /^(\S+) ((?:[0-9A-Fa-f]{2}:)*[0-9A-Fa-f]{2})$/.exec(value)
+  if (!match) return false
+  const bytes = DIGEST_BYTES[match[1]!.toLowerCase()]
+  return bytes !== undefined && match[2]!.split(':').length === bytes
+}
+
+/**
+ * The transport attributes an answer must carry for an accepted section, and which values a peer
+ * takes: ICE credentials of RFC 8839's lengths, DTLS fingerprints of a known hash function, and
+ * the answerer's DTLS role, which is `active` or `passive`, never `actpass` (RFC 8842 section 5.3).
+ */
+const TRANSPORT: readonly { name: string; valid: (value: string) => boolean }[] = [
+  {
+    name: 'ice-ufrag',
+    valid: (value) => ICE_CHARS.test(value) && value.length >= 4 && value.length <= 256
+  },
+  {
+    name: 'ice-pwd',
+    valid: (value) => ICE_CHARS.test(value) && value.length >= 22 && value.length <= 256
+  },
+  { name: 'fingerprint', valid: validFingerprint },
+  { name: 'setup', valid: (value) => value === 'active' || value === 'passive' }
+]
+
+/** The values of every `a=<name>:` line. */
+function attributeValues(lines: readonly string[], name: string): string[] {
+  const prefix = `a=${name}:`
+  return lines.filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length))
+}
+
 /**
  * Why an SDP answer cannot complete a WebRTC connection, or `null` if it can as far as its text
  * shows: the session lines, one WebRTC media section per section of the offer (RFC 3264), and
- * for every accepted section ICE credentials and a DTLS fingerprint, there or for the session.
+ * for every accepted section valid ICE credentials, DTLS fingerprints and an answerer's DTLS role
+ * (`TRANSPORT`). A section takes them from its own lines, else from the section that carries the
+ * transport of its BUNDLE group (RFC 8843), else from the session.
  */
 export function sdpAnswerProblem(sdp: string, offer: string | null = null): string | null {
   if (!/^v=0\r?\n/.test(sdp)) return 'no v=0 line'
@@ -50,8 +96,18 @@ export function sdpAnswerProblem(sdp: string, offer: string | null = null): stri
       return `${sections.length} media sections for the offer's ${offered}`
     }
   }
-  const has = (lines: readonly string[], prefix: string): boolean =>
-    lines.some((line) => line.startsWith(prefix))
+  const midOf = (section: MediaSection): string | undefined =>
+    attributeValues(section.attributes, 'mid')[0]?.trim()
+  const bundles = attributeValues(session, 'group')
+    .map((group) => group.trim().split(/\s+/))
+    .filter(([semantics]) => semantics === 'BUNDLE')
+    .map(([, ...mids]) => mids)
+  /** The section that carries the transport of `section`'s BUNDLE group, if any. */
+  const bundleTagged = (section: MediaSection): MediaSection | undefined => {
+    const mid = midOf(section)
+    const group = mid === undefined ? undefined : bundles.find((mids) => mids.includes(mid))
+    return group && sections.find((candidate) => midOf(candidate) === group[0])
+  }
   let accepted = 0
   for (const section of sections) {
     const media = WEBRTC_MEDIA.exec(section.media)
@@ -59,10 +115,15 @@ export function sdpAnswerProblem(sdp: string, offer: string | null = null): stri
     // Port 0 rejects the section; it needs nothing else.
     if (media[2] === '0') continue
     accepted += 1
-    for (const prefix of ['a=ice-ufrag:', 'a=ice-pwd:', 'a=fingerprint:']) {
-      if (!has(section.attributes, prefix) && !has(session, prefix)) {
-        return `no ${prefix.slice(2, -1)} for ${media[1]}`
-      }
+    const tagged = bundleTagged(section)
+    for (const { name, valid } of TRANSPORT) {
+      const sources = [section.attributes, tagged?.attributes ?? [], session]
+      const values = sources
+        .map((lines) => attributeValues(lines, name))
+        .find((found) => found.length > 0)
+      if (!values) return `no ${name} for ${media[1]}`
+      const invalid = values.find((value) => !valid(value.trim()))
+      if (invalid !== undefined) return `invalid ${name} for ${media[1]}: ${invalid.slice(0, 80)}`
     }
   }
   if (accepted === 0) return 'every media section rejected'

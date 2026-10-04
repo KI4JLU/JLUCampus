@@ -1011,6 +1011,11 @@ export const transcriptionSummarySchema = z.object({
   templateVersion: z.number().int().min(1),
   /** The transcript revision it was made from; `null` for unsaved text. */
   transcriptRevision: z.number().int().min(1).nullable(),
+  /**
+   * The saved transcript's title `{{title}}` was filled with; `null` for unsaved text. A generated
+   * title replaces the default one without a new revision.
+   */
+  transcriptTitle: z.string().nullable(),
   model: z.string().nullable(),
   generatedAt: z.iso.datetime(),
   /** Whether it came from the store rather than the model just now. */

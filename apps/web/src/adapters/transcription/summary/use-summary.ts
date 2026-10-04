@@ -20,26 +20,47 @@ import { textFingerprint } from './source'
  *
  * Section 5 caches summaries by transcript revision, template version, model and settings, and
  * so does the browser: the key holds the transcript and its revision (for a local one the
- * fingerprint of the text sent), the template and its version, and the summary model the module
- * uses (`capabilities.defaultSummaryModel`; the settings are the template's structure and the
- * transcript's facts, which the version and revision cover). An answer never shows for another
- * transcript, an edited one, another template, an older version of it or another model, even
- * when it arrives after a switch, an edit or an admin's change of the model: it is filed under
- * what it was made from (`fileSummary`).
+ * fingerprint of the text sent), the saved transcript's title, the template and its version, and
+ * the summary model the module uses (`capabilities.defaultSummaryModel`). The settings are the
+ * template's structure, which its version covers, and the transcript's facts for the
+ * placeholders: date, participants and duration come with the revision, but a generated title
+ * replaces the default one without a new revision, so the title is a part of its own. An answer
+ * never shows for another transcript, an edited one, another title, another template, an older
+ * version of it or another model, even when it arrives after a switch, an edit or an admin's
+ * change of the model: it is filed under what it was made from (`fileSummary`).
  */
 
 /** What a summary is made of in its key: a saved transcript's revision, or `text:<fingerprint>`. */
 export type SummarySourceKey = number | string
 
-/** Below `transcriptionKeys.all`. */
+/** Below `transcriptionKeys.all`; `title` is `null` for text. */
 export const summaryKey = (
   transcriptId: string,
   source: SummarySourceKey,
+  title: string | null,
   templateId: string,
   templateVersion: number,
   model: string | null
-): readonly ['transcription', 'summary', string, SummarySourceKey, string, number, string | null] =>
-  ['transcription', 'summary', transcriptId, source, templateId, templateVersion, model] as const
+): readonly [
+  'transcription',
+  'summary',
+  string,
+  SummarySourceKey,
+  string | null,
+  string,
+  number,
+  string | null
+] =>
+  [
+    'transcription',
+    'summary',
+    transcriptId,
+    source,
+    title,
+    templateId,
+    templateVersion,
+    model
+  ] as const
 type SummaryKey = ReturnType<typeof summaryKey>
 
 const NO_KEY = ['transcription', 'summary', 'none'] as const
@@ -59,6 +80,11 @@ export interface SummaryTarget {
   transcriptId: string
   revision: number
   /**
+   * The title the server holds for a saved transcript, which it fills `{{title}}` with; `null`
+   * for text.
+   */
+  title: string | null
+  /**
    * The text of a transcript only this browser has, redactions applied, sent instead of its id;
    * `null` for a saved one.
    */
@@ -76,14 +102,17 @@ export function sourceKey(target: Pick<SummaryTarget, 'revision' | 'text'>): Sum
 }
 
 /**
- * Where a generated summary belongs: under the revision, template version and model it was made
- * from, which can differ from the ones asked for when the transcript, the template or the
- * module's model changed meanwhile. One made from text belongs to the text that was sent.
+ * Where a generated summary belongs: under the revision, title, template version and model it
+ * was made from, which can differ from the ones asked for when the transcript, its title, the
+ * template or the module's model changed meanwhile. One made from text belongs to the text that
+ * was sent.
  */
 export function summaryKeyOf(requested: SummaryKey, summary: TranscriptionSummary): SummaryKey {
+  const revision = summary.transcriptRevision
   return summaryKey(
     requested[2],
-    summary.transcriptRevision ?? requested[3],
+    revision ?? requested[3],
+    revision === null ? requested[4] : summary.transcriptTitle,
     summary.templateId,
     summary.templateVersion,
     summary.model
@@ -105,6 +134,7 @@ export function useSummary(target: SummaryTarget | null, enabled = true): Summar
     ? summaryKey(
         target.transcriptId,
         source,
+        target.text === null ? target.title : null,
         target.templateId,
         target.templateVersion,
         target.model
@@ -118,7 +148,7 @@ export function useSummary(target: SummaryTarget | null, enabled = true): Summar
         { transcriptId: target!.transcriptId, templateId: target!.templateId, checkOnly: true },
         signal
       )
-      // One stored for another version, revision or model is not this one's.
+      // One stored for another version, revision, title or model is not this one's.
       return summary && fileSummary(client, summary, key!) ? summary : null
     },
     // Nothing is stored for text; only a summary generated here shows.
@@ -176,10 +206,10 @@ export function summaryRequest(target: SummaryTarget, force: boolean): Transcrip
 }
 
 /**
- * Whether a summary belongs under `requested`. One made from another template version, revision
- * or model is filed under its own key instead, and whatever named the outdated part is fetched
- * again (template list, transcript, capabilities), so a newer one moves the view there; a late
- * answer for an older one stays under the older key.
+ * Whether a summary belongs under `requested`. One made from another template version, revision,
+ * title or model is filed under its own key instead, and whatever named the outdated part is
+ * fetched again (template list, transcript, capabilities), so a newer one moves the view there; a
+ * late answer for an older one stays under the older key.
  */
 export function fileSummary(
   client: QueryClient,
@@ -189,13 +219,13 @@ export function fileSummary(
   const made = summaryKeyOf(requested, summary)
   if (sameKey(made, requested)) return true
   client.setQueryData(made, summary)
-  if (made[4] !== requested[4] || made[5] !== requested[5]) {
+  if (made[5] !== requested[5] || made[6] !== requested[6]) {
     void client.invalidateQueries({ queryKey: transcriptionKeys.templates })
   }
-  if (made[3] !== requested[3]) {
+  if (made[3] !== requested[3] || made[4] !== requested[4]) {
     void client.invalidateQueries({ queryKey: transcriptionKeys.transcript(requested[2]) })
   }
-  if (made[6] !== requested[6]) {
+  if (made[7] !== requested[7]) {
     void client.invalidateQueries({ queryKey: transcriptionKeys.capabilities })
   }
   return false
