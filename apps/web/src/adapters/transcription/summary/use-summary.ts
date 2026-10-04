@@ -3,26 +3,30 @@ import {
   useMutationState,
   useQuery,
   useQueryClient,
-  type MutationState
+  type MutationState,
+  type QueryClient
 } from '@tanstack/react-query'
 import type { TranscriptionSummary, TranscriptionSummaryRequest } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
-import { generateSummary } from '../api'
+import { generateSummary, transcriptionKeys } from '../api'
 
 /**
  * A transcript's summary by template (T-48, T-49). The stored one is looked up with `checkOnly`
  * when the summary is shown; "generate" asks without `forceRegenerate`, "regenerate" with it. All
- * of it is keyed by transcript, revision and template, so an answer never shows for another
- * transcript, an edited one or another template, even when it arrives after a switch.
+ * of it is keyed by transcript, revision, template and template version, so an answer never shows
+ * for another transcript, an edited one, another template or an older version of the template,
+ * even when it arrives after a switch or an edit. The model and its settings are the server's
+ * choice; its store is keyed by them too, and a lookup after a reload asks it again.
  */
 
 /** Below `['transcription']`, which a catalogue change invalidates as a whole. */
 export const summaryKey = (
   transcriptId: string,
   revision: number,
-  templateId: string
-): readonly ['transcription', 'summary', string, number, string] =>
-  ['transcription', 'summary', transcriptId, revision, templateId] as const
+  templateId: string,
+  templateVersion: number
+): readonly ['transcription', 'summary', string, number, string, number] =>
+  ['transcription', 'summary', transcriptId, revision, templateId, templateVersion] as const
 type SummaryKey = ReturnType<typeof summaryKey>
 
 export type SummaryStatus = 'idle' | 'checking' | 'empty' | 'loading' | 'ready' | 'error'
@@ -40,6 +44,26 @@ export interface SummaryTarget {
   transcriptId: string
   revision: number
   templateId: string
+  /** The version of the template the user sees; an edit raises it. */
+  templateVersion: number
+}
+
+/**
+ * Where a generated summary belongs: under the template version and revision it was made from,
+ * which can be newer than the one asked for when the template changed meanwhile. `null`: it was
+ * made from text, not the saved transcript, so it belongs nowhere.
+ */
+export function summaryKeyOf(
+  transcriptId: string,
+  summary: TranscriptionSummary
+): SummaryKey | null {
+  if (summary.transcriptRevision === null) return null
+  return summaryKey(
+    transcriptId,
+    summary.transcriptRevision,
+    summary.templateId,
+    summary.templateVersion
+  )
 }
 
 interface Variables {
@@ -49,17 +73,20 @@ interface Variables {
 
 export function useSummary(target: SummaryTarget | null, enabled = true): SummaryState {
   const client = useQueryClient()
-  const key = target ? summaryKey(target.transcriptId, target.revision, target.templateId) : null
+  const key = target
+    ? summaryKey(target.transcriptId, target.revision, target.templateId, target.templateVersion)
+    : null
 
   const stored = useQuery({
     queryKey: key ?? ['transcription', 'summary', 'none'],
-    queryFn: async ({ signal }) =>
-      (
-        await generateSummary(
-          { transcriptId: target!.transcriptId, templateId: target!.templateId, checkOnly: true },
-          signal
-        )
-      ).summary,
+    queryFn: async ({ signal }) => {
+      const { summary } = await generateSummary(
+        { transcriptId: target!.transcriptId, templateId: target!.templateId, checkOnly: true },
+        signal
+      )
+      // One stored for another version or revision is not this one's.
+      return summary && fileSummary(client, target!.transcriptId, summary, key!) ? summary : null
+    },
     enabled: enabled && key !== null,
     // kiChat shows the empty state when the lookup fails, and so does the summary here.
     retry: false,
@@ -71,7 +98,15 @@ export function useSummary(target: SummaryTarget | null, enabled = true): Summar
     mutationKey: key ?? ['transcription', 'summary', 'none'],
     networkMode: 'always',
     mutationFn: ({ input }: Variables) => generateSummary(input),
-    onSuccess: (response, { key: requested }) => client.setQueryData(requested, response.summary)
+    onSuccess: ({ summary }, { key: requested, input }) => {
+      if (
+        summary &&
+        input.transcriptId &&
+        fileSummary(client, input.transcriptId, summary, requested)
+      ) {
+        client.setQueryData(requested, summary)
+      }
+    }
   })
   const { mutate } = generation
 
@@ -107,6 +142,30 @@ export function useSummary(target: SummaryTarget | null, enabled = true): Summar
     error: status === 'error' ? last?.error : null,
     generate
   }
+}
+
+/**
+ * Whether a summary belongs under `requested`. One made from another template version or revision
+ * is filed under its own key instead, and the template and transcript are fetched again, so a
+ * newer one moves the view there; a late answer for an older one stays under the older key.
+ */
+export function fileSummary(
+  client: QueryClient,
+  transcriptId: string,
+  summary: TranscriptionSummary,
+  requested: SummaryKey
+): boolean {
+  const made = summaryKeyOf(transcriptId, summary)
+  if (!made) return false
+  if (sameKey(made, requested)) return true
+  client.setQueryData(made, summary)
+  void client.invalidateQueries({ queryKey: transcriptionKeys.templates })
+  void client.invalidateQueries({ queryKey: transcriptionKeys.transcript(transcriptId) })
+  return false
+}
+
+function sameKey(a: SummaryKey | null, b: SummaryKey): boolean {
+  return a !== null && a.every((part, index) => part === b[index])
 }
 
 /** The texts of a failed generation. */

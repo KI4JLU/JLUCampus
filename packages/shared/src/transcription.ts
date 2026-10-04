@@ -1076,11 +1076,37 @@ export const TRANSCRIPTION_REALTIME_MODES = ['onprem', 'openai'] as const
 export const transcriptionRealtimeModeSchema = z.enum(TRANSCRIPTION_REALTIME_MODES)
 export type TranscriptionRealtimeMode = z.infer<typeof transcriptionRealtimeModeSchema>
 
-/** An ICE server for the on-prem bridge. TURN credentials are not supported here. */
+/**
+ * An ICE server for the on-prem bridge, as configured: addresses only. TURN credentials are never
+ * stored with it; with `realtimeTurnAuth: 'ephemeral'` the server issues short-lived ones for each
+ * live session (`TRANSCRIPTION_API.realtimeIceServers`).
+ */
 export const transcriptionIceServerSchema = z.object({
   urls: z.array(z.string().trim().min(1).max(500)).min(1).max(5)
 })
 export type TranscriptionIceServer = z.infer<typeof transcriptionIceServerSchema>
+
+/** How the on-prem path authenticates at its TURN servers. */
+export const TRANSCRIPTION_TURN_AUTH = ['none', 'ephemeral'] as const
+export const transcriptionTurnAuthSchema = z.enum(TRANSCRIPTION_TURN_AUTH)
+export type TranscriptionTurnAuth = z.infer<typeof transcriptionTurnAuthSchema>
+
+/** An ICE server for one live session, with the short-lived TURN credentials if any. */
+export const transcriptionSessionIceServerSchema = transcriptionIceServerSchema.extend({
+  username: z.string().optional(),
+  credential: z.string().optional()
+})
+export type TranscriptionSessionIceServer = z.infer<typeof transcriptionSessionIceServerSchema>
+
+/**
+ * `POST TRANSCRIPTION_API.realtimeIceServers`: the on-prem path's ICE servers for one session.
+ * TURN credentials expire at `expiresAt`; the answer is never cached.
+ */
+export const transcriptionRealtimeIceSchema = z.object({
+  iceServers: z.array(transcriptionSessionIceServerSchema),
+  expiresAt: z.iso.datetime().nullable()
+})
+export type TranscriptionRealtimeIce = z.infer<typeof transcriptionRealtimeIceSchema>
 
 /** `GET TRANSCRIPTION_API.realtimeConfig` (T-59): the modes that are set up. */
 export const transcriptionRealtimeConfigSchema = z.object({
@@ -1211,6 +1237,13 @@ export const transcriptionComponentConfigSchema = z.object({
   onpremSignalingUrl: httpsUrlSchema.nullable().default(null),
   realtimeIceServers: z.array(transcriptionIceServerSchema).max(5).default([]),
   /**
+   * `ephemeral`: the `turn:`/`turns:` servers get credentials made for each session with the
+   * shared secret `TRANSCRIPTION_TURN_SECRET` (TURN REST API, coturn's `use-auth-secret`).
+   */
+  realtimeTurnAuth: transcriptionTurnAuthSchema.default('none'),
+  /** How long session TURN credentials last. */
+  realtimeTurnCredentialSeconds: z.number().int().min(60).max(86_400).default(3600),
+  /**
    * OpenAI's API up to `/v1`: the server asks `/realtime/client_secrets` for ephemeral keys, the
    * browser connects to `/realtime/calls`.
    */
@@ -1310,15 +1343,42 @@ export type TranscriptionConnectionTestRequest = z.infer<
   typeof transcriptionConnectionTestRequestSchema
 >
 
+/** What an operational check expected and did not get. */
+export const TRANSCRIPTION_CONNECTION_ANSWERS = [
+  'transcription',
+  'diarization',
+  'chat',
+  'sdpAnswer',
+  'clientSecret',
+  'storedContent'
+] as const
+
 /**
  * What the server found itself, for the web to say in the admin's language: the number of models
- * listed, a chosen model the endpoint does not list, an upstream not set up, a reachable bucket.
+ * listed, a chosen model the endpoint does not list, an upstream not set up, a reachable bucket,
+ * and what an operational check did (a test clip transcribed or diarised, a chat answer, an SDP
+ * answer, an ephemeral key issued and withheld, a stored object read back and deleted) or found
+ * wrong with the answer.
  */
 export const transcriptionConnectionFindingSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('models'), count: z.number().int().min(0) }),
   z.object({ kind: z.literal('modelMissing'), model: z.string() }),
   z.object({ kind: z.literal('notSetUp') }),
-  z.object({ kind: z.literal('bucketReachable'), bucket: z.string() })
+  z.object({ kind: z.literal('bucketReachable'), bucket: z.string() }),
+  z.object({ kind: z.literal('modelsUnlisted') }),
+  z.object({ kind: z.literal('noModel') }),
+  z.object({ kind: z.literal('transcribed'), model: z.string() }),
+  z.object({ kind: z.literal('diarized'), turns: z.number().int().min(0) }),
+  z.object({ kind: z.literal('chatAnswered'), model: z.string() }),
+  z.object({ kind: z.literal('sdpAnswered') }),
+  z.object({ kind: z.literal('keyIssued'), model: z.string() }),
+  z.object({ kind: z.literal('signedRoundTrip'), bucket: z.string() }),
+  z.object({ kind: z.literal('serverRoundTrip'), bucket: z.string() }),
+  z.object({ kind: z.literal('signedUrlsUnreachable') }),
+  z.object({
+    kind: z.literal('invalidAnswer'),
+    expected: z.enum(TRANSCRIPTION_CONNECTION_ANSWERS)
+  })
 ])
 export type TranscriptionConnectionFinding = z.infer<typeof transcriptionConnectionFindingSchema>
 
@@ -1328,6 +1388,8 @@ export const transcriptionConnectionTestSchema = z.object({
   status: z.number().int().nullable(),
   latencyMs: z.number().int().min(0).nullable(),
   finding: transcriptionConnectionFindingSchema.nullable(),
+  /** Every step checked, in order; `finding` is the one that decided. */
+  checks: z.array(transcriptionConnectionFindingSchema).default([]),
   /** The upstream's own detail, e.g. its error body; never a credential. */
   message: z.string().nullable()
 })
@@ -1402,6 +1464,8 @@ export const TRANSCRIPTION_API = {
   realtimeOnpremSignaling: `${MODULE}/realtime/onprem/signaling`,
   /** POST → `transcriptionRealtimeSessionSchema`. */
   realtimeSession: `${MODULE}/realtime/session`,
+  /** POST → `transcriptionRealtimeIceSchema`: the on-prem ICE servers for one session. */
+  realtimeIceServers: `${MODULE}/realtime/onprem/ice-servers`,
   /** Admin only. POST `transcriptionModelsRequestSchema` → `transcriptionModelListSchema`. */
   adminModels: `${ADMIN}/models`,
   /** Admin only. POST `transcriptionConnectionTestRequestSchema` → `transcriptionConnectionTestSchema`. */

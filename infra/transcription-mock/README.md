@@ -33,5 +33,13 @@ built yet answer `501`.
 | `llm.mjs`         | `/llm`         | `GET /v1/models`, `POST /v1/chat/completions`                                                         |
 | `realtime.mjs`    | `/realtime`    | `POST /onprem/signaling`, `POST /openai/v1/realtime/client_secrets`, `POST /openai/v1/realtime/calls` |
 
+Live transcription answers with a real WebRTC peer (`realtime-peer.mjs`, on the root
+devDependency `werift`): it takes the browser's audio and sends a fixed German script over the
+`oai-events` data channel, one sentence per three seconds of audio, word by word as
+`conversation.item.input_audio_transcription.delta` and then `…completed`. On-prem stop
+(`input_audio_buffer.commit`) finishes the current sentence at once. Both live modes can so be
+tried end to end in the browser. Offers without ICE credentials (the admin connection test's) get
+a signaling-only stub answer.
+
 `http.mjs` holds the helpers they share. Tests can start the mock on a free port with
 `startMock(0)` from `server.mjs`.

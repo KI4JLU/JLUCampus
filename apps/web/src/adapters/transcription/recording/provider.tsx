@@ -3,7 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { TRANSCRIPTION_LIVE_FONT_SIZE, type TranscriptionRealtimeMode } from '@justcampus/shared'
 import { meQuery } from '@/lib/queries'
-import { createRealtimeSession, onpremSignaling, useRealtimeConfig } from '../api'
+import {
+  createRealtimeSession,
+  fetchRealtimeIceServers,
+  onpremSignaling,
+  useRealtimeConfig
+} from '../api'
 import { RealtimeError, RealtimeSession, type RealtimeDependencies } from '../live/session'
 import { useMemoryCell } from '../page-memory'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -31,6 +36,7 @@ const DEFAULT_APPEARANCE: LiveAppearance = {
 const browserRealtime: RealtimeDependencies = {
   createPeer: (configuration) => new RTCPeerConnection(configuration),
   onpremSignaling: async (sdp) => (await onpremSignaling({ sdp })).sdp,
+  onpremIceServers: async () => (await fetchRealtimeIceServers()).iceServers,
   openaiSession: () => createRealtimeSession(),
   fetch: (input, init) => fetch(input, init)
 }

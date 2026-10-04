@@ -22,6 +22,7 @@ import {
   transcriptionMediaUrlSchema,
   transcriptionModelListSchema,
   transcriptionRealtimeConfigSchema,
+  transcriptionRealtimeIceSchema,
   transcriptionRealtimeSessionSchema,
   transcriptionSignalingResponseSchema,
   transcriptionSpeakerOptimizationSchema,
@@ -45,6 +46,7 @@ import {
   type TranscriptionModel,
   type TranscriptionModelsRequest,
   type TranscriptionRealtimeConfig,
+  type TranscriptionRealtimeIce,
   type TranscriptionRealtimeSession,
   type TranscriptionSignalingRequest,
   type TranscriptionSignalingResponse,
@@ -306,6 +308,15 @@ export async function onpremSignaling(
       json: input,
       signal
     })
+  )
+}
+
+/** The on-prem ICE servers for one live session, TURN ones with short-lived credentials (T-60). */
+export async function fetchRealtimeIceServers(
+  signal?: AbortSignal
+): Promise<TranscriptionRealtimeIce> {
+  return transcriptionRealtimeIceSchema.parse(
+    await apiFetch<unknown>(TRANSCRIPTION_API.realtimeIceServers, { ...post, signal })
   )
 }
 

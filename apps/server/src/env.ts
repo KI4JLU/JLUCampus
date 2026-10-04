@@ -78,7 +78,11 @@ const envSchema = z
     // temporary files (default: the system's temporary directory).
     TRANSCRIPTION_FFMPEG: z.string().min(1).default('ffmpeg'),
     TRANSCRIPTION_FFPROBE: z.string().min(1).default('ffprobe'),
-    TRANSCRIPTION_WORK_DIR: z.string().min(1).optional()
+    TRANSCRIPTION_WORK_DIR: z.string().min(1).optional(),
+    // The TURN servers' shared secret (coturn `static-auth-secret`), from which the server makes
+    // short-lived credentials for each live session when the module's TURN auth is `ephemeral`.
+    // It never leaves the server.
+    TRANSCRIPTION_TURN_SECRET: z.string().min(16).optional()
   })
   .transform((value) => ({
     ...value,

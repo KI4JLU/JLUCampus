@@ -3,9 +3,10 @@ import type { TranscriptionTemplateSection } from '@justcampus/shared'
 
 /**
  * The template editor's AI section previews, kept in `localStorage` like kiChat's
- * `hawki_template_preview_cache` (T-53): per transcript, template name and section heading the
- * output and a hash of the instruction it was made with. A changed instruction makes the output
- * stale. Campus keys the store by user and module, so one browser shared by several people shows
+ * `hawki_template_preview_cache` (T-53): per transcript, template name and section the output and
+ * a hash of the instruction it was made with. A changed instruction makes the output stale.
+ * kiChat keyed sections by heading; headings need not be unique, so Campus keys them by the
+ * section's id, which the editor keeps across saves (`toEditorBlocks`). Campus keys the store by user and module, so one browser shared by several people shows
  * nobody another person's transcript, and sign-out clears it (`clearPreviewCaches`).
  */
 
@@ -37,7 +38,7 @@ const previewCacheSchema = z.record(
   z.record(z.string(), z.record(z.string(), cachedSectionSchema))
 )
 export type CachedSection = z.infer<typeof cachedSectionSchema>
-/** transcript → template name → section heading → output. */
+/** transcript → template name → section id → output. */
 export type PreviewCache = z.infer<typeof previewCacheSchema>
 
 /** What `localStorage` offers that the cache uses; tests pass a map. */
@@ -86,14 +87,17 @@ export function cacheScope(transcriptId: string | null, templateName: string): [
   return [transcriptId || 'preview-default', templateName.trim() || 'default']
 }
 
+/** A section as the cache knows it: its id and the instruction its output depends on. */
+export type CachedSectionRef = Pick<TranscriptionTemplateSection, 'instruction'> & { id: string }
+
 export function sectionPreview(
   cache: PreviewCache,
   transcriptId: string | null,
   templateName: string,
-  section: Pick<TranscriptionTemplateSection, 'heading' | 'instruction'>
+  section: CachedSectionRef
 ): SectionPreview {
   const [transcript, template] = cacheScope(transcriptId, templateName)
-  const cached = cache[transcript]?.[template]?.[section.heading]
+  const cached = cache[transcript]?.[template]?.[section.id]
   if (!cached) return { status: 'empty', output: '' }
   return {
     status: cached.instructionHash === stringHash(section.instruction) ? 'fresh' : 'stale',
@@ -102,9 +106,7 @@ export function sectionPreview(
 }
 
 /** The sections a test preview has to make: those without a current output. */
-export function staleSections<
-  T extends Pick<TranscriptionTemplateSection, 'heading' | 'instruction'>
->(
+export function staleSections<T extends CachedSectionRef>(
   cache: PreviewCache,
   transcriptId: string | null,
   templateName: string,
@@ -131,7 +133,7 @@ export function withPreviewResults(
   for (const section of requested) {
     const output = results[section.id]
     if (output === undefined) continue
-    sections[section.heading] = { instructionHash: stringHash(section.instruction), output }
+    sections[section.id] = { instructionHash: stringHash(section.instruction), output }
   }
   return { ...cache, [transcript]: { ...cache[transcript], [template]: sections } }
 }

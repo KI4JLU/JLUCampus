@@ -1,17 +1,23 @@
+import { useEffect } from 'react'
 import type { TranscriptionTemplate } from '@justcampus/shared'
+import { onSignOut } from '@/lib/sign-out-cleanups'
 import { createStore, useStore } from '../export/store'
 import type { TemplateDraft } from './structure'
 
 /**
  * The summary template in use, the chooser and the editor (T-50, T-51). The choice lives as long
  * as the page, like kiChat's `selectedTemplate`; until the user picks one, a transcript's last
- * used template applies, else kiChat's default.
+ * used template applies, else kiChat's default. It belongs to one user in one module (`scope`):
+ * another user, another module or a sign-out start afresh, so nobody sees another person's
+ * template in the editor (T-54).
  */
 
 /** kiChat's preselected template (`TranscriptExportDefaultTemplateName`, "Mein Interview-Format"). */
 export const DEFAULT_SUMMARY_TEMPLATE_ID = 'mein-interview-format'
 
 export interface TemplateState {
+  /** `<user>:<module>` the state belongs to; `null` while the user is not known. */
+  scope: string | null
   /** The template the user picked; `null` before. */
   selectedId: string | null
   libraryOpen: boolean
@@ -21,18 +27,34 @@ export interface TemplateState {
   session: number
 }
 
-export const templateStore = createStore<TemplateState>({
+const EMPTY: Omit<TemplateState, 'scope' | 'session'> = {
   selectedId: null,
   libraryOpen: false,
-  draft: null,
-  session: 0
-})
+  draft: null
+}
 
-export function useTemplateState(): TemplateState {
-  return useStore(templateStore)
+export const templateStore = createStore<TemplateState>({ ...EMPTY, scope: null, session: 0 })
+
+/** The scope of the templates of one user in one module. */
+export function templateScope(userId: string | undefined, componentId: string): string | null {
+  return userId ? `${userId}:${componentId}` : null
+}
+
+/** The state if it belongs to `scope`, else an empty one; a new scope clears the store. */
+export function useTemplateState(scope: string | null): TemplateState {
+  const state = useStore(templateStore)
+  useEffect(() => templateActions.enterScope(scope), [scope])
+  return state.scope === scope ? state : { ...EMPTY, scope, session: state.session }
 }
 
 export const templateActions = {
+  /** Starts afresh unless the state already belongs to `scope`. */
+  enterScope: (scope: string | null): void => {
+    if (templateStore.get().scope !== scope) templateActions.reset(scope)
+  },
+  /** Forgets the choice and closes the editor and chooser, e.g. on sign-out. */
+  reset: (scope: string | null = null): void =>
+    templateStore.set((state) => ({ ...EMPTY, scope, session: state.session + 1 })),
   select: (id: string): void => templateStore.set({ selectedId: id }),
   openLibrary: (): void => templateStore.set({ libraryOpen: true }),
   setLibraryOpen: (libraryOpen: boolean): void => templateStore.set({ libraryOpen }),
@@ -63,3 +85,6 @@ export function activeTemplate(
   }
   return templates[0] ?? null
 }
+
+// The editor may hold the user's own template; the next person must not find it.
+onSignOut(() => templateActions.reset())

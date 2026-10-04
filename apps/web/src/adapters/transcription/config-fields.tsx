@@ -34,7 +34,9 @@ import {
   TRANSCRIPTION_MODELS_MAX,
   TRANSCRIPTION_REALTIME_MODES,
   TRANSCRIPTION_SPEAKER_COUNTS,
+  TRANSCRIPTION_TURN_AUTH,
   type TranscriptionComponentConfig,
+  type TranscriptionConnectionFinding,
   type TranscriptionConnectionTarget,
   type TranscriptionConnectionTest,
   type TranscriptionConnectionTestRequest,
@@ -43,7 +45,8 @@ import {
   type TranscriptionModel,
   type TranscriptionModelKind,
   type TranscriptionRealtimeMode,
-  type TranscriptionSpeakerCount
+  type TranscriptionSpeakerCount,
+  type TranscriptionTurnAuth
 } from '@justcampus/shared'
 import { Field } from '@/components/field'
 import { ApiRequestError } from '@/lib/api'
@@ -533,6 +536,43 @@ export function TranscriptionConfigFields({
             error={errorAt(errors, 'realtimeIceServers')}
             onChange={(realtimeIceServers) => update({ realtimeIceServers })}
           />
+          <Field
+            id={id('turn-auth')}
+            label={t('transcription.recording.admin.realtimeTurnAuth.label')}
+            hint={t('transcription.recording.admin.realtimeTurnAuth.hint')}
+            error={errors.realtimeTurnAuth}
+          >
+            {(control) => (
+              <Select
+                value={config.realtimeTurnAuth}
+                onValueChange={(value) =>
+                  update({ realtimeTurnAuth: value as TranscriptionTurnAuth })
+                }
+              >
+                <SelectTrigger {...control}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TRANSCRIPTION_TURN_AUTH.map((auth) => (
+                    <SelectItem key={auth} value={auth}>
+                      {t(`transcription.recording.admin.realtimeTurnAuth.${auth}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </Field>
+          {config.realtimeTurnAuth === 'ephemeral' ? (
+            <NumberField
+              id={id('turn-credential-seconds')}
+              name="realtimeTurnCredentialSeconds"
+              value={config.realtimeTurnCredentialSeconds}
+              min={60}
+              max={86_400}
+              error={errors.realtimeTurnCredentialSeconds}
+              onChange={(value) => update({ realtimeTurnCredentialSeconds: value ?? Number.NaN })}
+            />
+          ) : null}
           <ConnectionTest
             target="realtimeOnprem"
             disabled={!config.onpremSignalingUrl}
@@ -672,6 +712,7 @@ type NumberFieldName =
   | 'upstreamTimeoutSeconds'
   | 'transcriptRetentionHours'
   | 'unsavedJobRetentionHours'
+  | 'realtimeTurnCredentialSeconds'
 
 /**
  * A whole number. An empty field is `null` where that means "no limit" (`nullable`); elsewhere it
@@ -1125,7 +1166,10 @@ function IceServersField({
   )
 }
 
-/** Checks one upstream with the values in the form; the answer never contains a key. */
+/**
+ * Checks one upstream with the values in the form, by doing what the module does with it; the
+ * answer lists each step and never contains a key.
+ */
 function ConnectionTest({
   target,
   request,
@@ -1139,6 +1183,11 @@ function ConnectionTest({
   const test = useTestAdminConnection()
   const [result, setResult] = useState<TranscriptionConnectionTest | 'error' | null>(null)
   const statusId = useId()
+  /** One step of the test in the admin's language. */
+  const findingText = (finding: TranscriptionConnectionFinding): string =>
+    finding.kind === 'invalidAnswer'
+      ? t(`transcription.recording.admin.test.findings.invalidAnswer.${finding.expected}`)
+      : t(`transcription.recording.admin.test.findings.${finding.kind}`, finding)
 
   const run = (): void => {
     setResult(null)
@@ -1162,9 +1211,9 @@ function ConnectionTest({
       result.latencyMs !== null
         ? t('transcription.recording.admin.test.latency', { ms: result.latencyMs })
         : null,
-      result.finding
-        ? t(`transcription.recording.admin.test.findings.${result.finding.kind}`, result.finding)
-        : null,
+      ...(result.checks.length > 0 ? result.checks : result.finding ? [result.finding] : []).map(
+        findingText
+      ),
       result.message
     ]
       .filter(Boolean)

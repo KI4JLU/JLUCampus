@@ -118,7 +118,7 @@ async function started(context: ReturnType<typeof setup>, stream: MediaStream): 
     iceServers: [{ urls: ['turn:turn.example:3478'] }],
     openaiModel: null
   })
-  await vi.waitFor(() => expect(context.peers[0]?.remoteDescription).not.toBeNull())
+  await vi.waitFor(() => expect(context.peers[0]?.remoteDescription).toBeTruthy())
   const peer = context.peers[0]!
   peer.connect()
   await starting
@@ -200,6 +200,42 @@ describe('RealtimeSession', () => {
     expect(peer.closed).toBe(true)
   })
 
+  it("uses the session's ICE servers with their short-lived TURN credentials", async () => {
+    const turn = {
+      urls: ['turn:turn.example:3478'],
+      username: '1791108600:jlu-campus',
+      credential: 'short-lived'
+    }
+    const context = setup({ onpremIceServers: vi.fn(() => Promise.resolve([turn])) })
+    const peer = await started(context, fakeStream().stream)
+    expect(peer.configuration).toEqual({ iceServers: [turn] })
+    // OpenAI does not ask for them.
+    const openai = setup({ onpremIceServers: vi.fn(() => Promise.resolve([turn])) })
+    void openai.session
+      .start({ stream: fakeStream().stream, mode: 'openai', iceServers: [], openaiModel: null })
+      .catch(() => {})
+    await vi.waitFor(() => expect(openai.peers[0]).toBeDefined())
+    expect(openai.dependencies.onpremIceServers).not.toHaveBeenCalled()
+    openai.session.teardown()
+  })
+
+  it('fails as a bridge error when the ICE servers are not handed out', async () => {
+    const context = setup({
+      onpremIceServers: () =>
+        Promise.reject(
+          Object.assign(new Error('x'), {
+            body: { error: { code: 'module_unavailable', message: 'TURN not set up' } }
+          })
+        )
+    })
+    const { stream, stopped } = fakeStream()
+    await expect(
+      context.session.start({ stream, mode: 'onprem', iceServers: [], openaiModel: null })
+    ).rejects.toMatchObject({ code: 'bridgeError', detail: 'TURN not set up' })
+    expect(context.peers).toHaveLength(0)
+    expect(stopped()).toBe(true)
+  })
+
   it('fails when the audio connection is not up within 15 s and releases the microphone', async () => {
     const context = setup()
     const { stream, stopped } = fakeStream()
@@ -241,7 +277,7 @@ describe('RealtimeSession', () => {
       iceServers: [{ urls: ['turn:ignored'] }],
       openaiModel: 'from-config'
     })
-    await vi.waitFor(() => expect(context.peers[0]?.remoteDescription).not.toBeNull())
+    await vi.waitFor(() => expect(context.peers[0]?.remoteDescription).toBeTruthy())
     const peer = context.peers[0]!
     expect(peer.configuration).toEqual({})
     expect(context.dependencies.fetch).toHaveBeenCalledWith(

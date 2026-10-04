@@ -46,6 +46,11 @@ export interface RealtimeDependencies {
   createPeer: (configuration: RTCConfiguration) => RTCPeerConnection
   /** The on-prem bridge's SDP answer, through the Campus server. */
   onpremSignaling: (sdp: string) => Promise<string>
+  /**
+   * The on-prem ICE servers for this session from the Campus server, TURN ones with short-lived
+   * credentials. Without it, `RealtimeStartOptions.iceServers` are used as they are.
+   */
+  onpremIceServers?: () => Promise<readonly RTCIceServer[]>
   /** An ephemeral OpenAI key with the endpoint and model to use it with. */
   openaiSession: () => Promise<{ value: string; callsUrl: string; model: string }>
   fetch: typeof fetch
@@ -63,7 +68,10 @@ export interface RealtimeHandlers {
 export interface RealtimeStartOptions {
   stream: MediaStream
   mode: TranscriptionRealtimeMode
-  /** ICE servers of the on-prem path; OpenAI brings its own. */
+  /**
+   * ICE server addresses of the on-prem path, from the realtime config; OpenAI brings its own.
+   * `onpremIceServers` replaces them with the session's, credentials included.
+   */
   iceServers: readonly TranscriptionIceServer[]
   /** The transcription model for OpenAI's `session.update`, from the realtime config. */
   openaiModel: string | null
@@ -102,11 +110,9 @@ export class RealtimeSession {
     this.model = options.openaiModel?.trim() || DEFAULT_OPENAI_MODEL
     try {
       // The TURN relay serves the on-prem path only; OpenAI terminates media on its own servers.
-      const peer = this.dependencies.createPeer(
-        options.mode === 'openai' || options.iceServers.length === 0
-          ? {}
-          : { iceServers: options.iceServers.map((server) => ({ urls: [...server.urls] })) }
-      )
+      const iceServers = options.mode === 'openai' ? [] : await this.onpremIceServers(options)
+      this.check()
+      const peer = this.dependencies.createPeer(iceServers.length === 0 ? {} : { iceServers })
       this.peer = peer
       const channel = peer.createDataChannel('oai-events')
       this.channel = channel
@@ -231,6 +237,18 @@ export class RealtimeSession {
       )
     } catch {
       // The channel closed; the session fails on its own.
+    }
+  }
+
+  /** The session's ICE servers, asked for right before the peer is made, as their credentials expire. */
+  private async onpremIceServers(options: RealtimeStartOptions): Promise<RTCIceServer[]> {
+    if (!this.dependencies.onpremIceServers) {
+      return options.iceServers.map((server) => ({ urls: [...server.urls] }))
+    }
+    try {
+      return (await this.dependencies.onpremIceServers()).map((server) => ({ ...server }))
+    } catch (error) {
+      throw new RealtimeError('bridgeError', serverMessage(error))
     }
   }
 

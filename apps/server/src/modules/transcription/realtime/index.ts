@@ -1,5 +1,6 @@
 import {
   transcriptionRealtimeConfigSchema,
+  transcriptionRealtimeIceSchema,
   transcriptionRealtimeSessionSchema,
   transcriptionSignalingRequestSchema,
   transcriptionSignalingResponseSchema
@@ -7,15 +8,18 @@ import {
 import { Hono } from 'hono'
 
 import { ApiError, parseBody } from '../../../api.js'
+import { env } from '../../../env.js'
 import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { defaultRealtimeMode, openaiRealtimeEndpoints, realtimeModes } from '../config.js'
 import { upstream } from '../http.js'
+import { sessionIceServers, TurnNotSetUpError } from './turn.js'
 import { issueClientSecret, onpremSignaling } from './upstream.js'
 
 /**
- * Live transcription (`TRANSCRIPTION_API.realtime*`): the modes that are set up, the on-prem SDP
- * proxy and ephemeral OpenAI Realtime keys.
+ * Live transcription (`TRANSCRIPTION_API.realtime*`): the modes that are set up, the on-prem ICE
+ * servers with short-lived TURN credentials, the on-prem SDP proxy and ephemeral OpenAI Realtime
+ * keys.
  */
 export const realtimeRouter = new Hono<AppEnvironment>()
 
@@ -27,10 +31,32 @@ realtimeRouter.get('/realtime/config', (context) => {
     transcriptionRealtimeConfigSchema.parse({
       modes,
       defaultMode: defaultRealtimeMode(config, modes),
+      // Addresses only; credentials come with `/realtime/onprem/ice-servers` for each session.
       iceServers: modes.includes('onprem') ? config.realtimeIceServers : [],
       openaiModel: modes.includes('openai') ? config.openaiRealtimeModel : null
     })
   )
+})
+
+/**
+ * The on-prem ICE servers for one session, TURN ones with credentials that expire (T-60). Asked for
+ * right before the peer connection is made, and never cached.
+ */
+realtimeRouter.post('/realtime/onprem/ice-servers', (context) => {
+  const { config, secrets } = getModuleRuntime(context, 'transcription')
+  if (!realtimeModes(config, secrets).includes('onprem')) {
+    throw new ApiError(502, 'module_unavailable', 'On-prem live transcription is not set up')
+  }
+  let ice
+  try {
+    ice = sessionIceServers(config, env.TRANSCRIPTION_TURN_SECRET)
+  } catch (error) {
+    if (!(error instanceof TurnNotSetUpError)) throw error
+    console.error(error.message)
+    throw new ApiError(502, 'module_unavailable', 'The TURN server credentials are not set up')
+  }
+  context.header('Cache-Control', 'no-store')
+  return context.json(transcriptionRealtimeIceSchema.parse(ice))
 })
 
 /** Passes the browser's SDP offer to the on-prem bridge and its answer back (T-60). */

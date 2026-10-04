@@ -23,11 +23,15 @@ export function blockKey(): string {
   return `b${counter.toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-/** Keys for a template's blocks; sections keep a saved id while it is unique. */
+/**
+ * Keys for a template's blocks. Sections keep a saved id while it is unique; one without (the
+ * built-ins') gets the server's `section-<index>`, so its preview is found again when the template
+ * is opened next time.
+ */
 export function toEditorBlocks(structure: readonly TranscriptionTemplateBlock[]): EditorBlock[] {
   const used = new Set<string>()
-  return structure.map((block) => {
-    const saved = block.type === 'section' ? block.id : undefined
+  return structure.map((block, index) => {
+    const saved = block.type === 'section' ? (block.id ?? `section-${index}`) : undefined
     const key = saved && !used.has(saved) ? saved : blockKey()
     used.add(key)
     return { ...block, key }

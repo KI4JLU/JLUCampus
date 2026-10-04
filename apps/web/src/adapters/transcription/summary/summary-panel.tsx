@@ -1,9 +1,9 @@
 import { lazy, Suspense } from 'react'
-import { SparklesIcon, TriangleAlertIcon } from 'lucide-react'
+import { SparklesIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge, Button, PanelSection, Spinner } from '@ki4jlu/design-system'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
+import { Notice } from '../notice'
 import { skeletonHeadlines, summaryErrorMessage, type SummaryState } from './use-summary'
 
 const MarkdownView = lazy(() => import('./markdown-view'))
@@ -73,22 +73,21 @@ export function SummaryPanel({
       )
     case 'error':
       return (
-        <Alert variant="destructive">
-          <TriangleAlertIcon aria-hidden="true" />
-          <AlertTitle>{t('transcription.export.generationFailed')}</AlertTitle>
-          <AlertDescription>
-            {summaryErrorMessage(state.error, {
-              prefix: t('transcription.export.generationFailedPrefix'),
-              serverError: t('transcription.export.serverError'),
-              communicationError: t('transcription.export.communicationError')
-            })}
-          </AlertDescription>
-          <AlertAction>
+        <Notice
+          tone="error"
+          title={t('transcription.export.generationFailed')}
+          action={
             <Button type="button" variant="outline" onClick={() => state.generate(false)}>
               {t('transcription.common.retry')}
             </Button>
-          </AlertAction>
-        </Alert>
+          }
+        >
+          {summaryErrorMessage(state.error, {
+            prefix: t('transcription.export.generationFailedPrefix'),
+            serverError: t('transcription.export.serverError'),
+            communicationError: t('transcription.export.communicationError')
+          })}
+        </Notice>
       )
     case 'ready':
       return (

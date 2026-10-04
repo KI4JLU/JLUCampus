@@ -1,16 +1,11 @@
 import { useEffect, useId, useRef } from 'react'
-import {
-  EraserIcon,
-  Maximize2Icon,
-  Minimize2Icon,
-  RotateCcwIcon,
-  TriangleAlertIcon
-} from 'lucide-react'
+import { EraserIcon, Maximize2Icon, Minimize2Icon, RotateCcwIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   Button,
   Card,
   CardContent,
+  Input,
   Label,
   PanelSection,
   Select,
@@ -24,8 +19,8 @@ import {
   TooltipTrigger
 } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_LIVE_FONT_SIZE, type TranscriptionRealtimeMode } from '@justcampus/shared'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
+import { Notice } from '../notice'
 import { useRecording } from '../recording/context'
 import { isRecordingBusy } from '../recording/state'
 import { RecordingControls, RecordingStatusCard, RecordingTabs, TakeList } from '../recording/views'
@@ -151,10 +146,9 @@ function LiveTranscriptPanel(): React.JSX.Element {
           )}
         </div>
         {serviceError ? (
-          <Alert variant="destructive">
-            <TriangleAlertIcon aria-hidden="true" />
-            <AlertDescription>{serviceError}</AlertDescription>
-          </Alert>
+          <Notice tone="error" inline>
+            {serviceError}
+          </Notice>
         ) : null}
       </CardContent>
     </Card>
@@ -169,10 +163,7 @@ export function LiveView(): React.JSX.Element {
   return (
     <RecordingTabs current="live">
       {live.modes.length === 0 ? (
-        <Alert variant="warning">
-          <TriangleAlertIcon aria-hidden="true" />
-          <AlertDescription>{t('transcription.recording.liveUnavailable')}</AlertDescription>
-        </Alert>
+        <Notice tone="warning">{t('transcription.recording.liveUnavailable')}</Notice>
       ) : null}
       {failed || state.status === 'requesting' || state.status === 'stopping' ? (
         <RecordingStatusCard kind="live" />
@@ -224,8 +215,7 @@ export function LiveSettings(): React.JSX.Element {
               {t('transcription.recording.fontSizeValue', { size: appearance.fontSize })}
             </output>
           </div>
-          {/* eslint-disable-next-line design-system/no-raw-ui-elements -- DS gap: no slider; a native range input keeps keyboard and touch support */}
-          <input
+          <Input
             id={`${id}-size`}
             type="range"
             min={min}
@@ -235,7 +225,6 @@ export function LiveSettings(): React.JSX.Element {
             aria-valuetext={t('transcription.recording.fontSizeValue', {
               size: appearance.fontSize
             })}
-            className="w-full"
             onChange={(event) => setAppearance({ fontSize: Number(event.target.value) })}
           />
         </div>

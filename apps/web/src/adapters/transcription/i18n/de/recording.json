@@ -237,7 +237,17 @@
     },
     "iceServers": {
       "label": "ICE-Server",
-      "hint": "Je Zeile ein Server, mehrere Adressen durch Leerzeichen getrennt, etwa turn:turn.uni-giessen.de:3478. Höchstens 5, nur für den lokalen Modus."
+      "hint": "Je Zeile ein Server, mehrere Adressen durch Leerzeichen getrennt, etwa turn:turn.uni-giessen.de:3478. Höchstens 5, nur für den lokalen Modus. Zugangsdaten nicht hier: siehe TURN-Anmeldung."
+    },
+    "realtimeTurnAuth": {
+      "label": "TURN-Anmeldung",
+      "hint": "Kurzlebig: Für jede Sitzung erzeugt der Server Zugangsdaten für die turn:-Server aus dem gemeinsamen Geheimnis TRANSCRIPTION_TURN_SECRET (coturn use-auth-secret). Das Geheimnis verlässt den Server nie; Browser erhalten Zugangsdaten, die ablaufen.",
+      "none": "Keine",
+      "ephemeral": "Kurzlebige Zugangsdaten"
+    },
+    "realtimeTurnCredentialSeconds": {
+      "label": "Gültigkeit der TURN-Zugangsdaten (Sekunden)",
+      "hint": "So lange gelten die TURN-Zugangsdaten einer Sitzung, 60 bis 86.400 Sekunden."
     },
     "openaiRealtimeUrl": {
       "label": "Adresse der OpenAI-API",
@@ -260,7 +270,25 @@
         "models_other": "{{count}} Modelle",
         "modelMissing": "Der Endpunkt führt das Modell {{model}} nicht.",
         "notSetUp": "Noch nicht eingerichtet.",
-        "bucketReachable": "Bucket {{bucket}} erreichbar"
+        "bucketReachable": "Bucket {{bucket}} erreichbar",
+        "modelsUnlisted": "Der Endpunkt führt keine Modelle auf",
+        "noModel": "Es ist kein Modell zum Testen gewählt.",
+        "transcribed": "Ein Testclip wurde mit {{model}} transkribiert",
+        "diarized": "Ein Testclip wurde auf Sprecher untersucht ({{turns}} Abschnitte)",
+        "chatAnswered": "{{model}} hat eine Testfrage beantwortet",
+        "sdpAnswered": "Die Bridge hat ein Testangebot mit SDP beantwortet",
+        "keyIssued": "OpenAI hat einen kurzlebigen Schlüssel für {{model}} ausgegeben (nicht angezeigt)",
+        "signedRoundTrip": "Eine Testdatei wurde über signierte URLs in Bucket {{bucket}} hochgeladen, zurückgelesen und gelöscht",
+        "serverRoundTrip": "Eine Testdatei wurde vom Server in Bucket {{bucket}} geschrieben, zurückgelesen und gelöscht",
+        "signedUrlsUnreachable": "Dieser Server erreicht die Adresse der signierten URLs nicht; Browser erreichen sie vielleicht trotzdem",
+        "invalidAnswer": {
+          "transcription": "Die Antwort war keine Transkription.",
+          "diarization": "Die Antwort enthielt keine Sprecherabschnitte.",
+          "chat": "Die Antwort war keine Chat-Antwort.",
+          "sdpAnswer": "Die Antwort enthielt keine SDP-Antwort.",
+          "clientSecret": "Die Antwort enthielt keinen kurzlebigen Schlüssel.",
+          "storedContent": "Die zurückgelesene Datei weicht von der gespeicherten ab."
+        }
       }
     },
     "testTargets": {

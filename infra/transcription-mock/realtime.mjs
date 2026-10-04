@@ -1,12 +1,16 @@
 import { readBody, sendJson, sendText } from './http.mjs'
+import { answerWithPeer } from './realtime-peer.mjs'
 
 /**
  * Live transcription, below `/realtime`: the on-prem bridge's `POST /onprem/signaling` (SDP offer
  * in, SDP answer out) and OpenAI Realtime below `/openai/v1`: `POST /realtime/client_secrets`
  * (ephemeral key) and `POST /realtime/calls` (SDP with that key).
  *
- * Only signaling is mocked: the answers are well-formed SDP derived from the offer, but no media
- * or data channel ever connects. Ephemeral keys are `ek_mock_<n>` and work for `/realtime/calls`
+ * Both answer with a real WebRTC peer (`realtime-peer.mjs`, on werift) that receives the audio and
+ * sends a deterministic transcript over the `oai-events` data channel, so either live mode can be
+ * tried end to end. An offer that cannot connect (the admin test's, without ICE credentials) or a
+ * missing werift gets a well-formed stub answer derived from the offer instead, with which no
+ * media or data channel connects. Ephemeral keys are `ek_mock_<n>` and work for `/realtime/calls`
  * only; any other bearer there answers 401.
  *
  * @param {import('node:http').IncomingMessage} request
@@ -22,7 +26,10 @@ export async function handle(request, response, path) {
       sendJson(response, 400, { error: 'Expected an SDP offer' })
       return true
     }
-    sendJson(response, 200, { type: 'answer', sdp: answerSdp(offer) })
+    sendJson(response, 200, {
+      type: 'answer',
+      sdp: (await answerWithPeer(offer)) ?? answerSdp(offer)
+    })
     return true
   }
   if (path === '/openai/v1/realtime/client_secrets') {
@@ -56,7 +63,7 @@ export async function handle(request, response, path) {
       return true
     }
     response.setHeader('Location', `/v1/realtime/calls/rtc_mock_${issued}`)
-    sendText(response, 201, answerSdp(offer), 'application/sdp')
+    sendText(response, 201, (await answerWithPeer(offer)) ?? answerSdp(offer), 'application/sdp')
     return true
   }
   return false

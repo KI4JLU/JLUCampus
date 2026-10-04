@@ -1,20 +1,32 @@
+import { randomUUID } from 'node:crypto'
+import type { Readable } from 'node:stream'
+
 import type {
+  TRANSCRIPTION_CONNECTION_ANSWERS,
   TranscriptionConnectionFinding,
   TranscriptionConnectionTest,
   TranscriptionConnectionTestRequest,
   TranscriptionModel
 } from '@justcampus/shared'
+import { z } from 'zod'
 
 import type { TranscriptionRuntime } from '../config.js'
 import { openaiRealtimeEndpoints } from '../config.js'
-import { bearer, listModels, upstreamFetch, UpstreamError } from '../http.js'
-import { clientSecretRequest } from '../realtime/upstream.js'
+import { bearer, listModels, upstreamFetch, UpstreamError, upstreamUrl } from '../http.js'
+import { parseVerboseJson } from '../jobs/asr.js'
+import { parseDiarization } from '../jobs/diarization.js'
+import {
+  clientSecretRequest,
+  parseClientSecret,
+  parseSignalingAnswer
+} from '../realtime/upstream.js'
 import type { TranscriptionStorage } from '../storage.js'
 
 /**
  * The admin form's model discovery and connection tests. They use what the admin typed, else the
  * saved settings and keys, and never answer with a key: messages are cut short and every key
- * involved is masked in them.
+ * involved is masked in them. A test does the operation itself; a model list proves nothing about
+ * audio or chat support.
  */
 
 /** Ids of models that do not chat: embeddings, rerankers, speech, image generation, moderation. */
@@ -43,7 +55,7 @@ export function safeMessage(message: string, keys: readonly (string | null | und
   return safe.replace(/Bearer\s+[\w.~+/=-]+/gi, 'Bearer ***').slice(0, 300)
 }
 
-/** Half a second of silence as a 16 kHz mono PCM WAV, for the diarisation test. */
+/** Silence as a 16 kHz mono PCM WAV, for the speech and diarisation tests. */
 export function silentWav(seconds = 0.5, sampleRate = 16_000): Uint8Array {
   const samples = Math.round(seconds * sampleRate)
   const buffer = new ArrayBuffer(44 + samples * 2)
@@ -89,49 +101,229 @@ export const TEST_SDP_OFFER = [
 ].join('\r\n')
 
 const TEST_TIMEOUT_MS = 15_000
+/** A speech or chat call on a slow, cold model may take longer than a listing. */
+const OPERATION_TIMEOUT_MS = 60_000
 
-interface Probe {
-  status: number | null
-  ok: boolean
-  finding?: TranscriptionConnectionFinding
-  message: string | null
-}
+type Finding = TranscriptionConnectionFinding
 
-/** Answers with the HTTP status; `ok` for 2xx. */
-async function probe(url: string, init: RequestInit, signal?: AbortSignal): Promise<Probe> {
-  const response = await upstreamFetch(url, { ...init, timeoutMs: TEST_TIMEOUT_MS, signal })
-  const body = response.ok ? '' : await response.text().catch(() => '')
-  return {
-    status: response.status,
-    ok: response.ok,
-    message: response.ok
-      ? null
-      : `Status ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`
+/** A check that failed: its finding, the upstream's status and its own words. */
+class CheckFailed extends Error {
+  constructor(
+    readonly finding: Finding | null,
+    readonly status: number | null,
+    message: string | null = null
+  ) {
+    super(message ?? 'check failed')
   }
 }
 
-/** Lists the endpoint's models and checks the chosen one is among them. */
-async function probeModels(
+/** What a test found: the decisive finding last among `checks`. */
+interface Outcome {
+  ok: boolean
+  status: number | null
+  checks: Finding[]
+  message: string | null
+}
+
+/** A response that must be 2xx; otherwise its status and the start of its body. */
+async function answer(
+  url: string,
+  init: RequestInit,
+  signal?: AbortSignal,
+  timeoutMs = TEST_TIMEOUT_MS
+): Promise<Response> {
+  const response = await upstreamFetch(url, { ...init, timeoutMs, signal })
+  if (response.ok) return response
+  const body = await response.text().catch(() => '')
+  throw new CheckFailed(
+    null,
+    response.status,
+    `Status ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`
+  )
+}
+
+/** The JSON of a 2xx answer, else a failed check expecting `expected`. */
+async function jsonOf(
+  response: Response,
+  expected: (typeof TRANSCRIPTION_CONNECTION_ANSWERS)[number]
+): Promise<unknown> {
+  try {
+    return await response.json()
+  } catch {
+    throw new CheckFailed({ kind: 'invalidAnswer', expected }, response.status)
+  }
+}
+
+/**
+ * Lists the endpoint's models: the count, or that the chosen model is not among them. A failed
+ * listing is only noted for speech endpoints, many of which list nothing; the operation decides.
+ */
+async function listedModels(
+  checks: Finding[],
   baseUrl: string,
   apiKey: string | null,
   model: string | null,
   kind: 'asr' | 'llm',
   signal?: AbortSignal
-): Promise<Probe> {
-  const models = await discoverModels(kind, baseUrl, apiKey, signal)
-  if (model && !models.some((candidate) => candidate.id === model)) {
-    return { status: 200, ok: false, finding: { kind: 'modelMissing', model }, message: null }
+): Promise<void> {
+  let models: TranscriptionModel[]
+  try {
+    models = await discoverModels(kind, baseUrl, apiKey, signal)
+  } catch (error) {
+    if (kind === 'llm' || signal?.aborted) throw error
+    checks.push({ kind: 'modelsUnlisted' })
+    return
   }
-  return { status: 200, ok: true, finding: { kind: 'models', count: models.length }, message: null }
+  checks.push({ kind: 'models', count: models.length })
+  if (model && !models.some((candidate) => candidate.id === model)) {
+    checks.push({ kind: 'modelMissing', model })
+  }
 }
 
+/** Recognises a second of silence with `model`, the way jobs do (`verbose_json`). */
+async function checkTranscription(
+  checks: Finding[],
+  baseUrl: string,
+  apiKey: string | null,
+  model: string,
+  signal?: AbortSignal
+): Promise<number> {
+  const form = new FormData()
+  form.set('file', new Blob([silentWav(1)], { type: 'audio/wav' }), 'test.wav')
+  form.set('model', model)
+  form.set('response_format', 'verbose_json')
+  form.append('timestamp_granularities[]', 'segment')
+  const response = await answer(
+    upstreamUrl(baseUrl, 'audio/transcriptions'),
+    { method: 'POST', body: form, headers: { Accept: 'application/json', ...bearer(apiKey) } },
+    signal,
+    OPERATION_TIMEOUT_MS
+  )
+  try {
+    parseVerboseJson(await response.json(), 1)
+  } catch {
+    throw new CheckFailed({ kind: 'invalidAnswer', expected: 'transcription' }, response.status)
+  }
+  checks.push({ kind: 'transcribed', model })
+  return response.status
+}
+
+/** A one-word chat completion with `model`. */
+async function checkChat(
+  checks: Finding[],
+  baseUrl: string,
+  apiKey: string | null,
+  model: string,
+  signal?: AbortSignal
+): Promise<number> {
+  const response = await answer(
+    upstreamUrl(baseUrl, 'chat/completions'),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...bearer(apiKey)
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Antworte nur mit: OK' }],
+        temperature: 0,
+        max_tokens: 16,
+        stream: false
+      })
+    },
+    signal,
+    OPERATION_TIMEOUT_MS
+  )
+  const parsed = chatAnswerSchema.safeParse(await jsonOf(response, 'chat'))
+  if (!parsed.success) {
+    throw new CheckFailed({ kind: 'invalidAnswer', expected: 'chat' }, response.status)
+  }
+  checks.push({ kind: 'chatAnswered', model })
+  return response.status
+}
+const chatAnswerSchema = z.object({
+  choices: z
+    .array(z.object({ message: z.object({ content: z.string().nullable().optional() }) }))
+    .min(1)
+})
+
+/** Signed upload and download of a small object, read back, deleted and gone (T-03, T-04). */
+async function checkStorage(
+  checks: Finding[],
+  storage: TestStorage,
+  componentId: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const key = `transcription/${componentId}/connection-tests/${randomUUID()}.txt`
+  const content = `JLU Campus storage test ${randomUUID()}`
+  const bytes = new TextEncoder().encode(content)
+  const contentType = 'text/plain'
+  let signed = true
+  try {
+    const upload = await storage.presignUpload(key, {
+      contentType,
+      contentLength: bytes.byteLength,
+      expiresIn: 60
+    })
+    try {
+      await answer(upload.url, { method: 'PUT', headers: upload.headers, body: bytes }, signal)
+    } catch (error) {
+      // Signed URLs point at the public endpoint, which this server may not reach itself.
+      if (!(error instanceof UpstreamError) || error.status !== null) throw error
+      signed = false
+      checks.push({ kind: 'signedUrlsUnreachable' })
+      await storage.put(key, bytes, { contentType, contentLength: bytes.byteLength, signal })
+    }
+    let stored: string
+    if (signed) {
+      const download = await storage.presignDownload(key, { expiresIn: 60 })
+      stored = await (await answer(download.url, { method: 'GET' }, signal)).text()
+    } else {
+      stored = await text(await storage.get(key, signal))
+    }
+    if (stored !== content) {
+      throw new CheckFailed({ kind: 'invalidAnswer', expected: 'storedContent' }, null)
+    }
+  } finally {
+    await storage.delete(key).catch(() => {})
+  }
+  if (await storage.head(key, signal)) {
+    throw new CheckFailed(null, null, `The test object ${key} could not be deleted`)
+  }
+  checks.push({
+    kind: signed ? 'signedRoundTrip' : 'serverRoundTrip',
+    bucket: storage.bucket
+  })
+}
+
+async function text(stream: Readable): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk as Uint8Array))
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/** What the storage test uses of the storage. */
+export type TestStorage = Pick<
+  TranscriptionStorage,
+  'bucket' | 'presignUpload' | 'presignDownload' | 'put' | 'get' | 'delete' | 'head'
+>
+
 export interface ConnectionContext {
-  runtime: Pick<TranscriptionRuntime, 'config' | 'secrets'>
-  storage: TranscriptionStorage | null
+  runtime: Pick<TranscriptionRuntime, 'config' | 'secrets'> &
+    Partial<Pick<TranscriptionRuntime, 'componentId'>>
+  storage: TestStorage | null
   signal?: AbortSignal
 }
 
-/** Checks one upstream with the typed values, else the saved ones. */
+/**
+ * Checks one upstream with the typed values, else the saved ones, by doing what the module does
+ * with it: a second of audio recognised or diarised, a chat answer, an SDP answer from the bridge,
+ * an ephemeral key from OpenAI (withheld), a stored object read back through signed URLs and
+ * deleted. Model lists are reported besides, never as proof (section 5). `checks` names each
+ * step; nothing in the answer is a key.
+ */
 export async function testConnection(
   input: TranscriptionConnectionTestRequest,
   { runtime, storage, signal }: ConnectionContext
@@ -141,99 +333,134 @@ export async function testConnection(
     input.apiKey === undefined ? saved : input.apiKey
   const keys = [input.apiKey, ...Object.values(secrets)]
   const started = Date.now()
-  const finish = (result: Probe): TranscriptionConnectionTest => ({
-    ok: result.ok,
-    status: result.status,
+  const checks: Finding[] = []
+  const finish = (outcome: Outcome): TranscriptionConnectionTest => ({
+    ok: outcome.ok,
+    status: outcome.status,
     latencyMs: Date.now() - started,
-    finding: result.finding ?? null,
-    message: result.message === null ? null : safeMessage(result.message, keys)
+    finding: outcome.checks.at(-1) ?? null,
+    checks: outcome.checks,
+    message: outcome.message === null ? null : safeMessage(outcome.message, keys)
   })
-  const notSetUp: TranscriptionConnectionTest = {
-    ok: false,
-    status: null,
-    latencyMs: null,
-    finding: { kind: 'notSetUp' },
-    message: null
-  }
+  const passed = (status: number | null): TranscriptionConnectionTest =>
+    finish({ ok: true, status, checks, message: null })
+  const notSetUp = (): TranscriptionConnectionTest =>
+    finish({ ok: false, status: null, checks: [{ kind: 'notSetUp' }], message: null })
+  const noModel = (): TranscriptionConnectionTest =>
+    finish({ ok: false, status: null, checks: [...checks, { kind: 'noModel' }], message: null })
 
   try {
     switch (input.target) {
       case 'asr': {
         const url = input.url ?? config.asrBaseUrl
-        if (!url) return notSetUp
+        if (!url) return notSetUp()
+        const apiKey = keyOf(secrets.apiKey)
         const model = input.model ?? config.defaultAsrModel ?? config.asrModels[0]?.id ?? null
-        return finish(await probeModels(url, keyOf(secrets.apiKey), model, 'asr', signal))
+        await listedModels(checks, url, apiKey, model, 'asr', signal)
+        if (!model) return noModel()
+        return passed(await checkTranscription(checks, url, apiKey, model, signal))
       }
       case 'llm': {
         const url = input.url ?? config.llmBaseUrl
-        if (!url) return notSetUp
-        const model = input.model ?? null
-        return finish(await probeModels(url, keyOf(secrets.llmApiKey), model, 'llm', signal))
+        if (!url) return notSetUp()
+        const apiKey = keyOf(secrets.llmApiKey)
+        const model = input.model ?? config.defaultSummaryModel ?? config.llmModels[0]?.id ?? null
+        await listedModels(checks, url, apiKey, model, 'llm', signal)
+        if (!model) return noModel()
+        return passed(await checkChat(checks, url, apiKey, model, signal))
       }
       case 'diarization': {
         const url = input.url ?? config.diarizationUrl
-        if (!url) return notSetUp
+        if (!url) return notSetUp()
         const form = new FormData()
-        form.set('file', new Blob([silentWav()], { type: 'audio/wav' }), 'test.wav')
+        form.set('file', new Blob([silentWav(1)], { type: 'audio/wav' }), 'test.wav')
         const model = input.model ?? config.diarizationModel
         if (model) form.set('model', model)
-        return finish(
-          await probe(
-            url,
-            {
-              method: 'POST',
-              body: form,
-              headers: { Accept: 'application/json', ...bearer(keyOf(secrets.diarizationApiKey)) }
-            },
-            signal
-          )
+        const response = await answer(
+          url,
+          {
+            method: 'POST',
+            body: form,
+            headers: { Accept: 'application/json', ...bearer(keyOf(secrets.diarizationApiKey)) }
+          },
+          signal,
+          OPERATION_TIMEOUT_MS
         )
+        let turns: number
+        try {
+          turns = parseDiarization(await response.json()).length
+        } catch {
+          throw new CheckFailed({ kind: 'invalidAnswer', expected: 'diarization' }, response.status)
+        }
+        checks.push({ kind: 'diarized', turns })
+        return passed(response.status)
       }
       case 'realtimeOnprem': {
         const url = input.url ?? config.onpremSignalingUrl
-        if (!url) return notSetUp
-        return finish(
-          await probe(
-            url,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-              body: JSON.stringify({ sdp: TEST_SDP_OFFER, type: 'offer' })
+        if (!url) return notSetUp()
+        const response = await answer(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json, application/sdp'
             },
-            signal
-          )
+            body: JSON.stringify({ sdp: TEST_SDP_OFFER, type: 'offer' })
+          },
+          signal
         )
+        try {
+          parseSignalingAnswer(await response.text(), response.headers.get('content-type'))
+        } catch {
+          throw new CheckFailed({ kind: 'invalidAnswer', expected: 'sdpAnswer' }, response.status)
+        }
+        checks.push({ kind: 'sdpAnswered' })
+        return passed(response.status)
       }
       case 'realtimeOpenai': {
         const apiKey = keyOf(secrets.openaiRealtimeApiKey)
-        if (!apiKey) return notSetUp
+        if (!apiKey) return notSetUp()
         const base = input.url ?? config.openaiRealtimeUrl
+        const model = input.model ?? config.openaiRealtimeModel
         const { clientSecretsUrl } = openaiRealtimeEndpoints({ ...config, openaiRealtimeUrl: base })
-        const result = await probe(
+        const response = await answer(
           clientSecretsUrl,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...bearer(apiKey) },
-            body: JSON.stringify(clientSecretRequest(input.model ?? config.openaiRealtimeModel))
+            body: JSON.stringify(clientSecretRequest(model))
           },
           signal
         )
-        // The ephemeral key issued for the test is not passed on.
-        return finish(result)
+        try {
+          // The ephemeral key issued for the test is checked, not passed on.
+          parseClientSecret(await response.json())
+        } catch {
+          throw new CheckFailed(
+            { kind: 'invalidAnswer', expected: 'clientSecret' },
+            response.status
+          )
+        }
+        checks.push({ kind: 'keyIssued', model })
+        return passed(response.status)
       }
       case 'storage': {
-        if (!storage) return notSetUp
-        await storage.ping(signal)
-        return finish({
-          status: null,
-          ok: true,
-          finding: { kind: 'bucketReachable', bucket: storage.bucket },
-          message: null
-        })
+        if (!storage) return notSetUp()
+        await checkStorage(checks, storage, runtime.componentId ?? 'admin', signal)
+        return passed(null)
       }
     }
   } catch (error) {
     if (signal?.aborted) throw error
+    if (error instanceof CheckFailed) {
+      return finish({
+        ok: false,
+        status: error.status,
+        checks: error.finding ? [...checks, error.finding] : checks,
+        message: error.finding ? null : error.message
+      })
+    }
     const status = error instanceof UpstreamError ? error.status : null
     const message =
       error instanceof UpstreamError
@@ -241,6 +468,6 @@ export async function testConnection(
         : error instanceof Error
           ? `${error.name}: ${error.message}`
           : 'The test failed'
-    return finish({ status, ok: false, message })
+    return finish({ ok: false, status, checks, message })
   }
 }

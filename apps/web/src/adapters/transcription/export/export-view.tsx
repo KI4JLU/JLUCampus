@@ -1,11 +1,6 @@
 import { useId, useMemo, useState } from 'react'
-import {
-  ChevronRightIcon,
-  DownloadIcon,
-  FileTextIcon,
-  RefreshCwIcon,
-  TriangleAlertIcon
-} from 'lucide-react'
+import { ChevronRightIcon, DownloadIcon, FileTextIcon, RefreshCwIcon } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   Button,
@@ -28,13 +23,19 @@ import {
   TooltipTrigger
 } from '@ki4jlu/design-system'
 import type { TranscriptionTemplate } from '@justcampus/shared'
-import { Alert, AlertAction, AlertDescription } from '@/components/ui/alert'
+import { meQuery } from '@/lib/queries'
 import { toast } from '@/lib/toast'
 import { useTranscriptionTemplates } from '../api'
+import { Notice } from '../notice'
 import { SummaryPanel } from '../summary'
 import { useSummary, type SummaryState } from '../summary/use-summary'
 import { TemplateEditor, TemplateLibraryDialog } from '../templates'
-import { activeTemplate, templateActions, useTemplateState } from '../templates/store'
+import {
+  activeTemplate,
+  templateActions,
+  templateScope,
+  useTemplateState
+} from '../templates/store'
 import { templateSubtext } from '../templates/structure'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import type { TranscriptDocument } from '../workspace'
@@ -65,8 +66,11 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
  */
 export function ExportView(): React.JSX.Element {
   const { t } = useTranslation()
-  const { currentDocument } = useTranscriptionWorkspace()
-  const { draft, session, libraryOpen, selectedId } = useTemplateState()
+  const { currentDocument, component } = useTranscriptionWorkspace()
+  const me = useQuery(meQuery).data
+  const { draft, session, libraryOpen, selectedId } = useTemplateState(
+    templateScope(me?.id, component.id)
+  )
   const templates = useTranscriptionTemplates()
 
   const active = activeTemplate(
@@ -130,7 +134,12 @@ function ExportPreview({
 
   const summary = useSummary(
     template
-      ? { transcriptId: transcript.id, revision: transcript.revision, templateId: template.id }
+      ? {
+          transcriptId: transcript.id,
+          revision: transcript.revision,
+          templateId: template.id,
+          templateVersion: template.version
+        }
       : null,
     category === 'summary'
   )
@@ -300,15 +309,16 @@ function SummaryBody({
   const { t } = useTranslation()
   if (templates.isError) {
     return (
-      <Alert variant="destructive">
-        <TriangleAlertIcon aria-hidden="true" />
-        <AlertDescription>{t('transcription.export.templatesLoadFailed')}</AlertDescription>
-        <AlertAction>
+      <Notice
+        tone="error"
+        action={
           <Button type="button" variant="outline" onClick={() => void templates.refetch()}>
             {t('transcription.common.retry')}
           </Button>
-        </AlertAction>
-      </Alert>
+        }
+      >
+        {t('transcription.export.templatesLoadFailed')}
+      </Notice>
     )
   }
   if (!template) return <Spinner label={t('transcription.common.loading')} />

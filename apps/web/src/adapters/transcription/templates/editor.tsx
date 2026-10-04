@@ -23,7 +23,6 @@ import {
   CheckIcon,
   FlaskConicalIcon,
   GripVerticalIcon,
-  InfoIcon,
   RefreshCwIcon,
   SaveIcon,
   Trash2Icon
@@ -56,12 +55,12 @@ import {
   TRANSCRIPTION_TEMPLATE_TEXT_MAX,
   type TranscriptionPlaceholder
 } from '@justcampus/shared'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ApiRequestError } from '@/lib/api'
 import { meQuery } from '@/lib/queries'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { previewSummary, useSaveTemplate } from '../api'
+import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import {
   fillPlaceholders,
@@ -75,7 +74,6 @@ import {
   previewCacheKey,
   readPreviewCache,
   sectionPreview,
-  staleSections,
   userCachePrefix,
   withPreviewResults,
   writePreviewCache,
@@ -173,14 +171,19 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
   const values = useMemo(
     () =>
       placeholderValues(
-        {
-          title: currentDocument?.transcript.title ?? null,
-          createdAt: currentDocument?.transcript.createdAt ?? null,
-          segments: currentDocument?.segments ?? [],
-          duration: currentDocument?.transcript.duration ?? null
-        },
+        currentDocument
+          ? {
+              title: currentDocument.transcript.title,
+              createdAt: currentDocument.transcript.createdAt,
+              segments: currentDocument.segments,
+              duration: currentDocument.transcript.duration
+            }
+          : null,
         i18n.language,
-        (minutes) => t('transcription.export.minutesShort', { minutes })
+        {
+          minutes: (minutes) => t('transcription.export.minutesShort', { minutes }),
+          unknown: t('transcription.common.unknown')
+        }
       ),
     [currentDocument, i18n.language, t]
   )
@@ -232,7 +235,10 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
     .filter((block): block is SectionBlock => block.type === 'section')
     .filter((block) => block.instruction.trim())
     .slice(0, TRANSCRIPTION_PREVIEW_SECTIONS_MAX)
-  const stale = staleSections(cache, transcriptId, name, previewable)
+  // The editor's key is the section's id (`toEditorBlocks`), also where a saved id collided.
+  const previewOf = (block: SectionBlock): ReturnType<typeof sectionPreview> =>
+    sectionPreview(cache, transcriptId, name, { id: block.key, instruction: block.instruction })
+  const stale = previewable.filter((block) => previewOf(block).status !== 'fresh')
 
   const runPreview = async (sections: SectionBlock[], wanted: SectionBlock[]): Promise<void> => {
     if (!transcriptId) {
@@ -486,16 +492,13 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
             }
           >
             <div className="flex flex-col gap-stack-md">
-              <Alert variant="info">
-                <InfoIcon aria-hidden="true" />
-                <AlertDescription>{t('transcription.export.testPreviewNotice')}</AlertDescription>
-              </Alert>
+              <Notice tone="info">{t('transcription.export.testPreviewNotice')}</Notice>
               <Card>
                 <CardContent className="flex flex-col gap-stack-md">
                   <EditorPreview
                     blocks={blocks}
                     fill={(text) => fillPlaceholders(text, values)}
-                    preview={(block) => sectionPreview(cache, transcriptId, name, block)}
+                    preview={previewOf}
                     generating={generating}
                     errors={sectionErrors}
                     onRefresh={(block) =>
@@ -989,9 +992,9 @@ function SectionPreview({
           />
         </div>
       ) : error ? (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <Notice tone="error" inline>
+          {error}
+        </Notice>
       ) : state.status === 'empty' ? (
         <p className="m-0">{t('transcription.export.noAiContentYet')}</p>
       ) : (

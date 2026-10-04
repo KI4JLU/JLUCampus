@@ -13,6 +13,7 @@ import {
   type SubtitleFormat
 } from './files'
 import type { VisibleSpeakers } from './format'
+import { onSignOut } from '@/lib/sign-out-cleanups'
 import { flagsOf, presetFlags, type TranscriptFormatChoice } from './presets'
 
 /**
@@ -117,6 +118,9 @@ export const exportActions = {
     } else if (state.editingFormatId === id) exportStore.set({ editingFormatId: null })
   },
 
+  /** Back to the defaults: the next user does not work on the last one's saved format. */
+  reset: (): void => exportStore.set(INITIAL),
+
   /** Shows or hides one speaker of one transcript in the transcript export (T-43). */
   toggleSpeaker: (transcriptId: string, speaker: string): void =>
     exportStore.set((state) => {
@@ -129,3 +133,5 @@ export const exportActions = {
       }
     })
 }
+
+onSignOut(() => exportActions.reset())

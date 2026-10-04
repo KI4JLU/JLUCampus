@@ -35,8 +35,8 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@ki4jlu/design-system'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { formatTime, WaveformPlayer } from '../audio'
+import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { useRecording, type RecordedTake } from './context'
 import { DEFAULT_DEVICE_ID } from './devices'
@@ -120,9 +120,9 @@ export function RecordingStatusCard({ kind }: { kind: RecordingKind }): React.JS
           {texts.error ? null : <CardDescription>{texts.text}</CardDescription>}
         </div>
         {texts.error ? (
-          <Alert variant="destructive" className="max-w-xl">
-            <AlertDescription>{texts.text}</AlertDescription>
-          </Alert>
+          <Notice tone="error" inline className="max-w-xl justify-center">
+            {texts.text}
+          </Notice>
         ) : null}
       </CardContent>
     </Card>
@@ -428,9 +428,9 @@ export function RecordingSettings(): React.JSX.Element {
       <PanelSection title={t('transcription.common.statusLabel')}>
         <p className="m-0">{texts.title}</p>
         {texts.error ? (
-          <Alert variant="destructive">
-            <AlertDescription>{texts.text}</AlertDescription>
-          </Alert>
+          <Notice tone="error" inline>
+            {texts.text}
+          </Notice>
         ) : (
           <p className="m-0">{texts.text}</p>
         )}

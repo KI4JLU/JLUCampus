@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { runSignOutCleanups } from '@/lib/sign-out-cleanups'
 import {
   TRANSCRIPTION_BUILTIN_TEMPLATES,
   type TranscriptionTemplate,
@@ -11,7 +12,8 @@ import {
   placeholderToken,
   placeholderValues,
   SAMPLE_PARTICIPANTS,
-  SAMPLE_TITLE
+  SAMPLE_TITLE,
+  UNKNOWN_DURATION
 } from './placeholders'
 import {
   cacheScope,
@@ -31,6 +33,7 @@ import {
   activeTemplate,
   DEFAULT_SUMMARY_TEMPLATE_ID,
   templateActions,
+  templateScope,
   templateStore
 } from './store'
 import {
@@ -73,6 +76,8 @@ function memoryStorage(): PreviewStorage & { map: Map<string, string> } {
   }
 }
 
+const texts = { minutes: (minutes: number) => `${minutes} Min`, unknown: 'Unbekannt' }
+
 describe('placeholders', () => {
   it('inserts the English tokens at the cursor, replacing the selection', () => {
     expect(PLACEHOLDERS.map(placeholderToken)).toEqual([
@@ -101,7 +106,7 @@ describe('placeholders', () => {
         duration: 1800
       },
       'de',
-      (minutes) => `${minutes} Min`
+      texts
     )
     expect(values).toEqual({
       title: 'Transcript 1',
@@ -119,21 +124,46 @@ describe('placeholders', () => {
     expect(filled).not.toMatch(/\{\{/)
   })
 
-  it("falls back to kiChat's sample values", () => {
-    const values = placeholderValues(
-      { title: null, createdAt: null, segments: [], duration: null },
-      'en',
-      (minutes) => `${minutes} min`,
-      new Date('2026-10-04T12:00:00')
-    )
+  it("shows kiChat's sample values only without a transcript", () => {
+    const values = placeholderValues(null, 'en', texts, new Date('2026-10-04T12:00:00'))
     expect(values.title).toBe(SAMPLE_TITLE)
     expect(values.participants).toBe(SAMPLE_PARTICIPANTS)
-    expect(values.duration).toBe('45 min')
+    expect(values.duration).toBe('45 Min')
+  })
+
+  it("never invents a saved transcript's missing facts", () => {
+    const values = placeholderValues(
+      {
+        title: 'Real take',
+        createdAt: '2026-10-04T10:00:00.000Z',
+        segments: [{ speaker: null }, { speaker: ' ' }],
+        duration: null
+      },
+      'de',
+      texts
+    )
+    expect(values).toEqual({
+      title: 'Real take',
+      date: '4.10.2026',
+      participants: 'Unbekannt',
+      duration: UNKNOWN_DURATION
+    })
+    const short = placeholderValues(
+      { title: ' ', createdAt: null, segments: [], duration: 0 },
+      'de',
+      texts
+    )
+    expect(short).toEqual({
+      title: 'Unbekannt',
+      date: 'Unbekannt',
+      participants: 'Unbekannt',
+      duration: '0 Min'
+    })
   })
 })
 
 describe('preview cache', () => {
-  const section = { heading: 'Zusammenfassung', instruction: 'Fasse zusammen.' }
+  const section = { id: 's1', heading: 'Zusammenfassung', instruction: 'Fasse zusammen.' }
 
   it("hashes like kiChat's getStringHash", () => {
     expect(stringHash('')).toBe('0')
@@ -151,7 +181,7 @@ describe('preview cache', () => {
   it('marks a section empty, fresh, then stale when its instruction changes', () => {
     let cache = {}
     expect(sectionPreview(cache, 't', 'Vorlage', section).status).toBe('empty')
-    cache = withPreviewResults(cache, 't', 'Vorlage', [{ id: 's1', ...section }], {
+    cache = withPreviewResults(cache, 't', 'Vorlage', [section], {
       s1: 'Ergebnis',
       other: 'nicht gefragt'
     })
@@ -175,13 +205,26 @@ describe('preview cache', () => {
       a: 'A!',
       b: 'B!'
     })
-    expect(Object.keys(cache.t!.V!)).toEqual(['A'])
+    expect(Object.keys(cache.t!.V!)).toEqual(['a'])
+  })
+
+  it('keeps sections with the same heading apart', () => {
+    const a = { id: 'a', heading: 'Same', instruction: 'A' }
+    const b = { id: 'b', heading: 'Same', instruction: 'B' }
+    let cache = withPreviewResults({}, 't', 'V', [a, b], { a: 'Answer A', b: 'Answer B' })
+    expect(sectionPreview(cache, 't', 'V', a)).toEqual({ status: 'fresh', output: 'Answer A' })
+    expect(sectionPreview(cache, 't', 'V', b)).toEqual({ status: 'fresh', output: 'Answer B' })
+    // Refreshing A alone leaves B as it was.
+    const changedA = { ...a, instruction: 'A2' }
+    cache = withPreviewResults(cache, 't', 'V', [changedA], { a: 'New A', b: 'not asked' })
+    expect(sectionPreview(cache, 't', 'V', changedA)).toEqual({ status: 'fresh', output: 'New A' })
+    expect(sectionPreview(cache, 't', 'V', b)).toEqual({ status: 'fresh', output: 'Answer B' })
   })
 
   it('stores, reads and clears per user', () => {
     const storage = memoryStorage()
     const mine = previewCacheKey('u1', 'c1')
-    const cache = withPreviewResults({}, 't', 'V', [{ id: 'a', ...section }], { a: 'A' })
+    const cache = withPreviewResults({}, 't', 'V', [{ ...section, id: 'a' }], { a: 'A' })
     writePreviewCache(storage, mine, cache)
     writePreviewCache(storage, previewCacheKey('u2', 'c1'), cache)
     storage.setItem(PREVIEW_CACHE_KEY, '{}')
@@ -220,6 +263,21 @@ describe('template structure', () => {
       '-',
       'C'
     ])
+  })
+
+  it("gives a built-in's sections the server's ids, the same each time", () => {
+    const keys = (): string[] =>
+      toEditorBlocks(builtIn('interview').structure).flatMap((block) =>
+        block.type === 'section' ? [block.key] : []
+      )
+    expect(keys()).toEqual(['section-2', 'section-3', 'section-4'])
+    expect(keys()).toEqual(keys())
+    const twice = toEditorBlocks([
+      { type: 'section', id: 'x', heading: 'A', instruction: 'a' },
+      { type: 'section', id: 'x', heading: 'B', instruction: 'b' }
+    ])
+    expect(twice[0]!.key).toBe('x')
+    expect(twice[1]!.key).not.toBe('x')
   })
 
   it('saves the ordered structure without editor keys; sections keep ids', () => {
@@ -279,6 +337,33 @@ describe('active template', () => {
     expect(activeTemplate(BUILT_INS, null, null)?.id).toBe(DEFAULT_SUMMARY_TEMPLATE_ID)
     expect(activeTemplate(BUILT_INS, 'deleted', null)?.id).toBe(DEFAULT_SUMMARY_TEMPLATE_ID)
     expect(activeTemplate([], 'interview', null)).toBeNull()
+  })
+
+  it("keeps one user's editor from the next", () => {
+    const alice = templateScope('alice', 'c1')
+    templateActions.enterScope(alice)
+    templateActions.select('private')
+    templateActions.openEditor({
+      id: 'private',
+      name: 'Private draft',
+      description: '',
+      blocks: []
+    })
+    expect(templateStore.get()).toMatchObject({ scope: alice, draft: { name: 'Private draft' } })
+    // Another user (or module) starts afresh.
+    templateActions.enterScope(templateScope('bob', 'c1'))
+    expect(templateStore.get()).toMatchObject({ draft: null, selectedId: null })
+    // Sign-out clears it too.
+    templateActions.enterScope(alice)
+    templateActions.openEditor({
+      id: 'private',
+      name: 'Private draft',
+      description: '',
+      blocks: []
+    })
+    runSignOutCleanups()
+    expect(templateStore.get()).toMatchObject({ scope: null, draft: null, selectedId: null })
+    expect(templateScope(undefined, 'c1')).toBeNull()
   })
 
   it('forgets a deleted pick', () => {

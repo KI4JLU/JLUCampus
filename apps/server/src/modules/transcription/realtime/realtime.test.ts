@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { TEST_SDP_OFFER } from '../admin/connections.js'
 import { json, startUpstreamMock, testApp, type RunningMock } from '../transcripts/testing.js'
 import { realtimeRouter } from './index.js'
+import { isTurnServer, sessionIceServers, turnCredential, TurnNotSetUpError } from './turn.js'
 import { clientSecretRequest, parseClientSecret, parseSignalingAnswer } from './upstream.js'
 
 const relative = (path: string): string => path.replace('/api/modules/transcription', '')
@@ -40,6 +41,47 @@ describe('upstream answers', () => {
         audio: { input: { transcription: { model: 'gpt-realtime-whisper' } } }
       }
     })
+  })
+})
+
+describe('TURN credentials', () => {
+  const servers = [
+    { urls: ['stun:stun.example.org:3478'] },
+    { urls: ['turn:turn.example.org:3478', 'turns:turn.example.org:5349'] }
+  ]
+  const now = new Date('2026-10-04T10:00:00.000Z')
+
+  it("makes coturn's REST API credentials, which expire", () => {
+    // The user name is the expiry; the credential is HMAC-SHA1 over it with the shared secret.
+    expect(turnCredential('north-secret-0123456789', new Date('2026-10-04T11:00:00Z'))).toEqual({
+      username: '1791111600:jlu-campus',
+      credential: 'T+LYWxPquutvrASIQQkkxtjzbEY='
+    })
+    expect(isTurnServer(['stun:a', ' TURNS:b'])).toBe(true)
+    expect(isTurnServer(['stun:a'])).toBe(false)
+  })
+
+  it('gives TURN servers credentials for one session only when configured', () => {
+    const config = { realtimeIceServers: servers, realtimeTurnCredentialSeconds: 600 }
+    expect(
+      sessionIceServers({ ...config, realtimeTurnAuth: 'none' }, 'north-secret-0123456789', now)
+    ).toEqual({ iceServers: servers, expiresAt: null })
+    const ice = sessionIceServers(
+      { ...config, realtimeTurnAuth: 'ephemeral' },
+      'north-secret-0123456789',
+      now
+    )
+    expect(ice.expiresAt).toBe('2026-10-04T10:10:00.000Z')
+    expect(ice.iceServers[0]).toEqual({ urls: ['stun:stun.example.org:3478'] })
+    expect(ice.iceServers[1]).toMatchObject({
+      urls: servers[1]!.urls,
+      username: '1791108600:jlu-campus',
+      credential: expect.any(String)
+    })
+    expect(JSON.stringify(ice)).not.toContain('north-secret')
+    expect(() =>
+      sessionIceServers({ ...config, realtimeTurnAuth: 'ephemeral' }, undefined, now)
+    ).toThrow(TurnNotSetUpError)
   })
 })
 
@@ -90,6 +132,34 @@ describe('realtime routes', () => {
     })
   })
 
+  it('hands out the on-prem ICE servers per session, uncached', async () => {
+    const response = await testApp(realtimeRouter, config).request(
+      relative(TRANSCRIPTION_API.realtimeIceServers),
+      { method: 'POST' }
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      iceServers: [{ urls: ['stun:stun.example.org:3478'] }],
+      expiresAt: null
+    })
+    // TURN credentials wanted, but the server has no shared secret: a clear failure.
+    const unset = await testApp(realtimeRouter, {
+      ...config,
+      config: {
+        ...config!.config,
+        realtimeIceServers: [{ urls: ['turn:turn.example.org:3478'] }],
+        realtimeTurnAuth: 'ephemeral'
+      }
+    }).request(relative(TRANSCRIPTION_API.realtimeIceServers), { method: 'POST' })
+    expect(unset.status).toBe(502)
+    const missing = await testApp(realtimeRouter).request(
+      relative(TRANSCRIPTION_API.realtimeIceServers),
+      { method: 'POST' }
+    )
+    expect(missing.status).toBe(502)
+  })
+
   it('passes the offer to the on-prem bridge and its answer back', async () => {
     const response = await testApp(realtimeRouter, config).request(
       relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
@@ -102,6 +172,50 @@ describe('realtime routes', () => {
     expect(sdp).toContain('a=recvonly')
     expect(sdp).toContain('m=application 9 UDP/DTLS/SCTP webrtc-datachannel')
   })
+
+  it('connects a real peer through the server to the mock bridge, which transcribes', async () => {
+    const { MediaStreamTrack, RTCPeerConnection, RtpHeader, RtpPacket } = await import('werift')
+    const peer = new RTCPeerConnection()
+    const track = new MediaStreamTrack({ kind: 'audio' })
+    peer.addTransceiver(track, { direction: 'sendonly' })
+    const channel = peer.createDataChannel('oai-events')
+    const events: Array<{ type: string; delta?: string; transcript?: string }> = []
+    channel.onMessage.subscribe((data) => events.push(JSON.parse(String(data))))
+    await peer.setLocalDescription(await peer.createOffer())
+    await vi.waitFor(() => expect(peer.iceGatheringState).toBe('complete'), { timeout: 5000 })
+    try {
+      const response = await testApp(realtimeRouter, config).request(
+        relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
+        json('POST', { sdp: peer.localDescription!.sdp })
+      )
+      const { sdp } = (await response.json()) as { sdp: string }
+      expect(sdp).toMatch(/^a=fingerprint:/m)
+      await peer.setRemoteDescription({ type: 'answer', sdp })
+      await vi.waitFor(() => expect(channel.readyState).toBe('open'), { timeout: 10_000 })
+      for (let sequenceNumber = 0; sequenceNumber < 10; sequenceNumber++) {
+        const header = new RtpHeader({
+          payloadType: 111,
+          sequenceNumber,
+          timestamp: 960 * sequenceNumber
+        })
+        track.writeRtp(new RtpPacket(header, Buffer.alloc(20)))
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      // Stopping on-prem: the bridge finishes the audio so far.
+      channel.send(JSON.stringify({ type: 'input_audio_buffer.commit' }))
+      await vi.waitFor(
+        () =>
+          expect(events.at(-1)?.type).toBe('conversation.item.input_audio_transcription.completed'),
+        { timeout: 5000 }
+      )
+      const deltas = events.flatMap((event) => (event.delta === undefined ? [] : [event.delta]))
+      expect(events[0]?.type).toBe('input_audio_buffer.committed')
+      expect(deltas.join('')).toBe(events.at(-1)?.transcript)
+      expect(events.at(-1)?.transcript).toBe('Guten Morgen und willkommen zur Live-Transkription.')
+    } finally {
+      await peer.close()
+    }
+  }, 20_000)
 
   it('reports a refused offer or a missing bridge as unavailable', async () => {
     const refused = await testApp(realtimeRouter, config).request(

@@ -237,7 +237,17 @@
     },
     "iceServers": {
       "label": "ICE servers",
-      "hint": "One server per line, several addresses separated by spaces, such as turn:turn.uni-giessen.de:3478. At most 5, for the local mode only."
+      "hint": "One server per line, several addresses separated by spaces, such as turn:turn.uni-giessen.de:3478. At most 5, for the local mode only. No credentials here: see TURN sign-in."
+    },
+    "realtimeTurnAuth": {
+      "label": "TURN sign-in",
+      "hint": "Short-lived: for every session the server makes credentials for the turn: servers from the shared secret TRANSCRIPTION_TURN_SECRET (coturn use-auth-secret). The secret never leaves the server; browsers get credentials that expire.",
+      "none": "None",
+      "ephemeral": "Short-lived credentials"
+    },
+    "realtimeTurnCredentialSeconds": {
+      "label": "TURN credential lifetime (seconds)",
+      "hint": "How long a session’s TURN credentials work, 60 to 86,400 seconds."
     },
     "openaiRealtimeUrl": {
       "label": "OpenAI API address",
@@ -260,7 +270,25 @@
         "models_other": "{{count}} models",
         "modelMissing": "The endpoint does not list the model {{model}}.",
         "notSetUp": "Not set up yet.",
-        "bucketReachable": "Bucket {{bucket}} is reachable"
+        "bucketReachable": "Bucket {{bucket}} is reachable",
+        "modelsUnlisted": "The endpoint lists no models",
+        "noModel": "No model is chosen to test with.",
+        "transcribed": "A test clip was transcribed with {{model}}",
+        "diarized": "A test clip was analysed for speakers ({{turns}} turns)",
+        "chatAnswered": "{{model}} answered a test question",
+        "sdpAnswered": "The bridge answered a test offer with SDP",
+        "keyIssued": "OpenAI issued a short-lived key for {{model}} (not shown)",
+        "signedRoundTrip": "A test file was uploaded, read back and deleted through signed URLs in bucket {{bucket}}",
+        "serverRoundTrip": "A test file was written, read back and deleted by the server in bucket {{bucket}}",
+        "signedUrlsUnreachable": "This server cannot reach the address of the signed URLs; browsers may still reach it",
+        "invalidAnswer": {
+          "transcription": "The answer was no transcription.",
+          "diarization": "The answer held no speaker turns.",
+          "chat": "The answer was no chat completion.",
+          "sdpAnswer": "The answer held no SDP answer.",
+          "clientSecret": "The answer held no short-lived key.",
+          "storedContent": "The file read back differs from the one stored."
+        }
       }
     },
     "testTargets": {
