@@ -6,7 +6,7 @@ import { TRANSCRIPTION_TITLE_MAX } from '@justcampus/shared'
 import { toast } from '@/lib/toast'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { FileRow } from './file-row'
-import { Notice } from './notice'
+import { Notice } from '../notice'
 import { groupLocked, type FilePosition, type QueueGroup, type QueueState } from './queue'
 import { useUpload } from './use-upload'
 

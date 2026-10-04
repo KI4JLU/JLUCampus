@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { InfoIcon, TriangleAlertIcon } from 'lucide-react'
+import { CircleAlertIcon, InfoIcon, TriangleAlertIcon } from 'lucide-react'
 import { Badge, Card, CardContent } from '@ki4jlu/design-system'
 import { cn } from '@/lib/utils'
 
@@ -9,7 +9,7 @@ export interface NoticeProps {
   tone: NoticeTone
   /** A short line in the tone's colour; without one the message takes its place. */
   title?: string
-  children: ReactNode
+  children?: ReactNode
   /** A button beside the message, e.g. "Erneut versuchen". */
   action?: ReactNode
   /** Inside a card or panel already: without a card of its own. */
@@ -30,7 +30,7 @@ export function Notice({
   inline = false,
   className
 }: NoticeProps): React.JSX.Element {
-  const Icon = tone === 'info' ? InfoIcon : TriangleAlertIcon
+  const Icon = tone === 'info' ? InfoIcon : tone === 'error' ? CircleAlertIcon : TriangleAlertIcon
   const role = tone === 'error' ? 'alert' : tone === 'warning' ? 'status' : undefined
   const content = (
     <>
@@ -39,7 +39,7 @@ export function Notice({
           <Icon aria-hidden="true" className="size-4" />
           {title ?? children}
         </Badge>
-        {title ? <div>{children}</div> : null}
+        {title && children ? <div>{children}</div> : null}
       </div>
       {action}
     </>

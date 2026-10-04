@@ -4,6 +4,5 @@
  * T-16), and the upload settings (T-09). `UploadProvider` holds the queue for the whole page.
  */
 export { UploadProvider } from './context'
-export { Notice } from './notice'
 export { UploadSettings } from './upload-settings'
 export { UploadView } from './upload-view'

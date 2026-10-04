@@ -12,7 +12,8 @@ import { HistorySection } from './history'
 import { LiveSettings, LiveView } from './live'
 import { RecordingProvider, RecordingSettings, RecordView } from './recording'
 import { ResultTools, ResultView } from './result'
-import { Notice, UploadProvider, UploadSettings, UploadView } from './upload'
+import { Notice } from './notice'
+import { UploadProvider, UploadSettings, UploadView } from './upload'
 import { useTranscriptionWorkspace } from './use-workspace'
 import { TranscriptionWorkspaceProvider } from './workspace'
 
@@ -79,11 +80,9 @@ function TranscriptionLayout(): React.JSX.Element {
           />
         ) : null}
         {notSetUp ? (
-          <Notice
-            tone="warning"
-            title={t('transcription.common.notSetUpTitle')}
-            description={t('transcription.common.notSetUpDescription')}
-          />
+          <Notice tone="warning" title={t('transcription.common.notSetUpTitle')}>
+            {t('transcription.common.notSetUpDescription')}
+          </Notice>
         ) : null}
         <WorkArea />
         <PageSidePanel

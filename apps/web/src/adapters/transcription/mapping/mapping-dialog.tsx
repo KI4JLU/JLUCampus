@@ -30,7 +30,7 @@ import {
   TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
 } from '@justcampus/shared'
 import { useJobAudioUrl } from '../api'
-import { Notice } from '../upload/notice'
+import { Notice } from '../notice'
 import { findFile, type QueueFile } from '../upload/queue'
 import { useQueueState, useUpload } from '../upload/use-upload'
 import { ColorPicker } from './color-picker'
