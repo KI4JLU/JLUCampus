@@ -421,7 +421,7 @@ function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Ele
       ) : (
         <>
           <Card>
-            <CardContent className="flex flex-col gap-stack-md">
+            <CardContent className="flex flex-col gap-stack-md pt-6">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="m-0">
                   {`${t('transcription.result.aiTranscriptLabel')} | ${

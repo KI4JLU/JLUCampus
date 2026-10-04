@@ -89,7 +89,7 @@ function TranscriptionLayout(): React.JSX.Element {
           label={t('transcription.common.settings')}
           fallback={
             <Card>
-              <CardContent className="flex flex-col gap-stack-lg">
+              <CardContent className="flex flex-col gap-stack-lg pt-6">
                 <SidePanelContent />
               </CardContent>
             </Card>

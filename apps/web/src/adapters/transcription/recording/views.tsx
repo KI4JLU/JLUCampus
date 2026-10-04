@@ -228,7 +228,7 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
 
   return (
     <Card>
-      <CardContent className="flex flex-wrap items-center justify-between gap-stack-md">
+      <CardContent className="flex flex-wrap items-center justify-between gap-stack-md pt-6">
         <div className="flex flex-wrap items-center gap-stack-sm">
           <Button
             type="button"

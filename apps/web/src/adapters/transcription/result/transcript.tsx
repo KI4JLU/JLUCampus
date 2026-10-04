@@ -250,7 +250,7 @@ export function Transcript({
     // No segments: the whole text under a default person (T-25).
     return (
       <Card>
-        <CardContent className="flex flex-col gap-stack-sm">
+        <CardContent className="flex flex-col gap-stack-sm pt-6">
           <div className="flex items-center gap-2">
             <SpeakerDot colorId={1} />
             <span>{t('transcription.result.defaultPerson')}</span>

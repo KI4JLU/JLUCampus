@@ -102,7 +102,7 @@ function LiveTranscriptPanel(): React.JSX.Element {
         appearance.inverted && 'bg-inverse-surface text-inverse-on-surface'
       )}
     >
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-stack-md">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-stack-md pt-6">
         <div className="flex justify-end">
           <Tooltip>
             <TooltipTrigger asChild>
