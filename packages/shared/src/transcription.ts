@@ -1308,12 +1308,25 @@ export type TranscriptionConnectionTestRequest = z.infer<
   typeof transcriptionConnectionTestRequestSchema
 >
 
+/**
+ * What the server found itself, for the web to say in the admin's language: the number of models
+ * listed, a chosen model the endpoint does not list, an upstream not set up, a reachable bucket.
+ */
+export const transcriptionConnectionFindingSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('models'), count: z.number().int().min(0) }),
+  z.object({ kind: z.literal('modelMissing'), model: z.string() }),
+  z.object({ kind: z.literal('notSetUp') }),
+  z.object({ kind: z.literal('bucketReachable'), bucket: z.string() })
+])
+export type TranscriptionConnectionFinding = z.infer<typeof transcriptionConnectionFindingSchema>
+
 export const transcriptionConnectionTestSchema = z.object({
   ok: z.boolean(),
   /** The upstream's HTTP status, if it answered. */
   status: z.number().int().nullable(),
   latencyMs: z.number().int().min(0).nullable(),
-  /** Safe detail for the admin, never a credential. */
+  finding: transcriptionConnectionFindingSchema.nullable(),
+  /** The upstream's own detail, e.g. its error body; never a credential. */
   message: z.string().nullable()
 })
 export type TranscriptionConnectionTest = z.infer<typeof transcriptionConnectionTestSchema>

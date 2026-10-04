@@ -152,11 +152,13 @@ describe('connection tests', () => {
   it('checks speech and chat endpoints and the chosen model', async () => {
     expect(await testConnection({ target: 'asr' }, context())).toMatchObject({
       ok: true,
-      status: 200
+      status: 200,
+      finding: { kind: 'models', count: 2 },
+      message: null
     })
     expect(await testConnection({ target: 'asr', model: 'other' }, context())).toMatchObject({
       ok: false,
-      message: 'The endpoint does not list the model other'
+      finding: { kind: 'modelMissing', model: 'other' }
     })
     expect(await testConnection({ target: 'llm', model: 'mock-chat' }, context())).toMatchObject({
       ok: true
@@ -171,14 +173,14 @@ describe('connection tests', () => {
     expect(openai).toMatchObject({ ok: true, status: 200, message: null })
     expect(JSON.stringify(openai)).not.toMatch(/ek_mock|sk-openai/)
     const typedKeyOnly = await testConnection({ target: 'realtimeOpenai', apiKey: null }, context())
-    expect(typedKeyOnly).toMatchObject({ ok: false, message: 'The OpenAI key is not set up' })
+    expect(typedKeyOnly).toMatchObject({ ok: false, finding: { kind: 'notSetUp' } })
   })
 
   it('reports what is not set up, and storage without a bucket', async () => {
     expect(await testConnection({ target: 'diarization' }, context())).toMatchObject({
       ok: false,
       status: null,
-      message: 'The diarisation endpoint is not set up'
+      finding: { kind: 'notSetUp' }
     })
     expect(await testConnection({ target: 'storage' }, context())).toMatchObject({ ok: false })
   })

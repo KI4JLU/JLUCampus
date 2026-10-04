@@ -1162,6 +1162,9 @@ function ConnectionTest({
       result.latencyMs !== null
         ? t('transcription.recording.admin.test.latency', { ms: result.latencyMs })
         : null,
+      result.finding
+        ? t(`transcription.recording.admin.test.findings.${result.finding.kind}`, result.finding)
+        : null,
       result.message
     ]
       .filter(Boolean)

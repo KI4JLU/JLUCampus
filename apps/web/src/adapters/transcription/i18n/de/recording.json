@@ -254,7 +254,14 @@
       "failed": "Verbindung fehlgeschlagen.",
       "status": "HTTP {{status}}",
       "latency": "{{ms}} ms",
-      "error": "Der Test konnte nicht ausgeführt werden."
+      "error": "Der Test konnte nicht ausgeführt werden.",
+      "findings": {
+        "models_one": "{{count}} Modell",
+        "models_other": "{{count}} Modelle",
+        "modelMissing": "Der Endpunkt führt das Modell {{model}} nicht.",
+        "notSetUp": "Noch nicht eingerichtet.",
+        "bucketReachable": "Bucket {{bucket}} erreichbar"
+      }
     },
     "testTargets": {
       "asr": "Spracherkennung testen",

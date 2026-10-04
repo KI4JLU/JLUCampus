@@ -1,4 +1,5 @@
 import type {
+  TranscriptionConnectionFinding,
   TranscriptionConnectionTest,
   TranscriptionConnectionTestRequest,
   TranscriptionModel
@@ -92,6 +93,7 @@ const TEST_TIMEOUT_MS = 15_000
 interface Probe {
   status: number | null
   ok: boolean
+  finding?: TranscriptionConnectionFinding
   message: string | null
 }
 
@@ -118,9 +120,9 @@ async function probeModels(
 ): Promise<Probe> {
   const models = await discoverModels(kind, baseUrl, apiKey, signal)
   if (model && !models.some((candidate) => candidate.id === model)) {
-    return { status: 200, ok: false, message: `The endpoint does not list the model ${model}` }
+    return { status: 200, ok: false, finding: { kind: 'modelMissing', model }, message: null }
   }
-  return { status: 200, ok: true, message: `${models.length} models` }
+  return { status: 200, ok: true, finding: { kind: 'models', count: models.length }, message: null }
 }
 
 export interface ConnectionContext {
@@ -143,32 +145,34 @@ export async function testConnection(
     ok: result.ok,
     status: result.status,
     latencyMs: Date.now() - started,
+    finding: result.finding ?? null,
     message: result.message === null ? null : safeMessage(result.message, keys)
   })
-  const missing = (what: string): TranscriptionConnectionTest => ({
+  const notSetUp: TranscriptionConnectionTest = {
     ok: false,
     status: null,
     latencyMs: null,
-    message: `${what} is not set up`
-  })
+    finding: { kind: 'notSetUp' },
+    message: null
+  }
 
   try {
     switch (input.target) {
       case 'asr': {
         const url = input.url ?? config.asrBaseUrl
-        if (!url) return missing('The speech endpoint')
+        if (!url) return notSetUp
         const model = input.model ?? config.defaultAsrModel ?? config.asrModels[0]?.id ?? null
         return finish(await probeModels(url, keyOf(secrets.apiKey), model, 'asr', signal))
       }
       case 'llm': {
         const url = input.url ?? config.llmBaseUrl
-        if (!url) return missing('The chat endpoint')
+        if (!url) return notSetUp
         const model = input.model ?? null
         return finish(await probeModels(url, keyOf(secrets.llmApiKey), model, 'llm', signal))
       }
       case 'diarization': {
         const url = input.url ?? config.diarizationUrl
-        if (!url) return missing('The diarisation endpoint')
+        if (!url) return notSetUp
         const form = new FormData()
         form.set('file', new Blob([silentWav()], { type: 'audio/wav' }), 'test.wav')
         const model = input.model ?? config.diarizationModel
@@ -187,7 +191,7 @@ export async function testConnection(
       }
       case 'realtimeOnprem': {
         const url = input.url ?? config.onpremSignalingUrl
-        if (!url) return missing('The signaling bridge')
+        if (!url) return notSetUp
         return finish(
           await probe(
             url,
@@ -202,7 +206,7 @@ export async function testConnection(
       }
       case 'realtimeOpenai': {
         const apiKey = keyOf(secrets.openaiRealtimeApiKey)
-        if (!apiKey) return missing('The OpenAI key')
+        if (!apiKey) return notSetUp
         const base = input.url ?? config.openaiRealtimeUrl
         const { clientSecretsUrl } = openaiRealtimeEndpoints({ ...config, openaiRealtimeUrl: base })
         const result = await probe(
@@ -218,9 +222,14 @@ export async function testConnection(
         return finish(result)
       }
       case 'storage': {
-        if (!storage) return missing('Object storage')
+        if (!storage) return notSetUp
         await storage.ping(signal)
-        return finish({ status: null, ok: true, message: `Bucket ${storage.bucket} is reachable` })
+        return finish({
+          status: null,
+          ok: true,
+          finding: { kind: 'bucketReachable', bucket: storage.bucket },
+          message: null
+        })
       }
     }
   } catch (error) {
