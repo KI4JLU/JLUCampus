@@ -192,7 +192,7 @@
     },
     "maxFilesPerGroup": {
       "label": "Files per transcript",
-      "hint": "Empty: up to {{max}}."
+      "hint": "Empty: no limit."
     },
     "maxActiveJobsPerUser": {
       "label": "Running jobs per person",

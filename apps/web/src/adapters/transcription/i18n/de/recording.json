@@ -192,7 +192,7 @@
     },
     "maxFilesPerGroup": {
       "label": "Dateien je Transkript",
-      "hint": "Leer: bis zu {{max}}."
+      "hint": "Leer: keine Grenze."
     },
     "maxActiveJobsPerUser": {
       "label": "Laufende Aufträge je Person",

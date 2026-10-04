@@ -404,7 +404,6 @@ export function TranscriptionConfigFields({
           <NumberField
             id={id('max-files-per-group')}
             name="maxFilesPerGroup"
-            hintValues={{ max: TRANSCRIPTION_GROUP_FILES_MAX }}
             value={config.maxFilesPerGroup}
             min={1}
             max={TRANSCRIPTION_GROUP_FILES_MAX}

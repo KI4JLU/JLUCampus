@@ -254,6 +254,7 @@ export function GlobalPlayer({
         source={media?.url ?? null}
         name={name}
         size={source?.size || undefined}
+        jobId={source?.jobId ?? null}
         segments={timeline}
         compact
         onTimeUpdate={follow}
