@@ -38,8 +38,9 @@ devDependency `werift`): it takes the browser's audio and sends a fixed German s
 `oai-events` data channel, one sentence per three seconds of audio, word by word as
 `conversation.item.input_audio_transcription.delta` and then `…completed`. On-prem stop
 (`input_audio_buffer.commit`) finishes the current sentence at once. Both live modes can so be
-tried end to end in the browser. Offers without ICE credentials (the admin connection test's) get
-a signaling-only stub answer.
+tried end to end in the browser. Offers the peer cannot negotiate are refused with 400; peers that
+never connect close after 30 s. Only without `werift` installed does the mock fall back to a
+signaling-only stub answer.
 
 `http.mjs` holds the helpers they share. Tests can start the mock on a free port with
 `startMock(0)` from `server.mjs`.
