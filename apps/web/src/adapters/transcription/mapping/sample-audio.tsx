@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { mediaUrlExpiresSoon, useJobAudioUrl } from '../api'
+import { playExclusively } from '../audio'
 import type { QueueFile } from '../upload/queue'
 
 /**
@@ -171,6 +172,7 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
         ref={audioRef}
         hidden
         preload="metadata"
+        onPlay={(event) => playExclusively(event.currentTarget)}
         onPause={() => {
           range.current = null
           setPlaying(null)

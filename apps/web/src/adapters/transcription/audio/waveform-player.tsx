@@ -18,6 +18,7 @@ import {
 } from '@justcampus/shared'
 import { cn } from '@/lib/utils'
 import { drawWaveform, type WaveformColors } from './draw'
+import { playExclusively } from './exclusive'
 import {
   blobWaveform,
   formatMegabytes,
@@ -390,7 +391,8 @@ export function WaveformPlayer({
           setTime(event.currentTarget.currentTime)
           onTimeUpdate?.(event.currentTarget.currentTime)
         }}
-        onPlay={() => {
+        onPlay={(event) => {
+          playExclusively(event.currentTarget)
           setPlaying(true)
           onPlayingChange?.(true)
         }}

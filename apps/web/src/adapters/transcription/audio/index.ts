@@ -16,3 +16,4 @@ export {
   urlWaveform,
   type DecodedWaveform
 } from './peaks'
+export { playExclusively } from './exclusive'
