@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { TRANSCRIPTION_EMPTY_SPEAKER_TEXT } from '@justcampus/shared'
+import { TRANSCRIPTION_EMPTY_SPEAKER_TEXT, type TranscriptionSegment } from '@justcampus/shared'
 import { buildSpeakerBlocks, type SpeakerBlock } from './blocks'
 import {
   applyOptimizedSpeakers,
   cleanupOrphanedPlaceholders,
+  committedText,
+  draftSelection,
   insertOptions,
   insertSpeakerBlock,
   moveSelection,
@@ -20,6 +22,7 @@ import {
   stepTextPoint,
   updateSegmentText
 } from './edit'
+import { redactSelection } from './redaction'
 import { seg } from './test-fixtures'
 
 const PLACEHOLDER = TRANSCRIPTION_EMPTY_SPEAKER_TEXT
@@ -48,6 +51,56 @@ describe('updateSegmentText', () => {
   it('changes nothing for the same text or a missing segment', () => {
     expect(updateSegmentText(segments, 0, 'Hallo Welt')).toBeNull()
     expect(updateSegmentText(segments, 3, 'x')).toBeNull()
+  })
+})
+
+describe('draftSelection', () => {
+  const pasted = 'Alpha\nBeta Gamma'
+  /** The editor's draft committed, as the transcript does before a selection action. */
+  const committed = (draft: string): TranscriptionSegment[] =>
+    updateSegmentText([seg(0, 0, 4, 'Alpha Gamma', 'Anna'), seg(1, 4, 6, 'Ja.', 'Ben')], 0, draft)!
+
+  it('takes a selection made after a pasted line break into the saved text', () => {
+    const segments = committed(pasted)
+    expect(segments[0]!.text).toBe('AlphaBeta Gamma')
+    // "Beta" at 6..10 in the draft.
+    const bounds = draftSelection(segments, 0, pasted, 6, 10)
+    expect(bounds).toEqual({ start: { segment: 0, offset: 5 }, end: { segment: 0, offset: 9 } })
+    const redacted = redactSelection(segments, bounds)!
+    expect(redacted[0]!.redactions).toEqual([{ start: 5, end: 9 }])
+    expect(segments[0]!.text.slice(5, 9)).toBe('Beta')
+    // Moving it to the next speaker moves exactly "Beta"; the rest stays with Anna.
+    const moved = moveSelection(segments, blocksOf(segments), bounds, 'down')!
+    expect(moved.map((segment) => [segment.text, segment.speaker])).toEqual([
+      ['Alpha', 'Anna'],
+      ['Beta', 'Ben'],
+      [' Gamma', 'Anna'],
+      ['Ja.', 'Ben']
+    ])
+  })
+
+  it('counts every removed line break and keeps selections without any as they are', () => {
+    const draft = 'a\r\nb\n\nc d'
+    const segments = committed(draft)
+    expect(segments[0]!.text).toBe('abc d')
+    expect(draftSelection(segments, 0, draft, 6, 9)).toEqual({
+      start: { segment: 0, offset: 2 },
+      end: { segment: 0, offset: 5 }
+    })
+    const plain = [seg(0, 0, 1, 'Hallo Welt')]
+    expect(draftSelection(plain, 0, 'Hallo Welt', 6, 10)).toEqual({
+      start: { segment: 0, offset: 6 },
+      end: { segment: 0, offset: 10 }
+    })
+  })
+
+  it('refuses a selection of line breaks only, an emptied draft or a changed segment', () => {
+    const segments = committed(pasted)
+    expect(draftSelection(segments, 0, pasted, 5, 6)).toBeNull()
+    expect(committedText(' \n ')).toBe(PLACEHOLDER)
+    expect(draftSelection([seg(0, 0, 1, PLACEHOLDER)], 0, ' \n ', 0, 3)).toBeNull()
+    expect(draftSelection(segments, 0, 'Alpha\nBeta', 6, 10)).toBeNull()
+    expect(draftSelection(segments, 4, pasted, 6, 10)).toBeNull()
   })
 })
 

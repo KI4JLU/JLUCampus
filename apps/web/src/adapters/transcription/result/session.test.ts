@@ -7,6 +7,14 @@ import {
 import { ApiRequestError } from '@/lib/api'
 import { reassignBlock, updateSegmentText } from '../segments'
 import { seg } from '../segments/test-fixtures'
+import {
+  changeLocalHistory,
+  localHistoryKey,
+  localRecord,
+  readLocalHistory,
+  updateRecord,
+  writeLocalHistory
+} from '../history/local-store'
 import { stableStringify } from './compare'
 import { ResultSession, type SessionDeps } from './session'
 
@@ -404,13 +412,97 @@ describe('text corrections', () => {
 describe('local transcripts', () => {
   it('stores edits locally instead of sending them', () => {
     const server = fakeServer(transcript({ id: 'local-1' }))
-    const saveLocal = vi.fn()
+    const saveLocal = vi.fn<(changed: TranscriptionTranscript) => boolean>(() => true)
     const session = new ResultSession(server.stored, { ...server.deps, saveLocal }, true)
     rename(session, 1, 'Cem')
     expect(server.patches).toEqual([])
     expect(saveLocal).toHaveBeenCalledTimes(1)
-    expect(saveLocal.mock.calls[0]![0].segments[1].speaker).toBe('Cem')
+    expect(saveLocal.mock.calls[0]![0].segments[1]!.speaker).toBe('Cem')
     expect(session.getState().saveStatus).toBe('saved')
+    expect(session.hasUnsavedChanges()).toBe(false)
+  })
+
+  describe('when the browser storage refuses the change', () => {
+    const key = localHistoryKey('module', 'alice')
+    const map = new Map<string, string>()
+    let full = false
+
+    beforeEach(() => {
+      full = false
+      map.clear()
+      vi.stubGlobal('window', {
+        localStorage: {
+          get length() {
+            return map.size
+          },
+          key: (index: number) => [...map.keys()][index] ?? null,
+          getItem: (name: string) => map.get(name) ?? null,
+          setItem: (name: string, value: string) => {
+            if (full) throw new DOMException('full', 'QuotaExceededError')
+            map.set(name, value)
+          },
+          removeItem: (name: string) => void map.delete(name)
+        }
+      })
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    /** The local session as the result view opens it, on the production storage. */
+    function localSession(): ResultSession {
+      const stored = transcript({ id: 'local-1', title: 'Group' })
+      writeLocalHistory(key, [localRecord(stored)])
+      const server = fakeServer(stored)
+      return new ResultSession(
+        stored,
+        {
+          ...server.deps,
+          saveLocal: (changed) =>
+            changeLocalHistory(key, (records) =>
+              updateRecord(records, changed.id, (record) => ({
+                ...record,
+                title: changed.title,
+                updatedAt: changed.updatedAt,
+                transcript: changed
+              }))
+            )
+        },
+        true
+      )
+    }
+
+    it('keeps a title unsaved and retries it', async () => {
+      const session = localSession()
+      full = true
+      expect(await session.setTitle('Lost edit')).toBe(false)
+      expect(session.getState().transcript.title).toBe('Lost edit')
+      expect(session.getState().saveStatus).toBe('failed')
+      expect(session.hasUnsavedChanges()).toBe(true)
+      expect(readLocalHistory(key)[0]!.title).toBe('Group')
+      // Room again: the retry stores the title too.
+      full = false
+      session.retry()
+      expect(session.getState().saveStatus).toBe('saved')
+      expect(session.hasUnsavedChanges()).toBe(false)
+      expect(readLocalHistory(key)[0]!.transcript!.title).toBe('Lost edit')
+    })
+
+    it('keeps edits and the subtitle unsaved until a later write succeeds', async () => {
+      const session = localSession()
+      full = true
+      rename(session, 1, 'Cem')
+      expect(await session.setSubtitle('Notiz')).toBe(false)
+      expect(session.getState().saveStatus).toBe('failed')
+      expect(session.hasUnsavedChanges()).toBe(true)
+      expect(readLocalHistory(key)[0]!.transcript!.segments[1]!.speaker).toBe('Ben')
+      full = false
+      rename(session, 0, 'Dora')
+      expect(session.getState().saveStatus).toBe('saved')
+      const kept = readLocalHistory(key)[0]!.transcript!
+      expect(kept.segments.map((segment) => segment.speaker)).toEqual(['Dora', 'Cem'])
+      expect(kept.subtitle).toBe('Notiz')
+    })
   })
 })
 

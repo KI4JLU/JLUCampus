@@ -371,6 +371,91 @@ describe('saves that did not reach the server', () => {
     expect(last.replaced).toEqual([{ localId: records[0]!.id, transcriptId: server().id }])
   })
 
+  describe('failed saves of restored groups', () => {
+    const second = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const both: TranscriptionTranscriptCreate = {
+      ...input,
+      jobIds: [...input.jobIds, second],
+      sourceFiles: [
+        ...input.sourceFiles,
+        { ...input.sourceFiles[0]!, name: 'b.wav', jobId: second }
+      ]
+    }
+    /** Group B after a reload: one restored file, another key. */
+    const onlySecond: TranscriptionTranscriptCreate = {
+      ...afterReload,
+      idempotencyKey: '1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e',
+      title: 'b.wav',
+      jobIds: [second],
+      sourceFiles: [{ ...input.sourceFiles[0]!, name: 'b.wav', jobId: second }]
+    }
+    const fail = (
+      save: TranscriptionTranscriptCreate
+    ): { input: TranscriptionTranscriptCreate; error: Error } => ({
+      input: save,
+      error: new Error('x')
+    })
+
+    it('adds no copy when each restored file fails again, and drops it once both are saved', () => {
+      const { records } = recordSaveOutcome([], fail(both), now)
+      const first = recordSaveOutcome(reload(records), fail(afterReload), now)
+      expect(first.records).toEqual(records)
+      expect(first.replaced).toEqual([])
+      const second_ = recordSaveOutcome(first.records, fail(onlySecond), now)
+      expect(second_.records).toEqual(records)
+      // Saved one by one, the copy waits for the other file, then goes.
+      const savedA = recordSaveOutcome(
+        second_.records,
+        { input: afterReload, transcript: server('a.wav') },
+        now
+      )
+      expect(savedA.records[0]).toMatchObject({ id: records[0]!.id, pendingJobIds: [second] })
+      // The other file failing once more still adds nothing.
+      expect(recordSaveOutcome(savedA.records, fail(onlySecond), now).records).toEqual(
+        savedA.records
+      )
+      const savedB = recordSaveOutcome(
+        savedA.records,
+        { input: onlySecond, transcript: server('b.wav') },
+        now
+      )
+      expect(savedB.records).toEqual([])
+      expect(savedB.replaced).toEqual([{ localId: records[0]!.id, transcriptId: server().id }])
+    })
+
+    it('keeps an edited copy as the one holding its jobs', () => {
+      const { records } = recordSaveOutcome([], fail(both), now)
+      const renamed = renameLocalRecord(records, records[0]!.id, 'Interview', new Date(1))
+      expect(recordSaveOutcome(renamed, fail(afterReload), now).records).toEqual(renamed)
+    })
+
+    it('replaces unedited copies of fewer files by the copy of a larger group', () => {
+      const a = recordSaveOutcome([], fail(afterReload), now).records
+      const ab = recordSaveOutcome(a, fail(both), now)
+      expect(ab.records.map((record) => record.id)).toEqual([localIdFor(both.idempotencyKey)])
+      expect(ab.records[0]!.pendingJobIds).toEqual(both.jobIds)
+      expect(ab.replaced).toEqual([
+        { localId: a[0]!.id, transcriptId: localIdFor(both.idempotencyKey) }
+      ])
+      // An edited copy stays next to it.
+      const edited = renameLocalRecord(a, a[0]!.id, 'Meine Fassung', new Date(1))
+      const kept = recordSaveOutcome(edited, fail(both), now)
+      expect(kept.records.map((record) => record.id)).toEqual([
+        localIdFor(both.idempotencyKey),
+        a[0]!.id
+      ])
+      expect(kept.replaced).toEqual([])
+    })
+
+    it('adds a copy for files of separate failed groups saved together', () => {
+      const a = recordSaveOutcome([], fail(afterReload), now).records
+      const b = recordSaveOutcome(a, fail(onlySecond), now).records
+      expect(b).toHaveLength(2)
+      // Both files are already held: their combined save adds nothing.
+      expect(recordSaveOutcome(b, fail(both), now).records).toEqual(b)
+    })
+  })
+
   it('counts a rename from the history as a change and moves the copy up', () => {
     const { records } = recordSaveOutcome([], failed, now)
     const later = new Date('2026-10-04T12:05:00.000Z')
@@ -535,6 +620,63 @@ describe('carryLocalTitle', () => {
     expect(result.outcome).toBe('merged')
     expect(result.saved?.revision).toBe(5)
     expect(readLocalHistory(key)).toEqual([])
+  })
+
+  it('reports a write the storage refused and keeps the stored records', () => {
+    stubStorage()
+    writeLocalHistory(key, [copy])
+    const quota = (): never => {
+      throw new DOMException('full', 'QuotaExceededError')
+    }
+    const server: LocalHistoryRecord = {
+      id: 's-2',
+      title: 'Server',
+      createdAt: null,
+      updatedAt: null,
+      local: false,
+      transcript: detail('s-2')
+    }
+    const renamed = renameLocalRecord([copy], copy.id, 'Neu', new Date(1))
+    // Without room even after dropping the server copies, nothing is reported as stored.
+    vi.stubGlobal('window', {
+      localStorage: { getItem: (name: string) => map.get(name) ?? null, setItem: quota }
+    })
+    expect(writeLocalHistory(key, [server, ...renamed])).toBe(false)
+    expect(readLocalHistory(key)).toEqual([copy])
+    // Room for the local copy once the server copy goes: stored.
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: (name: string) => map.get(name) ?? null,
+        setItem: (name: string, value: string) => {
+          if (value.includes('"transcript":{"id":"s-2"')) quota()
+          map.set(name, value)
+        }
+      }
+    })
+    expect(writeLocalHistory(key, [server, ...renamed])).toBe(true)
+    expect(readLocalHistory(key).map((record) => record.title)).toEqual(['Server', 'Neu'])
+    expect(serverCopy(readLocalHistory(key), 's-2')).toBeNull()
+  })
+
+  it('keeps the copy when the storage refuses to drop it after the title arrived', async () => {
+    stubStorage()
+    writeLocalHistory(key, [copy])
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: (name: string) => map.get(name) ?? null,
+        setItem: () => {
+          throw new DOMException('full', 'QuotaExceededError')
+        },
+        removeItem: () => {
+          throw new DOMException('blocked', 'SecurityError')
+        }
+      }
+    })
+    const get = vi.fn(async () => detail('s-1', 4))
+    const patch = vi.fn(async () => ({ ...detail('s-1', 5), title: 'Interview Meier' }))
+    const result = await carryLocalTitle(key, merge, { get, patch })
+    expect(result.outcome).toBe('kept')
+    expect(readLocalHistory(key)).toEqual([copy])
   })
 
   it('keeps the copy on its own when the server refuses', async () => {

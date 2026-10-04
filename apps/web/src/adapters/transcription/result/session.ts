@@ -76,8 +76,8 @@ export interface SessionDeps {
   ) => Promise<TranscriptionSpeakerOptimization>
   /** Called with every copy the server confirmed, e.g. to update the query cache. */
   onServerCopy?: (transcript: TranscriptionTranscript) => void
-  /** Stores a transcript only this browser has. */
-  saveLocal?: (transcript: TranscriptionTranscript) => void
+  /** Stores a transcript only this browser has; `false` when the browser did not take it. */
+  saveLocal?: (transcript: TranscriptionTranscript) => boolean
 }
 
 /** A transcript saved this long ago may still get its AI subtitle; older ones are not polled. */
@@ -269,7 +269,6 @@ export class ResultSession {
   private queueContentSave(): void {
     this.dirty = true
     if (this.state.local) {
-      this.dirty = false
       this.saveLocally()
       return
     }
@@ -417,10 +416,8 @@ export class ResultSession {
     if (!next || next === previous) return true
     this.titleTouched = true
     this.setTranscript({ title: next })
-    if (this.state.local) {
-      this.saveLocally()
-      return true
-    }
+    // Not stored locally, the title stays shown and unsaved until a retry stores it.
+    if (this.state.local) return this.saveLocally()
     return this.enqueue(async () => {
       try {
         const saved = await this.patchDetails({ title: next })
@@ -441,10 +438,7 @@ export class ResultSession {
     this.subtitleTouched = true
     this.set({ awaitingSubtitle: false })
     this.setTranscript({ subtitle: next || null, subtitleSource: next ? 'manual' : null })
-    if (this.state.local) {
-      this.saveLocally()
-      return true
-    }
+    if (this.state.local) return this.saveLocally()
     return this.enqueue(async () => {
       try {
         const saved = await this.patchDetails({ subtitle: next })
@@ -573,17 +567,27 @@ export class ResultSession {
   // Local transcripts (T-39)
   // -------------------------------------------------------------------------
 
-  private saveLocally(): void {
+  /**
+   * Stores the whole transcript, title and subtitle included, in this browser. When the browser
+   * does not take it (full or blocked storage) the edits stay here, unsaved: the save state says
+   * so, leaving asks first, and a retry stores everything again. `false` then.
+   */
+  private saveLocally(): boolean {
+    if (this.discarded) return true
     const { transcript, segments, speakerColors } = this.state
     const colors = buildSpeakerBlocks(segments, speakerColors).speakerColors
-    this.deps.saveLocal?.({
-      ...transcript,
-      segments,
-      speakerColors: colors,
-      text: buildTranscriptText(segments),
-      updatedAt: new Date().toISOString()
-    })
-    this.set({ saveStatus: 'saved', savedCount: this.state.savedCount + 1 })
+    const stored =
+      this.deps.saveLocal?.({
+        ...transcript,
+        segments,
+        speakerColors: colors,
+        text: buildTranscriptText(segments),
+        updatedAt: new Date().toISOString()
+      }) ?? false
+    this.dirty = !stored
+    if (stored) this.set({ saveStatus: 'saved', savedCount: this.state.savedCount + 1 })
+    else this.set({ saveStatus: 'failed' })
+    return stored
   }
 }
 

@@ -53,12 +53,14 @@ export async function carryLocalTitle(
   } catch {
     saved = null
   }
-  let outcome: TitleMergeOutcome = 'gone'
-  changeLocalHistory(key, (records) => {
+  let outcome = 'gone' as TitleMergeOutcome
+  const written = changeLocalHistory(key, (records) => {
     const settled = settleTitleMerge(records, merge, saved !== null)
     outcome = settled.outcome
     return settled.records
   })
+  // Storage that refused the change still holds the copy: it stays, not merged.
+  if (!written && outcome === 'merged') outcome = 'kept'
   return { outcome, saved }
 }
 
@@ -68,7 +70,8 @@ export async function carryLocalTitle(
  * after a reload. Once a save of the same jobs reached the server, also with another idempotency
  * key after a reload, an unchanged copy goes again and `onReplaced` hears of it; a copy the user
  * renamed gets its title carried to the server first, and one with other edits stays, with a
- * notice either way. `key` is the history's storage key, `null` while the user is not known.
+ * notice either way. When the browser does not take the copy either, the user is told. `key` is
+ * the history's storage key, `null` while the user is not known.
  */
 export function useLocalSaveFallback(
   key: string | null,
@@ -103,11 +106,20 @@ export function useLocalSaveFallback(
 
   const handle = useEffectEvent((key: string, outcome: TranscriptCreateOutcome): void => {
     let result: SaveReconciliation | null = null
-    changeLocalHistory(key, (records) => {
+    let adds = false
+    const written = changeLocalHistory(key, (records) => {
       const next = recordSaveOutcome(records, outcome, new Date())
       result = next
+      adds = next.records.some((record) => !records.includes(record))
       return next.records
     })
+    if (!written) {
+      // The history stays as it was; a save that also missed the server is in neither place.
+      if ('error' in outcome && adds) {
+        toast({ variant: 'error', title: t('transcription.result.localFallbackFailed') })
+      }
+      return
+    }
     if (!result) return
     const { replaced, merges, kept } = result as SaveReconciliation
     for (const { localId, transcriptId } of replaced) onReplaced(localId, transcriptId)

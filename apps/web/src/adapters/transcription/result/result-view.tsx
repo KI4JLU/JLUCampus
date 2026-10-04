@@ -220,8 +220,8 @@ function LocalResult({ id }: { id: string }): React.JSX.Element {
       get: notAvailable,
       generateSubtitle: notAvailable,
       optimize: (request) => optimizeSpeakers(request),
-      saveLocal: (changed) => {
-        if (!key) return
+      saveLocal: (changed) =>
+        key !== null &&
         changeLocalHistory(key, (stored) =>
           updateRecord(stored, changed.id, (record) => ({
             ...record,
@@ -230,7 +230,6 @@ function LocalResult({ id }: { id: string }): React.JSX.Element {
             transcript: changed
           }))
         )
-      }
     }),
     [key]
   )
@@ -393,7 +392,9 @@ function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Ele
             </Button>
           }
         >
-          {t('transcription.result.saveFailed')}
+          {state.local
+            ? t('transcription.result.localSaveFailed')
+            : t('transcription.result.saveFailed')}
         </Notice>
       ) : null}
       {state.saveStatus === 'conflict' ? (

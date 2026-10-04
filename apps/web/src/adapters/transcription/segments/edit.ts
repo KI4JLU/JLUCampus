@@ -38,11 +38,43 @@ export function updateSegmentText(
   if (!segment) return null
   const sanitized = sanitizeSegmentText(text)
   if (segment.text === sanitized) return null
-  const next = sanitized.trim() === '' ? TRANSCRIPTION_EMPTY_SPEAKER_TEXT : sanitized
+  const next = committedText(text)
   if (segment.text === next) return null
   const result = [...segments]
   result[index] = { ...segment, text: next, redactions: [] }
   return result
+}
+
+/** The text a correction stores for an editor's draft: without line breaks, or the placeholder. */
+export function committedText(draft: string): string {
+  const sanitized = sanitizeSegmentText(draft)
+  return sanitized.trim() === '' ? TRANSCRIPTION_EMPTY_SPEAKER_TEXT : sanitized
+}
+
+/**
+ * A selection made in the open editor (`start` to `end` of its `draft`), in the stored text of
+ * its segment once the draft is committed (T-27, T-31, T-33): the line breaks a commit removes
+ * no longer count. `null` when the segment no longer holds the committed draft, or nothing of the
+ * selection is left in it.
+ */
+export function draftSelection(
+  segments: readonly TranscriptionSegment[],
+  segmentIndex: number,
+  draft: string,
+  start: number,
+  end: number
+): SelectionBounds | null {
+  const text = committedText(draft)
+  if (segments[segmentIndex]?.text !== text || text === TRANSCRIPTION_EMPTY_SPEAKER_TEXT) {
+    return null
+  }
+  const committed = (offset: number): number =>
+    sanitizeSegmentText(draft.slice(0, Math.max(0, offset))).length
+  const from = committed(start)
+  const to = Math.min(committed(end), text.length)
+  return to > from
+    ? { start: { segment: segmentIndex, offset: from }, end: { segment: segmentIndex, offset: to } }
+    : null
 }
 
 export interface SpeakerChange {

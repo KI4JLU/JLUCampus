@@ -285,7 +285,10 @@ export interface TitleMerge {
 /** The history after a save of a new transcript, and what became of the local copies. */
 export interface SaveReconciliation {
   records: LocalHistoryRecord[]
-  /** Unedited copies that went, each with the server transcript now holding it. */
+  /**
+   * Unedited copies that went, each with the transcript now holding it: the server's after a
+   * save, the new local copy after a failed save of more jobs.
+   */
   replaced: { localId: string; transcriptId: string }[]
   /** Renamed copies whose content the server now holds: the title still has to go there. */
   merges: TitleMerge[]
@@ -295,10 +298,12 @@ export interface SaveReconciliation {
 
 /**
  * The records after a save of a new transcript (T-39). A failed one is kept as a transcript only
- * this browser has, once per idempotency key and once per set of jobs, so a retry after a reload
- * adds no second copy. Once a save carrying its jobs reached the server, the copy goes, whichever
- * key that save had; one the user changed meanwhile never goes silently: renamed only, its title
- * is to be carried to the server first (`merges`), else it stays as a copy of its own (`kept`).
+ * this browser has, unless every one of its jobs is already pending in a local copy (the same save
+ * again, or a retry after a reload, whose restored groups hold one file each); a new copy takes
+ * the place of unedited copies whose jobs it all holds. So a job waits in one unedited copy at
+ * most. Once a save carrying its jobs reached the server, the copy goes, whichever key that save
+ * had; one the user changed meanwhile never goes silently: renamed only, its title is to be
+ * carried to the server first (`merges`), else it stays as a copy of its own (`kept`).
  */
 export function recordSaveOutcome(
   records: readonly LocalHistoryRecord[],
@@ -311,12 +316,22 @@ export function recordSaveOutcome(
   const jobs = new Set(outcome.input.jobIds)
   const result: SaveReconciliation = { records: [], replaced: [], merges: [], kept: [] }
   if (!('transcript' in outcome)) {
-    const known = records.some(
-      (record) =>
-        record.id === id || (jobs.size > 0 && record.local && sameJobs(pendingJobsOf(record), jobs))
-    )
+    const pending = new Set(records.flatMap(pendingJobsOf))
+    const known =
+      records.some((record) => record.id === id) ||
+      (jobs.size > 0 && [...jobs].every((job) => pending.has(job)))
+    if (known) {
+      result.records = [...records]
+      return result
+    }
     const created = localRecord(localTranscriptFromCreate(outcome.input, now), [...jobs])
-    result.records = known ? [...records] : [created, ...records]
+    result.records.push(created)
+    for (const record of records) {
+      const held = pendingJobsOf(record)
+      if (held.length > 0 && !isLocallyEdited(record) && held.every((job) => jobs.has(job))) {
+        result.replaced.push({ localId: record.id, transcriptId: created.id })
+      } else result.records.push(record)
+    }
     return result
   }
   const saved = outcome.transcript
@@ -358,10 +373,6 @@ export function recordSaveOutcome(
     result.records.push({ ...record, pendingJobIds: [] })
   }
   return result
-}
-
-function sameJobs(a: readonly string[], b: ReadonlySet<string>): boolean {
-  return a.length === b.size && a.every((job) => b.has(job))
 }
 
 export type TitleMergeOutcome = 'merged' | 'kept' | 'gone'
@@ -466,24 +477,30 @@ export function readLocalHistory(key: string): LocalHistoryRecord[] {
 }
 
 /**
- * Stores the records (none removes the key) and tells every reader. When the storage is full the
- * kept copies of server transcripts go first; beyond that, full storage is ignored.
+ * Stores the records (none removes the key) and tells every reader; `false` when the browser did
+ * not take them (T-39). When the storage is full the kept copies of server transcripts go first,
+ * as the server still has them; what only this browser has is never dropped to make room.
  */
-export function writeLocalHistory(key: string, records: readonly LocalHistoryRecord[]): void {
+export function writeLocalHistory(key: string, records: readonly LocalHistoryRecord[]): boolean {
+  const stored = storage()
+  if (!stored) return false
   const attempts = [
     records,
     records.map((record) => (record.local ? record : { ...record, transcript: null }))
   ]
+  let written = false
   for (const attempt of attempts) {
     try {
-      if (attempt.length === 0) storage()?.removeItem(key)
-      else storage()?.setItem(key, JSON.stringify(attempt))
+      if (attempt.length === 0) stored.removeItem(key)
+      else stored.setItem(key, JSON.stringify(attempt))
+      written = true
       break
     } catch {
       // Quota or privacy mode: try without the copies; the server's list stays authoritative.
     }
   }
   listeners.forEach((listener) => listener())
+  return written
 }
 
 /** Removes every user's local history of every module, on sign-out, and tells every reader. */
@@ -504,12 +521,12 @@ export function clearLocalHistories(): void {
   listeners.forEach((listener) => listener())
 }
 
-/** Changes the records stored under a key. */
+/** Changes the records stored under a key; `false` when the browser did not take the change. */
 export function changeLocalHistory(
   key: string,
   change: (records: LocalHistoryRecord[]) => LocalHistoryRecord[]
-): void {
-  writeLocalHistory(key, change(readLocalHistory(key)))
+): boolean {
+  return writeLocalHistory(key, change(readLocalHistory(key)))
 }
 
 function subscribe(listener: () => void): () => void {

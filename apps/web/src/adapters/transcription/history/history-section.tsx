@@ -113,11 +113,14 @@ export function HistorySection(): React.JSX.Element {
     if (title === entry.title) return
     const open = session && session.id === entry.id ? session : null
     if (entry.local) {
-      if (open) await open.setTitle(title)
-      else if (key) {
-        // A change like any other edit: it moves up, and a later retry of the save keeps it.
-        changeLocalHistory(key, (stored) => renameLocalRecord(stored, entry.id, title, new Date()))
-      }
+      // A change like any other edit: it moves up, and a later retry of the save keeps it.
+      const stored = open
+        ? await open.setTitle(title)
+        : key !== null &&
+          changeLocalHistory(key, (records) =>
+            renameLocalRecord(records, entry.id, title, new Date())
+          )
+      if (!stored) toast({ variant: 'error', title: t('transcription.result.titleSaveFailed') })
       return
     }
     let saved = false

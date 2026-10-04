@@ -7,8 +7,10 @@ import {
   TRANSCRIPTION_SPEAKER_NAME_MAX,
   type TranscriptionSegment
 } from '@justcampus/shared'
+import { toast } from '@/lib/toast'
 import {
   blockCopyText,
+  draftSelection,
   formatTimestamp,
   isPlaceholder,
   moveSelection,
@@ -143,6 +145,18 @@ export function Transcript({
         },
         { undoable: false, cleanup: false }
       )
+      // A selection made in the editor now points into the saved text, without its line breaks.
+      if (selection?.draft !== undefined) {
+        const { start, end } = selection.bounds
+        const bounds = draftSelection(
+          session.getState().segments,
+          start.segment,
+          selection.draft,
+          start.offset,
+          end.offset
+        )
+        setSelection(bounds ? { block: selection.block, bounds } : null)
+      }
     }
     setEditing(null)
     if (refocus) {
@@ -169,19 +183,36 @@ export function Transcript({
     window.getSelection()?.removeAllRanges()
   }
 
-  /** Hides or moves the selected text (T-31, T-33), after saving an open editor's text. */
+  /**
+   * Hides or moves the selected text (T-31, T-33), after saving an open editor's text: a selection
+   * made there is taken over into the saved text, whose line breaks are gone. When nothing of it
+   * is left to act on, the user is told instead of the toolbar just closing.
+   */
   const selectionAction = (action: 'redact' | MoveDirection): void => {
     const current = selection
     if (!current) return
     if (editing !== null) commitEditing(false)
-    session.edit(({ segments: latest, blocks: shown }) => {
+    const applied = session.edit(({ segments: latest, blocks: shown }) => {
+      const { draft, bounds } = current
+      const target =
+        draft === undefined
+          ? bounds
+          : draftSelection(
+              latest,
+              bounds.start.segment,
+              draft,
+              bounds.start.offset,
+              bounds.end.offset
+            )
+      if (!target) return null
       const result =
         action === 'redact'
-          ? redactSelection(latest, current.bounds)
-          : moveSelection(latest, shown, current.bounds, action)
+          ? redactSelection(latest, target)
+          : moveSelection(latest, shown, target, action)
       return result ? { segments: result } : null
     })
     clearSelection()
+    if (!applied) toast({ variant: 'info', title: t('transcription.result.selectionNotApplied') })
   }
 
   /** Where the toolbar points: a concealed range, the open editor or the selection's first line. */
@@ -383,7 +414,7 @@ export function Transcript({
                             }}
                             onBlur={() => commitEditing(false)}
                             onSelect={(event) => {
-                              const { selectionStart, selectionEnd } = event.currentTarget
+                              const { selectionStart, selectionEnd, value } = event.currentTarget
                               setSelection(
                                 selectionEnd > selectionStart
                                   ? {
@@ -391,7 +422,8 @@ export function Transcript({
                                       bounds: {
                                         start: { segment: index, offset: selectionStart },
                                         end: { segment: index, offset: selectionEnd }
-                                      }
+                                      },
+                                      draft: value
                                     }
                                   : null
                               )
@@ -516,7 +548,8 @@ function sameSelection(a: BlockSelection | null, b: BlockSelection | null): bool
     a.bounds.start.segment === b.bounds.start.segment &&
     a.bounds.start.offset === b.bounds.start.offset &&
     a.bounds.end.segment === b.bounds.end.segment &&
-    a.bounds.end.offset === b.bounds.end.offset
+    a.bounds.end.offset === b.bounds.end.offset &&
+    a.draft === b.draft
   )
 }
 

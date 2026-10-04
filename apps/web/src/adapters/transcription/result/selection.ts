@@ -12,7 +12,9 @@ import type { SelectionBounds, SpeakerBlock, TextPoint } from '../segments'
 
 export interface BlockSelection {
   block: number
+  /** In the open editor: offsets into `draft`, its text then, not into the stored text. */
   bounds: SelectionBounds
+  draft?: string
 }
 
 function elementOf(node: Node): Element | null {
