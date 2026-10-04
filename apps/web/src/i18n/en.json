@@ -822,6 +822,10 @@
         "empty": "Nobody has signed in yet.",
         "noMatch": "No user matches “{{query}}”."
       },
+      "actions": {
+        "menu": "Actions for {{name}}",
+        "details": "Show details"
+      },
       "role": {
         "admin": "Admin",
         "user": "Standard",
@@ -844,9 +848,6 @@
         "revokeAction": "Revoke"
       },
       "details": {
-        "label": "User details",
-        "empty": "Select a user in the table to see their details and rights.",
-        "notFound": "This user is not in the list.",
         "role": "Role in JLU Campus",
         "keycloakRoles": "Keycloak roles",
         "keycloakGroups": "Keycloak groups",

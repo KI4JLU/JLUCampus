@@ -822,6 +822,10 @@
         "empty": "Noch hat sich niemand angemeldet.",
         "noMatch": "Niemand passt zu „{{query}}“."
       },
+      "actions": {
+        "menu": "Aktionen für {{name}}",
+        "details": "Details anzeigen"
+      },
       "role": {
         "admin": "Admin",
         "user": "Standard",
@@ -844,9 +848,6 @@
         "revokeAction": "Entziehen"
       },
       "details": {
-        "label": "Details",
-        "empty": "Wählen Sie eine Person in der Tabelle, um ihre Details und Rechte zu sehen.",
-        "notFound": "Diese Person ist nicht in der Liste.",
         "role": "Rolle in JLU Campus",
         "keycloakRoles": "Keycloak-Rollen",
         "keycloakGroups": "Keycloak-Gruppen",

@@ -24,10 +24,16 @@ interface UserRoleDialogProps {
   /** The change to confirm; `null` closes the dialog. */
   change: RoleChange | null
   onClose: () => void
+  /** Where the focus goes as the dialog closes; see Radix' `onCloseAutoFocus`. */
+  onCloseAutoFocus?: (event: Event) => void
 }
 
 /** Confirms granting or revoking the admin role, which opens or closes the admin area. */
-export function UserRoleDialog({ change, onClose }: UserRoleDialogProps): React.JSX.Element {
+export function UserRoleDialog({
+  change,
+  onClose,
+  onCloseAutoFocus
+}: UserRoleDialogProps): React.JSX.Element {
   const { t } = useTranslation()
   const setRole = useSetUserRole()
   const grant = change?.role === 'admin'
@@ -56,7 +62,7 @@ export function UserRoleDialog({ change, onClose }: UserRoleDialogProps): React.
 
   return (
     <Dialog open={change !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent closeLabel={t('common.close')}>
+      <DialogContent closeLabel={t('common.close')} onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>
             {grant ? t('admin.users.confirm.grantTitle') : t('admin.users.confirm.revokeTitle')}

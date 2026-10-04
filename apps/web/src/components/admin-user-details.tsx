@@ -1,8 +1,8 @@
 import { ShieldCheckIcon, ShieldOffIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Avatar, Badge, Button, PanelSection } from '@ki4jlu/design-system'
+import { Badge, Button, PanelSection } from '@ki4jlu/design-system'
 import type { AdminUser, UserRole } from '@justcampus/shared'
-import { formatUserDate, userInitials } from '@/lib/admin-users'
+import { formatUserDate } from '@/lib/admin-users'
 
 const ICON = { 'aria-hidden': true, width: '1em', height: '1em' } as const
 
@@ -20,11 +20,11 @@ interface AdminUserDetailsProps {
   user: AdminUser
   /** The signed-in admin, who cannot revoke their own role. */
   isSelf: boolean
-  /** Asks to give the user this role; the page confirms it first. */
-  onChangeRole: (role: UserRole) => void
+  /** Asks to give the user this role; the page confirms it first and then focuses `opener`. */
+  onChangeRole: (role: UserRole, opener: HTMLElement) => void
 }
 
-/** One user in the details column: who they are, their role with its action, Keycloak, sign-ins. */
+/** One user's details below their name: their role with its action, Keycloak, sign-ins. */
 export function AdminUserDetails({
   user,
   isSelf,
@@ -36,16 +36,6 @@ export function AdminUserDetails({
 
   return (
     <div className="flex flex-col gap-stack-lg">
-      <PanelSection
-        title={
-          <span className="flex min-w-0 items-center gap-2">
-            <Avatar size="sm" initials={userInitials(user)} />
-            <span className="min-w-0 wrap-anywhere">{user.name}</span>
-          </span>
-        }
-        hint={<span className="wrap-anywhere">{user.email}</span>}
-      />
-
       <PanelSection
         title={t('admin.users.details.role')}
         aside={<UserRoleBadge role={user.role} />}
@@ -62,7 +52,7 @@ export function AdminUserDetails({
           variant={admin ? 'destructive-outline' : 'primary-outline'}
           className="self-start"
           disabled={admin && isSelf}
-          onClick={() => onChangeRole(admin ? 'user' : 'admin')}
+          onClick={(event) => onChangeRole(admin ? 'user' : 'admin', event.currentTarget)}
         >
           {admin ? <ShieldOffIcon {...ICON} /> : <ShieldCheckIcon {...ICON} />}
           {admin ? t('admin.users.role.revoke') : t('admin.users.role.grant')}

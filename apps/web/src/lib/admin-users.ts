@@ -2,7 +2,7 @@ import type { AdminUser } from '@justcampus/shared'
 import { ApiRequestError } from './api'
 
 export interface AdminUsersSearch {
-  /** The user shown in the details column. */
+  /** The user whose details dialog is open. */
   user?: string
 }
 
