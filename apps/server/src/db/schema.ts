@@ -2,12 +2,27 @@ import type {
   ComponentConfig,
   Dashboard,
   Sidebar,
+  TranscriptionJobError,
+  TranscriptionJobSettings,
+  TranscriptionProgress,
+  TranscriptionResult,
+  TranscriptionSegment,
+  TranscriptionSnippet,
+  TranscriptionSourceFile,
+  TranscriptionSpeaker,
+  TranscriptionSpeakerColorId,
+  TranscriptionSpeakerColorMap,
+  TranscriptionTemplateBlock,
+  TranscriptionWord,
   TranslatorGlossaryEntry
 } from '@justcampus/shared'
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
   boolean,
   customType,
+  doublePrecision,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -187,6 +202,219 @@ export const translatorGlossary = pgTable(
   (table) => [
     index('translator_glossary_user_idx').on(table.userId),
     index('translator_glossary_component_visibility_idx').on(table.componentId, table.visibility)
+  ]
+)
+
+/**
+ * One uploaded file of the transcription module and its way through the pipeline
+ * (`TranscriptionJobStatus`). The audio lives in object storage under `object_key`; the worker
+ * claims a job with `claimed_at` and renews `heartbeat_at` while it works, so a crashed process's
+ * jobs are taken up again. Unsaved jobs expire (`expires_at`). Saving one into a transcript sets
+ * `transcript_id` and clears `expires_at`, so its audio stays for playback as long as the
+ * transcript; when the transcript goes, the job loses the reference and expires like an unsaved one.
+ */
+export const transcriptionJob = pgTable(
+  'transcription_job',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    componentId: uuid('component_id')
+      .notNull()
+      .references(() => component.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    /** The upload group (one transcript) and the file's place in it. */
+    groupId: uuid('group_id'),
+    groupOrder: integer('group_order').notNull().default(0),
+    filename: text('filename').notNull(),
+    mimeType: text('mime_type').notNull().default(''),
+    size: bigint('size', { mode: 'number' }).notNull(),
+    duration: doublePrecision('duration'),
+    /** Object keys of the original upload and of the normalised audio. */
+    objectKey: text('object_key').notNull(),
+    normalizedKey: text('normalized_key'),
+    status: text('status').notNull().default('uploading'),
+    settings: jsonb('settings').$type<TranscriptionJobSettings>().notNull(),
+    speakers: jsonb('speakers').$type<TranscriptionSpeaker[]>().notNull().default([]),
+    mapping: jsonb('mapping').$type<Record<string, string>>().notNull().default({}),
+    snippets: jsonb('snippets').$type<TranscriptionSnippet[]>().notNull().default([]),
+    colors: jsonb('colors')
+      .$type<Record<string, TranscriptionSpeakerColorId>>()
+      .notNull()
+      .default({}),
+    progress: jsonb('progress').$type<TranscriptionProgress>(),
+    result: jsonb('result').$type<TranscriptionResult>(),
+    error: jsonb('error').$type<TranscriptionJobError>(),
+    /** An id the diarisation or another upstream gave the work, if any. */
+    upstreamJobId: text('upstream_job_id'),
+    transcriptId: uuid('transcript_id').references(() => transcriptionTranscript.id, {
+      onDelete: 'set null'
+    }),
+    attempts: integer('attempts').notNull().default(0),
+    claimedAt: timestamp('claimed_at'),
+    heartbeatAt: timestamp('heartbeat_at'),
+    cancelRequestedAt: timestamp('cancel_requested_at'),
+    uploadedAt: timestamp('uploaded_at'),
+    completedAt: timestamp('completed_at'),
+    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    expiresAt: timestamp('expires_at')
+  },
+  (table) => [
+    index('transcription_job_user_created_idx').on(table.userId, table.createdAt),
+    index('transcription_job_status_claimed_idx').on(table.status, table.claimedAt),
+    index('transcription_job_expires_idx').on(table.expiresAt),
+    index('transcription_job_transcript_idx').on(table.transcriptId)
+  ]
+)
+
+/**
+ * A saved transcript (history entry). `revision` grows with every change, and a `PATCH` naming
+ * another revision is refused, so overlapping edits are not lost. `idempotency_key` makes saving a
+ * group's result safe to repeat. `expires_at` is set only under an admin retention period.
+ */
+export const transcriptionTranscript = pgTable(
+  'transcription_transcript',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    componentId: uuid('component_id')
+      .notNull()
+      .references(() => component.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    idempotencyKey: uuid('idempotency_key').notNull(),
+    title: text('title').notNull(),
+    subtitle: text('subtitle'),
+    /** 'ai' or 'manual'. */
+    subtitleSource: text('subtitle_source'),
+    language: text('language'),
+    duration: doublePrecision('duration'),
+    model: text('model'),
+    provider: text('provider'),
+    originalFilename: text('original_filename'),
+    fileSize: bigint('file_size', { mode: 'number' }),
+    segments: jsonb('segments').$type<TranscriptionSegment[]>().notNull().default([]),
+    words: jsonb('words').$type<TranscriptionWord[]>().notNull().default([]),
+    text: text('text').notNull().default(''),
+    sourceFiles: jsonb('source_files').$type<TranscriptionSourceFile[]>().notNull().default([]),
+    speakerColors: jsonb('speaker_colors')
+      .$type<TranscriptionSpeakerColorMap>()
+      .notNull()
+      .default({}),
+    summaryTemplateId: text('summary_template_id'),
+    revision: integer('revision').notNull().default(1),
+    userLocale: text('user_locale'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    expiresAt: timestamp('expires_at')
+  },
+  (table) => [
+    index('transcription_transcript_user_updated_idx').on(table.userId, table.updatedAt),
+    index('transcription_transcript_expires_idx').on(table.expiresAt),
+    uniqueIndex('transcription_transcript_user_idempotency_uidx').on(
+      table.userId,
+      table.idempotencyKey
+    )
+  ]
+)
+
+/**
+ * A user's summary template. The five built-ins live in code
+ * (`TRANSCRIPTION_BUILTIN_TEMPLATES`); a row without `user_id` would be an admin-wide one, which
+ * users cannot change either. `id` is text so built-in slugs and UUIDs share one id space.
+ */
+export const transcriptionTemplate = pgTable(
+  'transcription_template',
+  {
+    id: text('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()::text`),
+    componentId: uuid('component_id')
+      .notNull()
+      .references(() => component.id, { onDelete: 'cascade' }),
+    userId: text('user_id').references(() => user.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    structure: jsonb('structure').$type<TranscriptionTemplateBlock[]>().notNull(),
+    version: integer('version').notNull().default(1),
+    outputFormatHints: text('output_format_hints'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow()
+  },
+  (table) => [
+    index('transcription_template_component_user_idx').on(table.componentId, table.userId)
+  ]
+)
+
+/** A user's own transcript export format (`TranscriptFormatFlags` plus a name). */
+export const transcriptionFormat = pgTable(
+  'transcription_format',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    componentId: uuid('component_id')
+      .notNull()
+      .references(() => component.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    speakers: boolean('speakers').notNull(),
+    timestamps: boolean('timestamps').notNull(),
+    avatars: boolean('avatars').notNull(),
+    bubbles: boolean('bubbles').notNull(),
+    anonymize: boolean('anonymize').notNull(),
+    /** 'chronological' or 'speaker'. */
+    order: text('order').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow()
+  },
+  (table) => [index('transcription_format_user_idx').on(table.userId)]
+)
+
+/**
+ * A generated summary or set of preview sections, cached per transcript revision, template
+ * version, model and settings (`settings_hash`). An edit raises the revision, so the cache goes
+ * stale without being touched; deleting the transcript removes it.
+ */
+export const transcriptionSummary = pgTable(
+  'transcription_summary',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    componentId: uuid('component_id')
+      .notNull()
+      .references(() => component.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    transcriptId: uuid('transcript_id').notNull(),
+    /** 'summary' or 'preview'. */
+    kind: text('kind').notNull().default('summary'),
+    templateId: text('template_id').notNull(),
+    templateVersion: integer('template_version').notNull(),
+    transcriptRevision: integer('transcript_revision').notNull(),
+    model: text('model'),
+    settingsHash: text('settings_hash').notNull(),
+    markdown: text('markdown'),
+    /** Preview results keyed by section id. */
+    sections: jsonb('sections').$type<Record<string, string>>(),
+    generatedAt: timestamp('generated_at').notNull().defaultNow(),
+    expiresAt: timestamp('expires_at')
+  },
+  (table) => [
+    // Named here: the generated name would pass Postgres's 63 characters.
+    foreignKey({
+      name: 'transcription_summary_transcript_fk',
+      columns: [table.transcriptId],
+      foreignColumns: [transcriptionTranscript.id]
+    }).onDelete('cascade'),
+    index('transcription_summary_transcript_template_idx').on(
+      table.transcriptId,
+      table.templateId,
+      table.kind
+    ),
+    index('transcription_summary_expires_idx').on(table.expiresAt)
   ]
 )
 

@@ -29,12 +29,22 @@ quotes, no semicolons, width 100), TypeScript strict. Node ≥ 22 at runtime.
 `docker compose up -d` starts:
 
 - Postgres 16 on `127.0.0.1:5433` (db/user/password `justcampus`).
+- MinIO (S3-compatible storage of the transcription module) with its API on
+  `127.0.0.1:9100` and console on `http://localhost:9101` (`justcampus` /
+  `justcampus-dev-secret`); `minio-init` creates the bucket `justcampus-transcription`
+  and exits. MinIO allows the web origins (`http://localhost:5173`, `http://localhost:3000`,
+  `app://-`) by CORS. The images are `pgsty/minio` and `pgsty/mc`, builds of MinIO's
+  source, since MinIO publishes none any more.
 - Keycloak 26 on `http://localhost:8080` (admin console: `admin` / `admin`),
   importing `infra/keycloak/justcampus-realm.json`: realm `justcampus`,
   confidential client `justcampus` (secret `justcampus-dev-secret`), realm roles
   `admin` and `user`, groups `/Studierende` and `/Beschaeftigte`, flat `roles`
   and full-path `groups` claims in the ID token, access token and userinfo,
   and two users: `alice` / `alice` (admin) and `bob` / `bob` (user).
+
+`bun run mock:transcription` starts a stand-in for every upstream of the
+transcription module on `127.0.0.1:9200` (`infra/transcription-mock`, see its README
+for the admin settings that point at it). It needs no keys.
 
 Copy `.env.example` to `.env` at the repo root. The server loads the root
 `.env` (and an optional `apps/server/.env`) with `dotenv`; Vite reads
@@ -82,7 +92,8 @@ Better-Auth tables (`user`, `session`, `account`, `verification`) as generated
 by the Better-Auth CLI, plus:
 
 ```
-component         id uuid pk, name text, type text ('iframe' | 'rss' | 'link' | 'translator' | 'files'),
+component         id uuid pk, name text, type text ('iframe' | 'rss' | 'link' | 'translator' |
+                  'transcription' | 'files'),
                   icon text null, icon_url text null, config jsonb, enabled bool,
                   singleton bool default false, secrets jsonb default {}, sort_order int,
                   created_at, updated_at
@@ -94,6 +105,33 @@ translator_document id uuid pk, component_id → component (cascade), user_id �
                   poll_claimed_at timestamp null, polled_at timestamp null,
                   deleted_at timestamp null, created_at, updated_at, expires_at;
                   indexes (user_id, created_at), (status, expires_at), (expires_at)
+transcription_job id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  group_id uuid null, group_order int, filename text, mime_type text, size bigint,
+                  duration double null, object_key text, normalized_key text null, status text,
+                  settings jsonb, speakers jsonb, mapping jsonb, snippets jsonb, colors jsonb,
+                  progress jsonb null, result jsonb null, error jsonb null, upstream_job_id text null,
+                  transcript_id → transcription_transcript (set null) null, attempts int,
+                  claimed_at, heartbeat_at, cancel_requested_at, uploaded_at, completed_at,
+                  deleted_at timestamp null, created_at, updated_at, expires_at timestamp null;
+                  indexes (user_id, created_at), (status, claimed_at), (expires_at), (transcript_id)
+transcription_transcript id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  idempotency_key uuid, title text, subtitle text null, subtitle_source text null,
+                  language text null, duration double null, model text null, provider text null,
+                  original_filename text null, file_size bigint null, segments jsonb, words jsonb,
+                  text text, source_files jsonb, speaker_colors jsonb, summary_template_id text null,
+                  revision int, user_locale text null, created_at, updated_at, expires_at null;
+                  indexes (user_id, updated_at), (expires_at), unique (user_id, idempotency_key)
+transcription_template id text pk (uuid text), component_id → component (cascade),
+                  user_id → user (cascade) null, name text, description text, structure jsonb,
+                  version int, output_format_hints text null, created_at, updated_at
+transcription_format id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  name text, speakers, timestamps, avatars, bubbles, anonymize bool, order text,
+                  created_at, updated_at
+transcription_summary id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  transcript_id → transcription_transcript (cascade), kind text ('summary' |
+                  'preview'), template_id text, template_version int, transcript_revision int,
+                  model text null, settings_hash text, markdown text null, sections jsonb null,
+                  generated_at, expires_at null; indexes (transcript_id, template_id, kind), (expires_at)
 sidebar_entry     user_id → user (cascade), component_id → component (cascade),
                   position int; pk (user_id, component_id)
 feed_read         user_id → user (cascade), feed_url text, read_at timestamp;
@@ -232,6 +270,54 @@ once it reaches 60, uploads once it reaches 10, with 429 `Too Many Attempts.`
 and Laravel's `X-RateLimit-*` and `Retry-After` headers. Refused requests do
 not count; runs at once are not limited.
 
+### Transcription
+
+The transcription module (`apps/server/src/modules/transcription`) ports kiChat's
+transcription service; `docs/TRANSCRIPTION-REQUIREMENTS.md` is its checklist (T-01 to
+T-63). Its contract is `packages/shared/src/transcription.ts` (re-exported by the shared
+index): schemas, limits, the five built-in summary templates, the transcript presets and
+`TRANSCRIPTION_API`, every route below `/api/modules/transcription` and the admin routes
+below `/api/admin/modules/transcription`. Each area has its own router (`jobs/`,
+`transcripts/`, `formats/`, `templates/`, `summaries/`, `optimize/`, `realtime/`,
+`admin/`); `index.ts` mounts them and answers `GET /capabilities`, what the settings,
+secrets and storage make available (`config.ts`). Routes not built yet answer
+`501 not_implemented`.
+
+The server runs the whole pipeline. Browsers upload each file straight to object storage
+with a signed `PUT` for exactly its size and type (`storage.ts`, `@aws-sdk/client-s3`);
+the server checks the stored bytes, then a worker normalises and chunks the audio with
+`ffmpeg` (`TRANSCRIPTION_FFMPEG`, `TRANSCRIPTION_FFPROBE`, installed in the Docker image),
+analyses the voices with the admin's HTTP diarisation endpoint, transcribes through an
+OpenAI-compatible `POST /audio/transcriptions` (`verbose_json` with segments) and corrects
+the text with an OpenAI-compatible chat endpoint, which also writes summaries, subtitles
+and speaker optimisations. Diarised speakers get the name of the user's voice whose sample
+windows overlap them most. Playback and samples use fresh signed `GET` URLs from
+authenticated routes; signed URLs are never stored. All of a job's objects lie below
+`transcription/<component>/jobs/<job>/`. Upstream calls (`http.ts`) refuse redirects,
+time out and follow the caller's abort; failures answer `502 module_unavailable`.
+
+Storage is configured by `TRANSCRIPTION_S3_*`: the endpoint the server uses, the public
+endpoint signed URLs point at (browsers must reach it; it needs its own host name, since a
+path prefix breaks the signatures), region, bucket, keys and path-style addressing. Without
+a bucket the module offers no uploads. Saved transcripts stay until the user deletes them,
+unless the admin sets `transcriptRetentionHours`; unsaved, failed and cancelled jobs and
+their audio go after `unsavedJobRetentionHours` (24). Admin secrets: `apiKey` (speech),
+`diarizationApiKey`, `llmApiKey` and `openaiRealtimeApiKey`. Live transcription runs over
+WebRTC, either through the admin's on-prem bridge (the server forwards the SDP offer) or
+OpenAI Realtime with ephemeral keys the server issues. `loadModuleRuntime`
+(`modules/runtime.ts`) gives the worker and sweeps a module's config and decrypted secrets
+outside a request.
+
+The web adapter (`apps/web/src/adapters/transcription/`) keeps one folder per area
+(`upload/`, `mapping/`, `result/`, `history/`, `segments/`, `export/`, `summary/`,
+`templates/`, `recording/`, `live/`, `widgets/`). `page.tsx` switches the work area
+between the entry choice, upload, recording, live transcription and a saved transcript,
+and fills the `PageSidePanel` with the view's settings and the history; `workspace.tsx`
+holds the state the areas share (`useTranscriptionWorkspace`), `api.ts` a typed function
+and TanStack Query hook per endpoint plus the signed upload with progress, `audio/` the
+waveform player. Texts live in `i18n/{de,en}/<area>.json`, merged into the app's resources
+under `transcription`; kiChat's catalogue is kept verbatim. Widgets: `quick` and `recent`.
+
 Desktop components (`DESKTOP_COMPONENT_TYPES`, so far `files`) are built-in
 rows too (`singleton = true`, same rules), created **enabled** with the name
 and icon from `desktopComponentDefaults` and an empty config. They have no
@@ -358,7 +444,10 @@ import.meta.env.VITE_API_URL ?? ''` as base and `credentials: 'include'`.
   to `app://` by loading the URL itself if Chromium does not follow it. Only
   main-frame redirects count: embedded sites redirect inside their iframe.
 - CSP via `session.webRequest.onHeadersReceived`: `default-src 'self'`,
-  `connect-src` the API origin, `frame-src https: http://localhost:*`,
+  `connect-src` and `media-src` the API origin plus `JUSTCAMPUS_CONNECT_ORIGINS` (runtime)
+  or the build's `DESKTOP_CONNECT_ORIGINS`, by default the local MinIO and
+  `https://api.openai.com` (transcription storage and OpenAI Realtime; `media-src` also
+  `blob:` and `data:`), `frame-src https: http://localhost:*`,
   `img-src 'self' https: data:`, fonts and styles self/inline.
 - Everything else (window state, external links → `shell.openExternal`,
   no Node in the renderer, context isolation) follows electron-vite defaults.

@@ -11,7 +11,8 @@ export class ApiError extends Error {
       | 'conflict'
       | 'rate_limited'
       | 'feed_unavailable'
-      | 'module_unavailable',
+      | 'module_unavailable'
+      | 'not_implemented',
     message: string,
     readonly issues?: Array<{ path: Array<string | number>; message: string }>
   ) {

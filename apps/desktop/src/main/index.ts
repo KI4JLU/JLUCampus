@@ -38,6 +38,25 @@ const apiOrigin = origin(
   process.env.JUSTCAMPUS_API_URL ?? import.meta.env.MAIN_VITE_API_URL ?? 'http://localhost:3000'
 )
 const keycloakOrigin = origin(process.env.JUSTCAMPUS_KEYCLOAK_ORIGIN ?? 'http://localhost:8080')
+/**
+ * Origins besides the API the renderer fetches from and plays media of: the transcription
+ * module's object storage (signed upload and playback URLs) and OpenAI Realtime. Space or comma
+ * separated; `JUSTCAMPUS_CONNECT_ORIGINS` at runtime, else the build's `DESKTOP_CONNECT_ORIGINS`.
+ */
+const connectOrigins = (
+  process.env.JUSTCAMPUS_CONNECT_ORIGINS ??
+  import.meta.env.MAIN_VITE_CONNECT_ORIGINS ??
+  'http://localhost:9100 https://api.openai.com'
+)
+  .split(/[\s,]+/)
+  .flatMap((value) => {
+    try {
+      return value ? [origin(value)] : []
+    } catch {
+      return []
+    }
+  })
+  .join(' ')
 const developmentUrl = process.env.JUSTCAMPUS_WEB_DEV_URL ?? 'http://localhost:5173'
 const rendererDirectory = resolve(__dirname, '../renderer')
 
@@ -89,7 +108,7 @@ function configureSession(): void {
 
     const responseHeaders = { ...details.responseHeaders }
     responseHeaders['Content-Security-Policy'] = [
-      `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${apiOrigin}; frame-src https: http://localhost:*; object-src 'none'; base-uri 'none'`
+      `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${apiOrigin} ${connectOrigins}; media-src 'self' blob: data: ${apiOrigin} ${connectOrigins}; frame-src https: http://localhost:*; object-src 'none'; base-uri 'none'`
     ]
     callback({ responseHeaders })
   })

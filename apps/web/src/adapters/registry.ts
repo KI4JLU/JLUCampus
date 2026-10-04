@@ -5,6 +5,7 @@ import { filesAdapter } from './files'
 import { iframeAdapter } from './iframe'
 import { linkAdapter } from './link'
 import { rssAdapter } from './rss'
+import { transcriptionAdapter } from './transcription'
 import { translatorAdapter } from './translator'
 import type { ComponentAdapter, ComponentConfigFieldsProps } from './types'
 
@@ -13,6 +14,7 @@ export const componentAdapters: { [T in ComponentType]: ComponentAdapter<T> } = 
   rss: rssAdapter,
   link: linkAdapter,
   translator: translatorAdapter,
+  transcription: transcriptionAdapter,
   files: filesAdapter
 }
 

@@ -1,4 +1,5 @@
-# Production: Postgres and the published app image. Keycloak runs elsewhere.
+# Production: Postgres, MinIO (transcription audio) and the published app image. Keycloak runs
+# elsewhere.
 #   cp .env.production.example .env.production   # fill in the secrets
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 # The app applies database migrations on every start.
@@ -25,12 +26,53 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     env_file: .env.production
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-justcampus}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-justcampus}
+      # The app reaches MinIO inside the compose network; browsers use the public endpoint.
+      TRANSCRIPTION_S3_ENDPOINT: http://minio:9000
+      TRANSCRIPTION_S3_BUCKET: ${TRANSCRIPTION_S3_BUCKET:-justcampus-transcription}
+      TRANSCRIPTION_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-justcampus}
+      TRANSCRIPTION_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     # Put a TLS-terminating reverse proxy in front; it should reach this port.
     ports:
       - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000'
 
+  # Object storage for transcription audio. Browsers upload to and play from it with signed URLs,
+  # so the reverse proxy must publish this port on its own host name
+  # (TRANSCRIPTION_S3_PUBLIC_ENDPOINT); a path prefix would break the signatures.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    restart: unless-stopped
+    command: ['server', '/data']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-justcampus}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_API_CORS_ALLOW_ORIGIN: ${CORS_ORIGINS:?set CORS_ORIGINS}
+    volumes:
+      - minio-data:/data
+    ports:
+      - '${MINIO_BIND:-127.0.0.1}:${MINIO_PORT:-9000}:9000'
+
+  # Creates the bucket, then exits; the app starts after it.
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-justcampus}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      BUCKET: ${TRANSCRIPTION_S3_BUCKET:-justcampus-transcription}
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done &&
+        mc mb --ignore-existing "local/$$BUCKET" &&
+        mc anonymous set none "local/$$BUCKET"
+
 volumes:
   postgres-data:
+  minio-data:

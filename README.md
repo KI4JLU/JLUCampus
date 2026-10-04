@@ -24,7 +24,7 @@ the compose plugin), `git`.
 ```bash
 bun install                 # also builds the JLU design system from its git tag
 cp .env.example .env        # defaults match docker-compose
-bun run infra:up            # Postgres on :5433, Keycloak on :8080
+bun run infra:up            # Postgres on :5433, Keycloak on :8080, MinIO on :9100/:9101
 bun run db:migrate
 bun run db:seed             # two example components
 bun run sandbox:build       # image the translator editor's Python code blocks run in
@@ -37,6 +37,11 @@ Python code blocks in its editor run on the server, each in a fresh container
 of that image without network (Docker or Podman, best under gVisor as in HAWKI;
 without root `bun run sandbox:gvisor` sets it up for rootless Podman, see
 `.env.example`).
+
+The transcription module keeps audio in MinIO (`TRANSCRIPTION_S3_*` in
+`.env.example`) and needs `ffmpeg` on the server. `bun run mock:transcription`
+stands in for its speech, diarisation, chat and realtime services; point the
+module's admin settings at it as `infra/transcription-mock/README.md` shows.
 
 `COMPONENT_SECRETS_KEY` encrypts module secrets such as API keys. Generate a
 production value with `openssl rand -base64 32`; changing it makes stored
@@ -81,8 +86,10 @@ or starting the **Docker** workflow by hand, pushes it to
 tagged with their version and `latest`, manual runs with the branch name; every
 image also gets `sha-<short>`.
 
-`docker-compose.prod.yml` runs that image with Postgres. Keycloak and the
-TLS-terminating reverse proxy run outside it.
+`docker-compose.prod.yml` runs that image with Postgres and MinIO (the
+transcription module's audio). Keycloak and the TLS-terminating reverse proxy
+run outside it; the proxy also publishes MinIO on its own host name
+(`TRANSCRIPTION_S3_PUBLIC_ENDPOINT`), since browsers upload to it directly.
 
 ```bash
 cp .env.production.example .env.production   # fill in secrets and URLs

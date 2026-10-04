@@ -1,10 +1,12 @@
 import type { DesktopComponentType, SingletonComponentType } from '@justcampus/shared'
 
+import { transcriptionModule } from './transcription/index.js'
 import { translatorModule } from './translator/index.js'
 import type { ServerModule } from './types.js'
 
 export const moduleRegistry = {
-  translator: translatorModule
+  translator: translatorModule,
+  transcription: transcriptionModule
 } satisfies { [T in SingletonComponentType]: ServerModule<T> }
 
 /**

@@ -2,13 +2,15 @@ import i18n from 'i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
 import { DEFAULT_LANGUAGE, LANGUAGES, languageSchema, type Language } from '@justcampus/shared'
+import { transcriptionResources, type TranscriptionResources } from '@/adapters/transcription/i18n'
 import de from './de.json'
 import en from './en.json'
 
 declare module 'i18next' {
   interface CustomTypeOptions {
     defaultNS: 'translation'
-    resources: { translation: typeof de }
+    // Modules with many texts keep them in their own files (see their `i18n` folder).
+    resources: { translation: typeof de & { transcription: TranscriptionResources } }
   }
 }
 
@@ -22,7 +24,10 @@ void i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    resources: { de: { translation: de }, en: { translation: en } },
+    resources: {
+      de: { translation: { ...de, transcription: transcriptionResources.de } },
+      en: { translation: { ...en, transcription: transcriptionResources.en } }
+    },
     fallbackLng: DEFAULT_LANGUAGE,
     supportedLngs: [...LANGUAGES],
     nonExplicitSupportedLngs: true,

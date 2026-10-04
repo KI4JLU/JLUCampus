@@ -34,6 +34,10 @@ FROM base AS deps
 RUN bun install --frozen-lockfile --production --ignore-scripts --filter @justcampus/server
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+# ffmpeg and ffprobe: the transcription worker normalises, chunks and cuts audio with them.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
   PORT=3000 \
   SERVE_WEB_DIR=/app/web

@@ -1,5 +1,5 @@
-# Local development infrastructure: Postgres and Keycloak.
-# Ports avoid 5432, which another project on this machine already uses.
+# Local development infrastructure: Postgres, Keycloak and MinIO (the transcription module's
+# object storage). Ports avoid 5432, which another project on this machine already uses.
 services:
   postgres:
     image: postgres:16-alpine
@@ -32,5 +32,36 @@ services:
     volumes:
       - ./infra/keycloak:/opt/keycloak/data/import:ro
 
+  # S3-compatible storage for transcription audio: API on 9100, console on 9101 (justcampus /
+  # justcampus-dev-secret). MinIO no longer publishes images; pgsty/minio builds the same source.
+  # Browsers upload and play through signed URLs, so the web origins need CORS.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: justcampus
+      MINIO_ROOT_PASSWORD: justcampus-dev-secret
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:5173,http://localhost:3000,app://-
+    ports:
+      - '127.0.0.1:9100:9000'
+      - '127.0.0.1:9101:9001'
+    volumes:
+      - minio-data:/data
+
+  # Creates the bucket once MinIO answers, then exits.
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    depends_on:
+      - minio
+    restart: on-failure
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        until mc alias set local http://minio:9000 justcampus justcampus-dev-secret; do sleep 1; done &&
+        mc mb --ignore-existing local/justcampus-transcription &&
+        mc anonymous set none local/justcampus-transcription
+
 volumes:
   postgres-data:
+  minio-data:

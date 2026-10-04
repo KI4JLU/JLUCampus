@@ -66,6 +66,7 @@ import {
   type UserFeed,
   type WidgetList
 } from '@justcampus/shared'
+import { transcriptionKeys } from '@/adapters/transcription/api'
 import { ApiRequestError, apiFetch, isUnauthorized } from './api'
 import { applyComponentInput } from './component-secrets'
 import { isLater } from './feed'
@@ -414,6 +415,7 @@ function invalidateCatalogue(client: QueryClient): Promise<void> {
     client.invalidateQueries({ queryKey: queryKeys.sidebar }),
     client.invalidateQueries({ queryKey: queryKeys.dashboard }),
     client.invalidateQueries({ queryKey: queryKeys.translatorEngines }),
+    client.invalidateQueries({ queryKey: transcriptionKeys.capabilities }),
     invalidateFolderTemplates(client)
   ]).then(() => undefined)
 }
@@ -866,6 +868,8 @@ export function toComponentInput(component: Component): ComponentInput {
     case 'link':
       return { ...base, type: component.type, config: component.config }
     case 'translator':
+      return { ...base, type: component.type, config: component.config }
+    case 'transcription':
       return { ...base, type: component.type, config: component.config }
     case 'files':
       return { ...base, type: component.type, config: component.config }

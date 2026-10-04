@@ -531,6 +531,26 @@
         "modelLabel": "Geben Sie einen Anzeigenamen mit höchstens 80 Zeichen ein."
       }
     },
+    "transcription": {
+      "secrets": {
+        "apiKey": {
+          "label": "API-Schlüssel der Spracherkennung",
+          "hint": "Nur nötig, wenn der Endpunkt einen verlangt. Er wird verschlüsselt gespeichert und nie wieder angezeigt."
+        },
+        "diarizationApiKey": {
+          "label": "API-Schlüssel der Sprechererkennung",
+          "hint": "Nur nötig, wenn der Endpunkt einen verlangt. Er wird verschlüsselt gespeichert und nie wieder angezeigt."
+        },
+        "llmApiKey": {
+          "label": "API-Schlüssel des KI-Endpunkts",
+          "hint": "Nur nötig, wenn der Endpunkt einen verlangt. Er wird verschlüsselt gespeichert und nie wieder angezeigt."
+        },
+        "openaiRealtimeApiKey": {
+          "label": "API-Schlüssel für OpenAI Realtime",
+          "hint": "Schaltet die Live-Transkription über OpenAI frei. Der Server gibt Browsern nur kurzlebige Schlüssel. Er wird verschlüsselt gespeichert und nie wieder angezeigt."
+        }
+      }
+    },
     "files": {
       "configNote": "Nichts einzustellen: Die Orte richtet jede Person in der Desktop-App auf ihrem Gerät ein.",
       "desktopOnlyTitle": "Nur in der Desktop-App verfügbar",
@@ -542,6 +562,7 @@
     "rss": "RSS-Feed",
     "link": "Verknüpfung",
     "translator": "Übersetzer",
+    "transcription": "Transkription",
     "files": "Dateien & Laufwerke"
   },
   "shortcut": {
