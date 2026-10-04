@@ -21,6 +21,7 @@ import {
   listRedactions,
   removeRedaction,
   renameSpeaker,
+  revealSpeaker,
   setSpeakerColor,
   toggleSolo,
   type BlockSpeaker
@@ -125,15 +126,26 @@ function SpeakerRow({
     session.setHidden(next)
   }
 
+  /** Scrolls to the speaker's first block once it is rendered. */
+  const reveal = (): void => {
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => scrollToBlock(speaker.firstBlock, true))
+    )
+  }
+
   const focus = (): void => {
     // While a speaker is soloed in the preview, choosing another solos that one instead.
     if (!corrections && anySolo) {
       session.setHidden(toggleSolo(names, state.hidden, speaker.speaker))
+      if (!soloed) reveal()
       return
     }
     const next = focused ? null : speaker.speaker
+    // A hidden speaker is shown again to be focused; else its blocks would not be there (T-26).
+    const shown = next ? revealSpeaker(state.hidden, next) : state.hidden
+    if (shown !== state.hidden) session.setHidden(shown)
     session.setFocused(next)
-    if (next) requestAnimationFrame(() => scrollToBlock(speaker.firstBlock, true))
+    if (next) reveal()
   }
 
   return (

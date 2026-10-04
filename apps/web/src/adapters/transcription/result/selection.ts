@@ -81,7 +81,7 @@ function elementPoint(
 }
 
 /** The block a node lies in, by its `data-block`. */
-function blockOf(node: Node): number | null {
+export function blockOf(node: Node): number | null {
   const holder = elementOf(node)?.closest('[data-block]')
   return holder ? Number(holder.getAttribute('data-block')) : null
 }
@@ -115,4 +115,104 @@ export function readSelection(
   }
   if (!start) return null
   return { block: startBlock, bounds: { start, end } }
+}
+
+// ---------------------------------------------------------------------------
+// Touch handles (T-31, kiChat's `CustomSelectionHandles`)
+// ---------------------------------------------------------------------------
+
+/** Whether an event target is one of the selection handles (`data-selection-handle`). */
+export function isSelectionHandle(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-selection-handle]') !== null
+}
+
+/** The text position under a point of the viewport, in whichever way the browser offers it. */
+export function caretAt(x: number, y: number): { node: Node; offset: number } | null {
+  const position = document.caretPositionFromPoint?.(x, y)
+  if (position) return { node: position.offsetNode, offset: position.offset }
+  // Safari before 17.4 only has the older call.
+  const range = (
+    document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+  ).caretRangeFromPoint?.(x, y)
+  return range ? { node: range.startContainer, offset: range.startOffset } : null
+}
+
+/**
+ * Where a point of the segments lies in the rendered transcript, the reverse of `domPoint`: in a
+ * shown piece's text, beside a concealed piece (before it for a start, after it for an end), at
+ * the placeholder's edge. `null` when the segment is not rendered.
+ */
+export function domPosition(
+  area: Element,
+  point: TextPoint,
+  edge: 'start' | 'end'
+): { node: Node; offset: number } | null {
+  const pieces = area.querySelectorAll(`[data-seg="${point.segment}"][data-start]`)
+  for (const piece of pieces) {
+    const start = Number(piece.getAttribute('data-start'))
+    if (piece.hasAttribute('data-redacted')) {
+      const end = Number(piece.getAttribute('data-end'))
+      if (point.offset <= start || point.offset >= end) continue
+      const parent = piece.parentNode
+      if (!parent) continue
+      const index = Array.prototype.indexOf.call(parent.childNodes, piece) as number
+      return { node: parent, offset: index + (edge === 'end' ? 1 : 0) }
+    }
+    const text = piece.firstChild
+    if (!text || text.nodeType !== Node.TEXT_NODE) continue
+    const length = text.textContent?.length ?? 0
+    if (point.offset >= start && point.offset <= start + length) {
+      return { node: text, offset: point.offset - start }
+    }
+  }
+  const placeholder = area.querySelector(`[data-seg="${point.segment}"][data-placeholder]`)
+  if (placeholder) {
+    return { node: placeholder, offset: edge === 'start' ? 0 : placeholder.childNodes.length }
+  }
+  return null
+}
+
+/** Selects `bounds` in the rendered transcript; `false` when a point is not rendered. */
+export function selectBounds(area: Element, bounds: SelectionBounds): boolean {
+  const start = domPosition(area, bounds.start, 'start')
+  const end = domPosition(area, bounds.end, 'end')
+  const selection = window.getSelection()
+  if (!start || !end || !selection) return false
+  selection.setBaseAndExtent(start.node, start.offset, end.node, end.offset)
+  return true
+}
+
+/** Where the selection begins and ends on screen, for its handles and toolbar. */
+export interface SelectionRects {
+  /** The first line of the selection. */
+  first: DOMRect
+  /** The last line of the selection. */
+  last: DOMRect
+  /** Around the whole selection. */
+  bounds: DOMRect
+}
+
+/** The document's selection on screen while it lies in `area`, else `null`. */
+export function measureSelection(area: Element): SelectionRects | null {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  if (!area.contains(range.commonAncestorContainer)) return null
+  const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 || rect.height > 0)
+  const first = rects[0]
+  const last = rects[rects.length - 1]
+  if (!first || !last) return null
+  return { first, last, bounds: range.getBoundingClientRect() }
+}
+
+/** The box that scrolls `element`, whose visible part the handles keep to; else the viewport. */
+export function visibleBox(element: Element): { top: number; bottom: number } {
+  for (let current = element.parentElement; current; current = current.parentElement) {
+    const { overflowY } = window.getComputedStyle(current)
+    if (overflowY === 'auto' || overflowY === 'scroll') {
+      const rect = current.getBoundingClientRect()
+      return { top: rect.top, bottom: rect.bottom }
+    }
+  }
+  return { top: 0, bottom: window.innerHeight }
 }

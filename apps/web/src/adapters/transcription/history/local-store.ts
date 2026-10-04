@@ -2,22 +2,27 @@ import { useCallback, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 import {
+  TRANSCRIPTION_SUBTITLE_SOURCES,
   transcriptionSegmentSchema,
   transcriptionSourceFileSchema,
   transcriptionSpeakerColorMapSchema,
+  transcriptionTranscriptCreateSchema,
   transcriptionWordSchema,
   type TranscriptionSegment,
   type TranscriptionTranscript,
+  type TranscriptionTranscriptCreate,
   type TranscriptionTranscriptSummary
 } from '@justcampus/shared'
 import { meQuery } from '@/lib/queries'
+import { buildTranscriptText } from '../segments/text'
 import type { HistoryEntry } from './model'
 
 /**
  * kiChat's local history (`transcriptionHistory` in `localStorage`, T-39), scoped here to the
  * module and the signed-in user so a shared browser never shows one user's list to another. It
- * keeps the titles and dates of the server's list, for a transient failure, and whole transcripts
- * that only this browser has (a save that did not reach the server). No audio is stored.
+ * keeps the titles and dates of the server's list, the last opened server transcripts as a
+ * fallback for a transient failure, and whole transcripts that only this browser has (a save that
+ * did not reach the server). No audio is stored.
  */
 
 /** Ids of transcripts only this browser has. */
@@ -56,6 +61,7 @@ export function normalizeSegments(raw: unknown): TranscriptionSegment[] {
 
 const stringOrNull = z.string().nullable().catch(null)
 
+/** A stored transcript; kiChat's records lack most details, which then take their defaults. */
 const storedTranscriptSchema = z
   .object({
     id: z.string(),
@@ -70,18 +76,18 @@ const storedTranscriptSchema = z
     words: z.array(transcriptionWordSchema).catch([]),
     text: z.string().catch(''),
     sourceFiles: z.array(transcriptionSourceFileSchema).catch([]),
-    speakerColors: transcriptionSpeakerColorMapSchema.catch({})
+    speakerColors: transcriptionSpeakerColorMapSchema.catch({}),
+    subtitleSource: z.enum(TRANSCRIPTION_SUBTITLE_SOURCES).nullable().catch(null),
+    model: stringOrNull,
+    provider: stringOrNull,
+    fileSize: z.number().int().min(0).nullable().catch(null),
+    summaryTemplateId: stringOrNull,
+    revision: z.number().int().min(1).catch(1),
+    expiresAt: stringOrNull
   })
   .transform((stored): TranscriptionTranscript => ({
     ...stored,
-    segments: normalizeSegments(stored.segments),
-    subtitleSource: null,
-    model: null,
-    provider: null,
-    fileSize: null,
-    summaryTemplateId: null,
-    revision: 1,
-    expiresAt: null
+    segments: normalizeSegments(stored.segments)
   }))
 
 const recordSchema = z.object({
@@ -114,13 +120,16 @@ export function parseLocalHistory(raw: string | null): LocalHistoryRecord[] {
 }
 
 /**
- * The records after a successful server list: its entries replace the ones from the server, the
- * records only this browser has stay.
+ * The records after a successful server list: its entries replace the ones from the server (a
+ * kept copy of one still listed stays), the records only this browser has stay.
  */
 export function syncLocalHistory(
   records: readonly LocalHistoryRecord[],
   server: readonly TranscriptionTranscriptSummary[]
 ): LocalHistoryRecord[] {
+  const kept = new Map(
+    records.filter((record) => !record.local).map((record) => [record.id, record.transcript])
+  )
   return [
     ...server.map((summary) => ({
       id: summary.id,
@@ -128,10 +137,116 @@ export function syncLocalHistory(
       createdAt: summary.createdAt,
       updatedAt: summary.updatedAt,
       local: false,
-      transcript: null
+      transcript: kept.get(summary.id) ?? null
     })),
     ...records.filter((record) => record.local)
   ]
+}
+
+/** Server transcripts this browser keeps a copy of at most, the last ones opened or saved. */
+export const KEPT_SERVER_COPIES = 5
+
+/**
+ * The records with the copy of a server transcript kept (T-39), so a transient failure can still
+ * open it: its record gets the copy and comes first, and only the newest `KEPT_SERVER_COPIES`
+ * copies stay. The server stays authoritative; the copy is only read when it cannot answer.
+ */
+export function keepServerCopy(
+  records: readonly LocalHistoryRecord[],
+  transcript: TranscriptionTranscript
+): LocalHistoryRecord[] {
+  const record: LocalHistoryRecord = {
+    id: transcript.id,
+    title: transcript.title,
+    createdAt: transcript.createdAt,
+    updatedAt: transcript.updatedAt,
+    local: false,
+    transcript
+  }
+  let copies = 1
+  return [
+    record,
+    ...records
+      .filter((other) => other.id !== transcript.id)
+      .map((other) => {
+        if (other.local || !other.transcript) return other
+        copies++
+        return copies > KEPT_SERVER_COPIES ? { ...other, transcript: null } : other
+      })
+  ]
+}
+
+/** The kept copy of a server transcript, if any. */
+export function serverCopy(
+  records: readonly LocalHistoryRecord[],
+  id: string
+): TranscriptionTranscript | null {
+  return records.find((record) => record.id === id && !record.local)?.transcript ?? null
+}
+
+/** The id of the local copy of a save that failed: one per idempotency key, never two. */
+export function localIdFor(idempotencyKey: string): string {
+  return `${LOCAL_ID_PREFIX}${idempotencyKey}`
+}
+
+/**
+ * A transcript only this browser has, made from a save the server did not take (T-39, kiChat's
+ * `saveTranscriptToHistory` without a slug): the group's segments, words, sources and colours
+ * under its title.
+ */
+export function localTranscriptFromCreate(
+  input: TranscriptionTranscriptCreate,
+  now: Date
+): TranscriptionTranscript {
+  const parsed = transcriptionTranscriptCreateSchema.safeParse(input)
+  const segments = parsed.success ? parsed.data.segments : normalizeSegments(input.segments)
+  const sourceFiles = parsed.success ? parsed.data.sourceFiles : []
+  const at = now.toISOString()
+  return {
+    id: localIdFor(input.idempotencyKey),
+    title: input.title,
+    subtitle: null,
+    subtitleSource: null,
+    language: input.language ?? null,
+    duration: input.duration ?? null,
+    originalFilename: sourceFiles[0]?.name ?? null,
+    createdAt: at,
+    updatedAt: at,
+    expiresAt: null,
+    model: null,
+    provider: null,
+    fileSize: null,
+    text: buildTranscriptText(segments),
+    segments,
+    words: parsed.success ? parsed.data.words : [],
+    sourceFiles,
+    speakerColors: parsed.success ? parsed.data.speakerColors : {},
+    summaryTemplateId: null,
+    revision: 1
+  }
+}
+
+/**
+ * The records after a save of a new transcript: a failed one is kept as a transcript only this
+ * browser has (once per idempotency key, an earlier copy stays as it is); once a retry reached the
+ * server, that copy goes again, unless the user changed it meanwhile.
+ */
+export function recordSaveOutcome(
+  records: readonly LocalHistoryRecord[],
+  outcome:
+    | { input: TranscriptionTranscriptCreate; transcript: TranscriptionTranscript }
+    | { input: TranscriptionTranscriptCreate; error: unknown },
+  now: Date
+): LocalHistoryRecord[] {
+  const id = localIdFor(outcome.input.idempotencyKey)
+  const existing = records.find((record) => record.id === id)
+  if ('transcript' in outcome) {
+    const copy = existing?.transcript
+    if (!existing || (copy && copy.updatedAt !== copy.createdAt)) return [...records]
+    return withoutRecord(records, id)
+  }
+  if (existing) return [...records]
+  return [localRecord(localTranscriptFromCreate(outcome.input, now)), ...records]
 }
 
 export function withoutRecord(
@@ -192,13 +307,23 @@ export function readLocalHistory(key: string): LocalHistoryRecord[] {
   return records
 }
 
-/** Stores the records (none removes the key) and tells every reader. Full storage is ignored. */
+/**
+ * Stores the records (none removes the key) and tells every reader. When the storage is full the
+ * kept copies of server transcripts go first; beyond that, full storage is ignored.
+ */
 export function writeLocalHistory(key: string, records: readonly LocalHistoryRecord[]): void {
-  try {
-    if (records.length === 0) storage()?.removeItem(key)
-    else storage()?.setItem(key, JSON.stringify(records))
-  } catch {
-    // Quota or privacy mode: the server's list stays authoritative.
+  const attempts = [
+    records,
+    records.map((record) => (record.local ? record : { ...record, transcript: null }))
+  ]
+  for (const attempt of attempts) {
+    try {
+      if (attempt.length === 0) storage()?.removeItem(key)
+      else storage()?.setItem(key, JSON.stringify(attempt))
+      break
+    } catch {
+      // Quota or privacy mode: try without the copies; the server's list stays authoritative.
+    }
   }
   listeners.forEach((listener) => listener())
 }

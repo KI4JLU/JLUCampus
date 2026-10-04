@@ -64,3 +64,42 @@ export function sourceTimeline(
   }
   return stretches
 }
+
+/** What continuous playback does next; `time` is the global time to show. */
+export type PlaybackStep =
+  | { kind: 'play'; time: number }
+  /** `last`: the end of the last source, not of a block. */
+  | { kind: 'stop'; time: number; last: boolean }
+  | { kind: 'next'; index: number; local: number; time: number }
+
+/**
+ * Continuous playback over the saved ranges of several sources (T-24, kiChat's
+ * `handleTimeUpdate`): the time shown never passes the playing source's `endTime`, which is where
+ * the next source takes over, even when the file's audio runs longer (trailing silence); the last
+ * source stops there. `end` is the global end of a block being played (Corrections), carried
+ * across sources; playback stops when it is crossed (`previous` before it, `local` at or after
+ * it), so a seek past it does not stop playback. `previous` is the global time last shown.
+ */
+export function playbackStep(
+  sources: readonly TranscriptionSourceFile[],
+  index: number,
+  local: number,
+  end: number | null,
+  previous: number | null
+): PlaybackStep {
+  const source = sources[index]
+  if (!source) return { kind: 'play', time: local }
+  const global = toGlobalTime(source, local)
+  const bounded = source.endTime > source.startTime
+  const time = bounded ? Math.min(global, source.endTime) : global
+  if (end !== null && global >= end && (previous === null || previous < end)) {
+    return { kind: 'stop', time: Math.min(time, end), last: false }
+  }
+  if (bounded && global >= source.endTime) {
+    const next = sources[index + 1]
+    return next
+      ? { kind: 'next', index: index + 1, local: toLocalTime(next, source.endTime), time }
+      : { kind: 'stop', time, last: true }
+  }
+  return { kind: 'play', time }
+}

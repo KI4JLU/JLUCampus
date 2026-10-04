@@ -99,9 +99,20 @@ export function applyAssignments(
   })
 }
 
+/** The model answered nothing that assigns a speaker to a segment it was given. */
+export class UnusableOptimizationError extends Error {
+  constructor() {
+    super('The chat model answered without a usable speaker assignment')
+    this.name = 'UnusableOptimizationError'
+  }
+}
+
 /**
  * Lets the chat model reassign speakers, batch by batch. With fewer than two named speakers there
- * is nothing to choose between, and the segments come back unchanged without a request.
+ * is nothing to choose between, and the segments come back unchanged without a request. A batch
+ * whose answer assigns none of its segments (prose, broken JSON, unknown ids or names) fails the
+ * whole optimisation with an `UnusableOptimizationError`, so the client keeps its segments and
+ * reports the error instead of a success; a usable answer that keeps every speaker is fine.
  */
 export async function optimizeSpeakers(
   target: ChatTarget,
@@ -122,9 +133,13 @@ export async function optimizeSpeakers(
       { temperature: 0, signal }
     )
     const ids = new Set(batch.map((segment) => segment.id))
+    let usable = 0
     for (const [id, speaker] of parseAssignments(content, speakers)) {
-      if (ids.has(id)) assignments.set(id, speaker)
+      if (!ids.has(id)) continue
+      assignments.set(id, speaker)
+      usable++
     }
+    if (usable === 0) throw new UnusableOptimizationError()
   }
   return applyAssignments(segments, assignments)
 }

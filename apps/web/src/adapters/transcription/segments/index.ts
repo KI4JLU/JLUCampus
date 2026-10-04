@@ -7,6 +7,7 @@
 export * from './blocks'
 export * from './edit'
 export * from './labels'
+export * from './payload'
 export * from './redaction'
 export * from './text'
 export * from './timeline'

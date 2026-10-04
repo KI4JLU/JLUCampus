@@ -4,6 +4,7 @@ import {
   blockSpeakers,
   buildSpeakerBlocks,
   isSoloed,
+  revealSpeaker,
   materializeSpeakers,
   toggleSolo,
   unknownSpeakerNumber
@@ -132,5 +133,11 @@ describe('speaker helpers', () => {
     expect(isSoloed(speakers, hidden, 'Ben')).toBe(true)
     expect(toggleSolo(speakers, hidden, 'Ben').size).toBe(0)
     expect(isSoloed(['Anna'], new Set(), 'Anna')).toBe(false)
+  })
+
+  it('shows a hidden speaker that is chosen to focus, and leaves the others hidden', () => {
+    const hidden = toggleSolo(['Anna', 'Ben', 'Cem'], new Set(), 'Ben')
+    expect([...revealSpeaker(hidden, 'Anna')]).toEqual(['Cem'])
+    expect(revealSpeaker(hidden, 'Ben')).toBe(hidden)
   })
 })

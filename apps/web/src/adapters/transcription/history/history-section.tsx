@@ -42,6 +42,7 @@ import {
 } from './local-store'
 import { groupHistory, mergeHistory, type HistoryEntry, type HistoryGroupKey } from './model'
 import { useNow } from './now'
+import { useLocalSaveFallback } from './save-fallback'
 
 /** kiChat retries a failed history fetch once, after 250 ms (T-39). */
 const HISTORY_RETRY_MS = 250
@@ -65,6 +66,7 @@ export function HistorySection(): React.JSX.Element {
   const headingId = useId()
   const {
     component,
+    capabilities,
     view,
     transcriptId,
     openTranscript,
@@ -83,11 +85,15 @@ export function HistorySection(): React.JSX.Element {
     networkMode: 'always'
   })
   const { key, records } = useLocalHistory(component.id)
+  // A save that fails while the page is open lands here as a transcript of this browser.
+  useLocalSaveFallback(key)
   const now = useNow()
   const remove = useDeleteTranscript()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<HistoryEntry | null>(null)
   const activeId = view === 'result' ? transcriptId : null
+  // The admin may have saved transcripts deleted after a while; users are told (default: never).
+  const retentionHours = capabilities?.retention.transcriptHours ?? null
 
   // The server's list replaces what this browser kept of it.
   useEffect(() => {
@@ -184,6 +190,11 @@ export function HistorySection(): React.JSX.Element {
         aria-label={t('transcription.result.searchPlaceholder')}
         leadingIcon={<SearchIcon aria-hidden="true" className="size-4" />}
       />
+      {retentionHours ? (
+        <p className="m-0">
+          {t('transcription.result.historyRetention', { count: retentionHours })}
+        </p>
+      ) : null}
       {list.isError && !list.data ? (
         <div className="flex flex-wrap items-center gap-2">
           <span>{t('transcription.result.historyLoadFailed')}</span>

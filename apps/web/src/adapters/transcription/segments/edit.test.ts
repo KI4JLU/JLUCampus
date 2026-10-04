@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { TRANSCRIPTION_EMPTY_SPEAKER_TEXT } from '@justcampus/shared'
 import { buildSpeakerBlocks, type SpeakerBlock } from './blocks'
 import {
+  applyOptimizedSpeakers,
   cleanupOrphanedPlaceholders,
   insertOptions,
   insertSpeakerBlock,
   moveSelection,
+  moveSelectionEdge,
   moveTarget,
   nextSegmentId,
   normalizeSelection,
@@ -15,6 +17,7 @@ import {
   renameSpeaker,
   setSpeakerColor,
   splitSegment,
+  stepTextPoint,
   updateSegmentText
 } from './edit'
 import { seg } from './test-fixtures'
@@ -272,5 +275,76 @@ describe('nextSegmentId', () => {
   it('takes the number after the highest id', () => {
     expect(nextSegmentId([seg(4, 0, 1, 'a'), seg(2, 1, 2, 'b')])).toBe(5)
     expect(nextSegmentId([])).toBe(0)
+  })
+})
+
+describe('applyOptimizedSpeakers', () => {
+  const sent = [
+    seg(0, 0, 5, 'One', 'Anna'),
+    seg(1, 5, 10, 'Two', 'Ben'),
+    seg(2, 10, 12, 'Three', 'Ben')
+  ]
+
+  it('takes only the speakers, by id, for segments still as sent', () => {
+    const current = [
+      { ...sent[0]!, text: 'Changed' },
+      sent[1]!,
+      { ...sent[2]!, redactions: [{ start: 0, end: 2 }] }
+    ]
+    const answered = sent.map((segment) => ({ ...segment, speaker: 'Cem', text: 'model text' }))
+    const result = applyOptimizedSpeakers(current, sent, answered)!
+    expect(result[0]).toBe(current[0])
+    expect(result[1]).toEqual({ ...sent[1], speaker: 'Cem' })
+    expect(result[2]).toEqual({ ...current[2], speaker: 'Cem' })
+  })
+
+  it('ignores segments that are new or gone, and answers null without a change', () => {
+    const current = [sent[0]!, seg(7, 5, 6, 'New', 'Ben')]
+    expect(applyOptimizedSpeakers(current, sent, sent)).toBeNull()
+    expect(applyOptimizedSpeakers(current, sent, [{ id: 7, speaker: 'Anna' }])).toBeNull()
+  })
+})
+
+describe('selection handles', () => {
+  const segments = [seg(0, 0, 5, 'Hello there', 'Anna'), seg(1, 5, 9, 'and more', 'Anna')]
+  const block = { segmentIndices: [0, 1] }
+  const bounds = { start: { segment: 0, offset: 6 }, end: { segment: 0, offset: 11 } }
+
+  it('moves one edge and keeps the other, within the block', () => {
+    expect(moveSelectionEdge(segments, block, bounds, 'start', { segment: 0, offset: 0 })).toEqual({
+      start: { segment: 0, offset: 0 },
+      end: { segment: 0, offset: 11 }
+    })
+    expect(moveSelectionEdge(segments, block, bounds, 'end', { segment: 1, offset: 3 })).toEqual({
+      start: { segment: 0, offset: 6 },
+      end: { segment: 1, offset: 3 }
+    })
+  })
+
+  it('refuses points outside the block and edges that meet or cross', () => {
+    expect(
+      moveSelectionEdge(segments, { segmentIndices: [0] }, bounds, 'end', { segment: 1, offset: 3 })
+    ).toBeNull()
+    expect(
+      moveSelectionEdge(segments, block, bounds, 'start', { segment: 0, offset: 11 })
+    ).toBeNull()
+    expect(moveSelectionEdge(segments, block, bounds, 'end', { segment: 0, offset: 2 })).toBeNull()
+  })
+
+  it('steps a character at a time, over segment boundaries, not out of the block', () => {
+    expect(stepTextPoint(segments, block, { segment: 0, offset: 6 }, -1)).toEqual({
+      segment: 0,
+      offset: 5
+    })
+    expect(stepTextPoint(segments, block, { segment: 0, offset: 11 }, 1)).toEqual({
+      segment: 1,
+      offset: 1
+    })
+    expect(stepTextPoint(segments, block, { segment: 1, offset: 0 }, -1)).toEqual({
+      segment: 0,
+      offset: 10
+    })
+    expect(stepTextPoint(segments, block, { segment: 1, offset: 8 }, 1)).toBeNull()
+    expect(stepTextPoint(segments, block, { segment: 0, offset: 0 }, -1)).toBeNull()
   })
 })

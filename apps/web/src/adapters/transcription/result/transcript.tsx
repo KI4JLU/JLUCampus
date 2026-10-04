@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef, useState, type RefObject } from 'react'
-import { ArrowDownIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, PauseIcon, XIcon } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { ArrowDownIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, PauseIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge, Button, Card, CardContent, Textarea } from '@ki4jlu/design-system'
 import {
@@ -28,7 +28,13 @@ import { blockElementId } from './dom'
 import { IconButton } from './icon-button'
 import { NameInput } from './name-input'
 import type { GlobalPlayerHandle } from './player'
-import { readSelection, type BlockSelection } from './selection'
+import {
+  isSelectionHandle,
+  measureSelection,
+  readSelection,
+  type BlockSelection
+} from './selection'
+import { SelectionHandles, SelectionPopover } from './selection-ui'
 import type { ResultSession, ResultState } from './session'
 import { SpeakerDot } from './speaker-dot'
 import { useSpeakerLabel } from './use-speaker-label'
@@ -78,6 +84,8 @@ export function Transcript({
   const editor = useRef<HTMLTextAreaElement>(null)
   const editorDone = useRef(false)
   const keepSelection = useRef(false)
+  /** The concealed range the toolbar offers to show again, for placing the toolbar. */
+  const redactionElement = useRef<HTMLElement | null>(null)
   const [editing, setEditing] = useState<number | null>(null)
   const [renaming, setRenaming] = useState<number | null>(null)
   const [selection, setSelection] = useState<BlockSelection | null>(null)
@@ -118,7 +126,10 @@ export function Transcript({
     setEditing(index)
   }
 
-  /** Saves the open editor's text (T-27); no undo step, as in kiChat. */
+  /**
+   * Saves the open editor's text (T-27); no undo step, as in kiChat. An emptied segment keeps
+   * its placeholder, even beside text of the same speaker, so it can be filled in again.
+   */
   const commitEditing = (refocus: boolean): void => {
     const index = editing
     const value = editor.current?.value
@@ -130,7 +141,7 @@ export function Transcript({
           const result = updateSegmentText(current, index, value)
           return result ? { segments: result } : null
         },
-        { undoable: false }
+        { undoable: false, cleanup: false }
       )
     }
     setEditing(null)
@@ -173,6 +184,23 @@ export function Transcript({
     clearSelection()
   }
 
+  /** Where the toolbar points: a concealed range, the open editor or the selection's first line. */
+  const anchorRect = useCallback((): DOMRect | null => {
+    if (redaction && redactionElement.current?.isConnected) {
+      return redactionElement.current.getBoundingClientRect()
+    }
+    if (editing !== null && editor.current) return editor.current.getBoundingClientRect()
+    const holder = area.current
+    return holder ? (measureSelection(holder)?.first ?? null) : null
+  }, [redaction, editing])
+
+  const isInside = useCallback(
+    (target: EventTarget | null): boolean =>
+      isSelectionHandle(target) ||
+      (target instanceof Node && Boolean(area.current?.contains(target))),
+    []
+  )
+
   /** Who a selection in a block would move to; offsets do not matter for that. */
   const targetOf = (current: BlockSelection, direction: MoveDirection): string | null => {
     const last = segments[current.bounds.end.segment]
@@ -211,258 +239,272 @@ export function Transcript({
       order.set(block.speaker, order.size)
   }
 
+  const selectedBlock = selection && editing === null ? blocks[selection.block] : undefined
+  const handles = corrections && selection !== null && selectedBlock !== undefined
+
   return (
-    <ol
-      ref={area}
-      aria-label={t('transcription.result.aiTranscriptLabel')}
-      className="m-0 flex list-none flex-col gap-stack-md p-0"
-    >
-      {blocks.map((block) => {
-        if (hidden.has(block.speaker)) return null
-        const name = speakerLabel(block.speaker)
-        const isActive = activeBlock === block.index
-        const isPlaying = playing && isActive
-        const first = segments[block.segmentIndices[0]!]
-        const blockSelection = selection?.block === block.index ? selection : null
-        const blockRedaction = redaction?.block === block.index ? redaction : null
-        const indent = INDENTS[Math.min(order.get(block.speaker) ?? 0, INDENTS.length - 1)]
-        return (
-          <li
-            key={first ? first.id : block.index}
-            id={blockElementId(block.index)}
-            className={indent}
-            aria-current={isActive ? 'true' : undefined}
-          >
-            <Card accent={isActive}>
-              <CardContent className="flex flex-col gap-stack-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <IconButton
-                    label={
-                      isPlaying
-                        ? t('transcription.result.pauseBlock')
-                        : t('transcription.result.playBlock', {
-                            name,
-                            time: formatTimestamp(block.start)
-                          })
-                    }
-                    disabled={!hasAudio}
-                    onClick={() => {
-                      if (isPlaying) player.current?.pause()
-                      else if (corrections) player.current?.play(block.start, block.end)
-                      else player.current?.play(block.start)
-                    }}
-                  >
-                    {isPlaying ? (
-                      <PauseIcon aria-hidden="true" className="size-4" />
-                    ) : (
-                      <SpeakerDot colorId={block.colorId} />
-                    )}
-                  </IconButton>
-                  {corrections && renaming === block.index ? (
-                    <NameInput
-                      label={t('transcription.result.renameSpeaker')}
-                      initial={name}
-                      maxLength={TRANSCRIPTION_SPEAKER_NAME_MAX}
-                      onSubmit={(value) => {
-                        setRenaming(null)
-                        session.edit(({ segments: latest, speakerColors, blocks: shown }) =>
-                          renameSpeaker(
-                            latest,
-                            speakerColors,
-                            block.speaker,
-                            value,
-                            shown
-                              .filter((other) => other.speaker === block.speaker)
-                              .flatMap((other) => other.segmentIndices)
-                          )
-                        )
-                      }}
-                      onCancel={() => setRenaming(null)}
-                    />
-                  ) : corrections ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      title={t('transcription.result.clickToRename')}
-                      onClick={() => setRenaming(block.index)}
-                    >
-                      {name}
-                    </Button>
-                  ) : (
-                    <span>{name}</span>
-                  )}
-                  <span aria-hidden="true">•</span>
-                  <Button
-                    type="button"
-                    variant="link"
-                    aria-label={t('transcription.result.seekTo', {
-                      time: formatTimestamp(block.start)
-                    })}
-                    disabled={!hasAudio}
-                    onClick={() => player.current?.seek(block.start)}
-                  >
-                    [{formatTimestamp(block.start)}]
-                  </Button>
-                  {focused === block.speaker ? (
-                    <Badge tone="info" appearance="text" dot>
-                      {t('transcription.result.selected')}
-                    </Badge>
-                  ) : null}
-                  {corrections ? (
-                    <BlockActions
-                      session={session}
-                      block={block}
-                      blocks={blocks}
-                      segments={segments}
-                    />
-                  ) : null}
-                  <span className="ml-auto">
-                    <CopyBlockButton
-                      text={() =>
-                        `${name}: ${blockCopyText(segments, block, t('transcription.result.emptySpeakerHint'))}`
+    <>
+      <ol
+        ref={area}
+        aria-label={t('transcription.result.aiTranscriptLabel')}
+        className="m-0 flex list-none flex-col gap-stack-md p-0"
+      >
+        {blocks.map((block) => {
+          if (hidden.has(block.speaker)) return null
+          const name = speakerLabel(block.speaker)
+          const isActive = activeBlock === block.index
+          const isPlaying = playing && isActive
+          const first = segments[block.segmentIndices[0]!]
+          const indent = INDENTS[Math.min(order.get(block.speaker) ?? 0, INDENTS.length - 1)]
+          return (
+            <li
+              key={first ? first.id : block.index}
+              id={blockElementId(block.index)}
+              className={indent}
+              aria-current={isActive ? 'true' : undefined}
+            >
+              <Card accent={isActive}>
+                <CardContent className="flex flex-col gap-stack-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <IconButton
+                      label={
+                        isPlaying
+                          ? t('transcription.result.pauseBlock')
+                          : t('transcription.result.playBlock', {
+                              name,
+                              time: formatTimestamp(block.start)
+                            })
                       }
-                    />
-                  </span>
-                </div>
-                {corrections && (blockSelection || blockRedaction) ? (
-                  <SelectionToolbar
-                    onPointerDown={() => {
-                      keepSelection.current = true
-                    }}
-                    onClose={clearSelection}
-                  >
-                    {blockRedaction ? (
+                      disabled={!hasAudio}
+                      onClick={() => {
+                        if (isPlaying) player.current?.pause()
+                        else if (corrections) player.current?.play(block.start, block.end)
+                        else player.current?.play(block.start)
+                      }}
+                    >
+                      {isPlaying ? (
+                        <PauseIcon aria-hidden="true" className="size-4" />
+                      ) : (
+                        <SpeakerDot colorId={block.colorId} />
+                      )}
+                    </IconButton>
+                    {corrections && renaming === block.index ? (
+                      <NameInput
+                        label={t('transcription.result.renameSpeaker')}
+                        initial={name}
+                        maxLength={TRANSCRIPTION_SPEAKER_NAME_MAX}
+                        onSubmit={(value) => {
+                          setRenaming(null)
+                          session.edit(({ segments: latest, speakerColors, blocks: shown }) =>
+                            renameSpeaker(
+                              latest,
+                              speakerColors,
+                              block.speaker,
+                              value,
+                              shown
+                                .filter((other) => other.speaker === block.speaker)
+                                .flatMap((other) => other.segmentIndices)
+                            )
+                          )
+                        }}
+                        onCancel={() => setRenaming(null)}
+                      />
+                    ) : corrections ? (
                       <Button
                         type="button"
-                        variant="outline"
-                        onClick={() => {
-                          session.edit(({ segments: latest }) => {
-                            const result = removeRedaction(
-                              latest,
-                              blockRedaction.segment,
-                              blockRedaction.redaction
-                            )
-                            return result ? { segments: result } : null
-                          })
-                          clearSelection()
-                        }}
+                        variant="ghost"
+                        title={t('transcription.result.clickToRename')}
+                        onClick={() => setRenaming(block.index)}
                       >
-                        <EyeIcon aria-hidden="true" className="size-4" />
-                        {t('transcription.common.show')}
+                        {name}
                       </Button>
-                    ) : blockSelection ? (
-                      <>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          title={t('transcription.result.redactSelection')}
-                          onClick={() => selectionAction('redact')}
-                        >
-                          <EyeOffIcon aria-hidden="true" className="size-4" />
-                          {t('transcription.common.hide')}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={!targetOf(blockSelection, 'up')}
-                          onClick={() => selectionAction('up')}
-                        >
-                          <ArrowUpIcon aria-hidden="true" className="size-4" />
-                          {t('transcription.result.moveUp')}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={!targetOf(blockSelection, 'down')}
-                          onClick={() => selectionAction('down')}
-                        >
-                          <ArrowDownIcon aria-hidden="true" className="size-4" />
-                          {t('transcription.result.moveDown')}
-                        </Button>
-                      </>
+                    ) : (
+                      <span>{name}</span>
+                    )}
+                    <span aria-hidden="true">•</span>
+                    <Button
+                      type="button"
+                      variant="link"
+                      aria-label={t('transcription.result.seekTo', {
+                        time: formatTimestamp(block.start)
+                      })}
+                      disabled={!hasAudio}
+                      onClick={() => player.current?.seek(block.start)}
+                    >
+                      [{formatTimestamp(block.start)}]
+                    </Button>
+                    {focused === block.speaker ? (
+                      <Badge tone="info" appearance="text" dot>
+                        {t('transcription.result.selected')}
+                      </Badge>
                     ) : null}
-                  </SelectionToolbar>
-                ) : null}
-                <p className="m-0" data-block={block.index}>
-                  {block.segmentIndices.map((index, position) => {
-                    const segment = segments[index]
-                    if (!segment) return null
-                    const nextIndex = block.segmentIndices[position + 1]
-                    const next = nextIndex === undefined ? undefined : segments[nextIndex]
-                    const gap = next && needsSpace(segment.text, next.text) ? ' ' : ''
-                    if (corrections && editing === index) {
-                      return (
-                        <Textarea
-                          key={segment.id}
-                          ref={editor}
-                          aria-label={t('transcription.result.editText')}
-                          defaultValue={isPlaceholder(segment.text) ? '' : segment.text}
-                          placeholder={t('transcription.result.emptySpeakerHint')}
-                          maxLength={TRANSCRIPTION_SEGMENT_TEXT_MAX}
-                          rows={Math.max(2, Math.ceil(segment.text.length / 80))}
-                          autoFocus
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault()
-                              commitEditing(true)
-                            } else if (event.key === 'Escape') {
-                              event.preventDefault()
-                              cancelEditing()
-                            }
-                          }}
-                          onBlur={() => commitEditing(false)}
-                          onSelect={(event) => {
-                            const { selectionStart, selectionEnd } = event.currentTarget
-                            setSelection(
-                              selectionEnd > selectionStart
-                                ? {
-                                    block: block.index,
-                                    bounds: {
-                                      start: { segment: index, offset: selectionStart },
-                                      end: { segment: index, offset: selectionEnd }
+                    {corrections ? (
+                      <BlockActions
+                        session={session}
+                        block={block}
+                        blocks={blocks}
+                        segments={segments}
+                      />
+                    ) : null}
+                    <span className="ml-auto">
+                      <CopyBlockButton
+                        text={() =>
+                          `${name}: ${blockCopyText(segments, block, t('transcription.result.emptySpeakerHint'))}`
+                        }
+                      />
+                    </span>
+                  </div>
+                  <p className="m-0" data-block={block.index}>
+                    {block.segmentIndices.map((index, position) => {
+                      const segment = segments[index]
+                      if (!segment) return null
+                      const nextIndex = block.segmentIndices[position + 1]
+                      const next = nextIndex === undefined ? undefined : segments[nextIndex]
+                      const gap = next && needsSpace(segment.text, next.text) ? ' ' : ''
+                      if (corrections && editing === index) {
+                        return (
+                          <Textarea
+                            key={segment.id}
+                            ref={editor}
+                            aria-label={t('transcription.result.editText')}
+                            defaultValue={isPlaceholder(segment.text) ? '' : segment.text}
+                            placeholder={t('transcription.result.emptySpeakerHint')}
+                            maxLength={TRANSCRIPTION_SEGMENT_TEXT_MAX}
+                            rows={Math.max(2, Math.ceil(segment.text.length / 80))}
+                            autoFocus
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                commitEditing(true)
+                              } else if (event.key === 'Escape') {
+                                event.preventDefault()
+                                cancelEditing()
+                              }
+                            }}
+                            onBlur={() => commitEditing(false)}
+                            onSelect={(event) => {
+                              const { selectionStart, selectionEnd } = event.currentTarget
+                              setSelection(
+                                selectionEnd > selectionStart
+                                  ? {
+                                      block: block.index,
+                                      bounds: {
+                                        start: { segment: index, offset: selectionStart },
+                                        end: { segment: index, offset: selectionEnd }
+                                      }
                                     }
-                                  }
-                                : null
-                            )
-                          }}
-                        />
+                                  : null
+                              )
+                            }}
+                          />
+                        )
+                      }
+                      return (
+                        <Fragment key={segment.id}>
+                          <SegmentText
+                            segment={segment}
+                            index={index}
+                            corrections={corrections}
+                            placeholder={t('transcription.result.emptySpeakerHint')}
+                            redactionLabel={t('transcription.result.redactionLabel')}
+                            editLabel={t('transcription.result.editText')}
+                            onEdit={() => startEditing(index)}
+                            onRedaction={(redactionIndex, element) => {
+                              window.getSelection()?.removeAllRanges()
+                              setSelection(null)
+                              redactionElement.current = element
+                              setRedaction({
+                                block: block.index,
+                                segment: index,
+                                redaction: redactionIndex
+                              })
+                            }}
+                          />
+                          {gap ? (
+                            <span data-seg={index} data-gap="">
+                              {gap}
+                            </span>
+                          ) : null}
+                        </Fragment>
                       )
-                    }
-                    return (
-                      <Fragment key={segment.id}>
-                        <SegmentText
-                          segment={segment}
-                          index={index}
-                          corrections={corrections}
-                          placeholder={t('transcription.result.emptySpeakerHint')}
-                          redactionLabel={t('transcription.result.redactionLabel')}
-                          editLabel={t('transcription.result.editText')}
-                          onEdit={() => startEditing(index)}
-                          onRedaction={(redactionIndex) => {
-                            window.getSelection()?.removeAllRanges()
-                            setSelection(null)
-                            setRedaction({
-                              block: block.index,
-                              segment: index,
-                              redaction: redactionIndex
-                            })
-                          }}
-                        />
-                        {gap ? (
-                          <span data-seg={index} data-gap="">
-                            {gap}
-                          </span>
-                        ) : null}
-                      </Fragment>
-                    )
-                  })}
-                </p>
-              </CardContent>
-            </Card>
-          </li>
-        )
-      })}
-    </ol>
+                    })}
+                  </p>
+                </CardContent>
+              </Card>
+            </li>
+          )
+        })}
+      </ol>
+      {corrections ? (
+        <SelectionPopover
+          open={selection !== null || redaction !== null}
+          anchor={anchorRect}
+          area={area}
+          handles={handles}
+          isInside={isInside}
+          onPointerDown={() => {
+            keepSelection.current = true
+          }}
+          onClose={clearSelection}
+        >
+          {redaction ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                const target = redaction
+                session.edit(({ segments: latest }) => {
+                  const result = removeRedaction(latest, target.segment, target.redaction)
+                  return result ? { segments: result } : null
+                })
+                clearSelection()
+              }}
+            >
+              <EyeIcon aria-hidden="true" className="size-4" />
+              {t('transcription.common.show')}
+            </Button>
+          ) : selection ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                title={t('transcription.result.redactSelection')}
+                onClick={() => selectionAction('redact')}
+              >
+                <EyeOffIcon aria-hidden="true" className="size-4" />
+                {t('transcription.common.hide')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!targetOf(selection, 'up')}
+                onClick={() => selectionAction('up')}
+              >
+                <ArrowUpIcon aria-hidden="true" className="size-4" />
+                {t('transcription.result.moveUp')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!targetOf(selection, 'down')}
+                onClick={() => selectionAction('down')}
+              >
+                <ArrowDownIcon aria-hidden="true" className="size-4" />
+                {t('transcription.result.moveDown')}
+              </Button>
+            </>
+          ) : null}
+        </SelectionPopover>
+      ) : null}
+      {handles && selection && selectedBlock ? (
+        <SelectionHandles
+          area={area}
+          segments={segments}
+          block={selectedBlock}
+          bounds={selection.bounds}
+        />
+      ) : null}
+    </>
   )
 }
 
@@ -478,37 +520,6 @@ function sameSelection(a: BlockSelection | null, b: BlockSelection | null): bool
   )
 }
 
-/**
- * The actions for selected or concealed text, kiChat's floating selection toolbar, here in the
- * block above its text with buttons large enough to tap. Pressing them keeps the selection.
- */
-function SelectionToolbar({
-  children,
-  onPointerDown,
-  onClose
-}: {
-  children: React.ReactNode
-  onPointerDown: () => void
-  onClose: () => void
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  return (
-    <div
-      role="toolbar"
-      aria-label={t('transcription.result.selectionActions')}
-      className="flex flex-wrap items-center gap-2"
-      onPointerDown={onPointerDown}
-      // Keeps the text selection (and an editor's focus) while a button is pressed.
-      onMouseDown={(event) => event.preventDefault()}
-    >
-      {children}
-      <IconButton label={t('transcription.common.close')} onClick={onClose}>
-        <XIcon aria-hidden="true" className="size-4" />
-      </IconButton>
-    </div>
-  )
-}
-
 interface SegmentTextProps {
   segment: TranscriptionSegment
   index: number
@@ -517,7 +528,7 @@ interface SegmentTextProps {
   redactionLabel: string
   editLabel: string
   onEdit: () => void
-  onRedaction: (redaction: number) => void
+  onRedaction: (redaction: number, element: HTMLElement) => void
 }
 
 /**
@@ -566,7 +577,7 @@ function SegmentText({
             corrections
               ? (event) => {
                   event.stopPropagation()
-                  onRedaction(Math.max(0, position))
+                  onRedaction(Math.max(0, position), event.currentTarget)
                 }
               : undefined
           }

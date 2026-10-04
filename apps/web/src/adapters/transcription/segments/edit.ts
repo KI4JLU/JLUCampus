@@ -200,6 +200,37 @@ export function cleanupOrphanedPlaceholders(
   return drop.size === 0 ? null : segments.filter((_, index) => !drop.has(index))
 }
 
+/**
+ * The speakers of an AI optimisation applied to the segments as they are now (T-36). A segment
+ * takes the answer's speaker for its id only while it is still the one that was sent (same text,
+ * times and speaker); a segment the user changed meanwhile keeps the user's version. Text, timing,
+ * redactions and decoder fields always stay the current ones. `null` when no speaker changes.
+ */
+export function applyOptimizedSpeakers(
+  current: readonly TranscriptionSegment[],
+  sent: readonly TranscriptionSegment[],
+  answered: readonly Pick<TranscriptionSegment, 'id' | 'speaker'>[]
+): TranscriptionSegment[] | null {
+  const sentById = new Map(sent.map((segment) => [segment.id, segment]))
+  const answers = new Map(answered.map((segment) => [segment.id, segment.speaker]))
+  let changed = false
+  const next = current.map((segment) => {
+    const before = sentById.get(segment.id)
+    const speaker = answers.get(segment.id)
+    if (!before || speaker === undefined || speaker === segment.speaker) return segment
+    const untouched =
+      before === segment ||
+      (before.text === segment.text &&
+        before.start === segment.start &&
+        before.end === segment.end &&
+        before.speaker === segment.speaker)
+    if (!untouched) return segment
+    changed = true
+    return { ...segment, speaker }
+  })
+  return changed ? next : null
+}
+
 /** The speakers a block can be assigned to: the others shown, in order (T-29). */
 export function reassignOptions(blocks: readonly SpeakerBlock[], block: SpeakerBlock): string[] {
   return [...new Set(blocks.map((other) => other.speaker))].filter(
@@ -249,6 +280,48 @@ export function isValidSelection(
   if (end.offset < 0 || end.offset > last.text.length) return false
   if (start.segment > end.segment) return false
   return start.segment < end.segment || start.offset < end.offset
+}
+
+/**
+ * A selection with one edge moved to `point` (T-31, kiChat's touch handles): the other edge stays,
+ * and the selection stays within its speaker block. `null` when the point lies outside the block
+ * or the edges would meet or cross, so a drag never empties or turns the selection.
+ */
+export function moveSelectionEdge(
+  segments: readonly TranscriptionSegment[],
+  block: Pick<SpeakerBlock, 'segmentIndices'>,
+  bounds: SelectionBounds,
+  edge: 'start' | 'end',
+  point: TextPoint
+): SelectionBounds | null {
+  if (!block.segmentIndices.includes(point.segment)) return null
+  const next =
+    edge === 'start' ? { start: point, end: bounds.end } : { start: bounds.start, end: point }
+  return isValidSelection(segments, next) ? next : null
+}
+
+/**
+ * The point one character before (`-1`) or after (`1`) `point` within a block, for moving a
+ * selection edge with the arrow keys; over a segment boundary it moves into the neighbouring
+ * segment. `null` at the block's start or end.
+ */
+export function stepTextPoint(
+  segments: readonly TranscriptionSegment[],
+  block: Pick<SpeakerBlock, 'segmentIndices'>,
+  point: TextPoint,
+  delta: -1 | 1
+): TextPoint | null {
+  const position = block.segmentIndices.indexOf(point.segment)
+  const text = segments[point.segment]?.text
+  if (position === -1 || text === undefined) return null
+  const offset = point.offset + delta
+  if (offset >= 0 && offset <= text.length) return { segment: point.segment, offset }
+  const neighbour = block.segmentIndices[position + delta]
+  const other = neighbour === undefined ? undefined : segments[neighbour]
+  if (neighbour === undefined || !other) return null
+  return delta > 0
+    ? { segment: neighbour, offset: Math.min(1, other.text.length) }
+    : { segment: neighbour, offset: Math.max(0, other.text.length - 1) }
 }
 
 /**

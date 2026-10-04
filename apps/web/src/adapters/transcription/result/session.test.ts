@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { TranscriptionTranscript, TranscriptionTranscriptPatch } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_EMPTY_SPEAKER_TEXT,
+  type TranscriptionTranscript,
+  type TranscriptionTranscriptPatch
+} from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
-import { reassignBlock } from '../segments'
+import { reassignBlock, updateSegmentText } from '../segments'
 import { seg } from '../segments/test-fixtures'
 import { stableStringify } from './compare'
 import { ResultSession, type SessionDeps } from './session'
@@ -306,6 +310,40 @@ describe('ResultSession undo and optimisation', () => {
     expect(session.getState().segments[1]!.speaker).toBe('Ben')
   })
 
+  it('keeps edits made while the optimisation runs and only takes its speakers', async () => {
+    const server = fakeServer(transcript())
+    let answer: (value: { segments: TranscriptionTranscript['segments'] }) => void = () => {}
+    server.deps.optimize = vi.fn(
+      () =>
+        new Promise<{ segments: TranscriptionTranscript['segments'] }>((resolve) => {
+          answer = resolve
+        })
+    )
+    const session = new ResultSession(server.stored, server.deps)
+    const running = session.optimizeSpeakers()
+    session.edit(
+      ({ segments }) => ({
+        segments: segments.map((segment, index) =>
+          index === 0 ? { ...segment, text: 'Corrected during AI' } : segment
+        )
+      }),
+      { undoable: false }
+    )
+    await session.flush()
+    expect(server.stored.revision).toBe(2)
+    answer({
+      segments: transcript().segments.map((segment) => ({ ...segment, speaker: 'Ben' }))
+    })
+    expect(await running).toEqual({ ok: true })
+    await session.flush()
+    const segments = session.getState().segments
+    // The corrected segment keeps the user's text and speaker; the untouched one is reassigned.
+    expect(segments[0]).toMatchObject({ text: 'Corrected during AI', speaker: 'Anna' })
+    expect(segments[1]).toMatchObject({ text: 'Tag.', speaker: 'Ben' })
+    expect(server.stored.segments[0]!.text).toBe('Corrected during AI')
+    expect(session.getState().saveStatus).toBe('saved')
+  })
+
   it('reports an optimisation error with the server message', async () => {
     const server = fakeServer(transcript())
     server.deps.optimize = vi.fn(async () => {
@@ -319,6 +357,47 @@ describe('ResultSession undo and optimisation', () => {
       message: 'Modell nicht erreichbar'
     })
     expect(session.getState().undo).toHaveLength(0)
+  })
+})
+
+describe('kept copies', () => {
+  it('marks a session opened from the kept copy until the server answers', async () => {
+    const server = fakeServer(transcript())
+    const session = new ResultSession(server.stored, server.deps, false, true)
+    expect(session.getState().keptCopy).toBe(true)
+    rename(session, 1, 'Cem')
+    await session.flush()
+    expect(session.getState()).toMatchObject({ keptCopy: false, saveStatus: 'saved' })
+  })
+})
+
+describe('text corrections', () => {
+  it('keeps an emptied segment as an editable placeholder beside text of the same speaker', async () => {
+    const server = fakeServer(
+      transcript({ segments: [seg(0, 0, 5, 'One', 'Anna'), seg(1, 5, 10, 'Two', 'Anna')] })
+    )
+    const session = new ResultSession(server.stored, server.deps)
+    session.edit(
+      ({ segments }) => {
+        const changed = updateSegmentText(segments, 0, '')
+        return changed ? { segments: changed } : null
+      },
+      { undoable: false, cleanup: false }
+    )
+    await session.flush()
+    const segments = session.getState().segments
+    expect(segments).toHaveLength(2)
+    expect(segments[0]).toMatchObject({ start: 0, end: 5, text: TRANSCRIPTION_EMPTY_SPEAKER_TEXT })
+    expect(server.stored.segments[0]!.text).toBe(TRANSCRIPTION_EMPTY_SPEAKER_TEXT)
+    // Typed in again, the text is back.
+    session.edit(
+      ({ segments: current }) => {
+        const changed = updateSegmentText(current, 0, 'One again')
+        return changed ? { segments: changed } : null
+      },
+      { undoable: false, cleanup: false }
+    )
+    expect(session.getState().segments[0]!.text).toBe('One again')
   })
 })
 

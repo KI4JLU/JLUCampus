@@ -10,7 +10,9 @@ export function SpeakerDot({
   colorId: TranscriptionSpeakerColorId
 }): React.JSX.Element {
   return (
-    // DS gap: no categorical palette of ten colours and no coloured avatar; the shared speaker colours fill a plain circle.
+    // DS gap: `Avatar` paints its circle `bg-primary-container` and takes no colour, and the DS has
+    // no categorical palette; T-25/T-28 need the ten user-chosen speaker colours that the waveform
+    // and the exports share, so a plain circle carries them until the DS has a coloured avatar.
     <span
       aria-hidden="true"
       className="block size-5 shrink-0 rounded-full"

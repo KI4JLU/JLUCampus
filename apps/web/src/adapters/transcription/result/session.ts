@@ -11,6 +11,7 @@ import {
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
 import {
+  applyOptimizedSpeakers,
   buildSpeakerBlocks,
   buildTranscriptText,
   cleanupOrphanedPlaceholders,
@@ -58,6 +59,11 @@ export interface ResultState extends ResultDocument {
   generatingSubtitle: boolean
   /** Only in this browser: edits are stored locally, not sent (T-39). */
   local: boolean
+  /**
+   * Opened from the copy this browser kept, as the server could not be reached (T-39); cleared
+   * once the server answers.
+   */
+  keptCopy: boolean
 }
 
 /** What a session talks to; the API functions, replaceable in tests. */
@@ -111,7 +117,12 @@ export class ResultSession {
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   private polled = false
 
-  constructor(transcript: TranscriptionTranscript, deps: SessionDeps, local = false) {
+  constructor(
+    transcript: TranscriptionTranscript,
+    deps: SessionDeps,
+    local = false,
+    keptCopy = false
+  ) {
     this.id = transcript.id
     this.base = transcript
     this.deps = deps
@@ -127,7 +138,8 @@ export class ResultSession {
       optimizing: false,
       awaitingSubtitle: false,
       generatingSubtitle: false,
-      local
+      local,
+      keptCopy
     }
   }
 
@@ -169,18 +181,24 @@ export class ResultSession {
   /**
    * Applies an edit and saves it. `change` gets the document, its blocks and every speaker's
    * colour, and answers the new segments and/or colours, or `null` for nothing to do. Structural
-   * edits are undoable (T-34); text corrections and colours are not, as in kiChat.
+   * edits are undoable (T-34); text corrections and colours are not, as in kiChat. Placeholders
+   * that are no longer alone go after an edit (kiChat cleans them up when it renders the
+   * transcript again), except after a text correction (`cleanup: false`): a segment emptied there
+   * keeps its placeholder, so its text can be typed in again (T-27).
    */
   edit(
     change: (input: EditInput) => Partial<ResultDocument> | null,
-    options: { undoable: boolean } = { undoable: true }
+    options: { undoable: boolean; cleanup?: boolean } = { undoable: true }
   ): boolean {
     const { segments, speakerColors, undo } = this.state
     const { blocks, speakerColors: colors } = buildSpeakerBlocks(segments, speakerColors)
     const result = change({ segments, speakerColors: colors, blocks })
     if (!result) return false
+    const cleanup = options.cleanup ?? true
     const nextSegments = result.segments
-      ? (cleanupOrphanedPlaceholders(result.segments) ?? result.segments)
+      ? cleanup
+        ? (cleanupOrphanedPlaceholders(result.segments) ?? result.segments)
+        : result.segments
       : segments
     this.set({
       segments: nextSegments,
@@ -300,6 +318,7 @@ export class ResultSession {
   private takeServerCopy(transcript: TranscriptionTranscript): void {
     this.base = transcript
     this.deps.onServerCopy?.(transcript)
+    if (this.state.keptCopy) this.set({ keptCopy: false })
   }
 
   /**
@@ -476,8 +495,8 @@ export class ResultSession {
    * when the module writes subtitles. Once per session.
    */
   expectSubtitle(): void {
-    const { transcript, local } = this.state
-    if (this.polled || this.closed || local || transcript.subtitle) return
+    const { transcript, local, keptCopy } = this.state
+    if (this.polled || this.closed || local || keptCopy || transcript.subtitle) return
     if (Date.now() - Date.parse(transcript.createdAt) >= SUBTITLE_EXPECT_MS) return
     this.polled = true
     this.pollSubtitle()
@@ -519,17 +538,29 @@ export class ResultSession {
   // AI speaker optimisation (T-36)
   // -------------------------------------------------------------------------
 
-  /** Has the chat model reassign speakers; the answer replaces the segments as an undoable edit. */
+  /**
+   * Has the chat model reassign speakers; the answer becomes an undoable edit. Only the speakers
+   * are taken from it: segments the user changed while it ran keep the user's version, and what
+   * was not changed gets its new speaker by segment id (T-36).
+   */
   async optimizeSpeakers(): Promise<OptimizeResult> {
     if (this.state.optimizing || this.state.segments.length === 0)
       return { ok: false, message: null }
     this.set({ optimizing: true })
+    const sent = this.state.segments
     try {
       const result = await this.deps.optimize({
-        segments: this.state.segments,
+        segments: sent,
         transcriptId: this.state.local ? null : this.id
       })
-      this.edit(() => ({ segments: result.segments }), { undoable: true })
+      if (this.discarded) return { ok: false, message: null }
+      this.edit(
+        ({ segments }) => {
+          const next = applyOptimizedSpeakers(segments, sent, result.segments)
+          return next ? { segments: next } : null
+        },
+        { undoable: true }
+      )
       return { ok: true }
     } catch (error) {
       return { ok: false, message: serverMessage(error) }
@@ -571,11 +602,12 @@ function emit(): void {
 export function ensureResultSession(
   transcript: TranscriptionTranscript,
   deps: SessionDeps,
-  local = false
+  local = false,
+  keptCopy = false
 ): ResultSession {
   if (current && current.id === transcript.id && !current.isClosed) return current
   current?.close()
-  current = new ResultSession(transcript, deps, local)
+  current = new ResultSession(transcript, deps, local, keptCopy)
   emit()
   return current
 }

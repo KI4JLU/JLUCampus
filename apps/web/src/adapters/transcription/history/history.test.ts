@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { TranscriptionTranscriptSummary } from '@justcampus/shared'
+import type {
+  TranscriptionTranscript,
+  TranscriptionTranscriptCreate,
+  TranscriptionTranscriptSummary
+} from '@justcampus/shared'
 import {
   clearLocalHistories,
   isLocalTranscriptId,
+  keepServerCopy,
+  KEPT_SERVER_COPIES,
   localHistoryKey,
+  localIdFor,
   normalizeSegments,
   parseLocalHistory,
   readLocalHistory,
+  recordSaveOutcome,
+  serverCopy,
   syncLocalHistory,
   updateRecord,
   withoutRecord,
@@ -206,5 +215,90 @@ describe('clearLocalHistories', () => {
 
     expect([...map.keys()]).toEqual(['theme'])
     expect(readLocalHistory(localHistoryKey('module', 'alice'))).toEqual([])
+  })
+})
+
+function detail(id: string, revision = 3): TranscriptionTranscript {
+  return {
+    ...summary(id, `T ${id}`, '2026-10-04T10:00:00.000Z'),
+    subtitleSource: 'ai',
+    model: 'whisper',
+    provider: 'speaches',
+    fileSize: 12,
+    text: 'Anna: Hallo',
+    segments: [{ id: 0, start: 0, end: 1, text: 'Hallo', speaker: 'Anna', redactions: [] }],
+    words: [],
+    sourceFiles: [],
+    speakerColors: {},
+    summaryTemplateId: null,
+    revision
+  }
+}
+
+describe('kept copies of server transcripts', () => {
+  it('keeps the newest copies, survives a fresh list and reads back with its revision', () => {
+    let records: LocalHistoryRecord[] = []
+    for (let index = 0; index <= KEPT_SERVER_COPIES; index++) {
+      records = keepServerCopy(records, detail(`s-${index}`))
+    }
+    const kept = records.filter((record) => record.transcript).map((record) => record.id)
+    expect(kept).toHaveLength(KEPT_SERVER_COPIES)
+    expect(kept).not.toContain('s-0')
+    const synced = syncLocalHistory(records, [summary('s-5', 'T s-5', '2026-10-04T10:00:00Z')])
+    expect(synced.map((record) => record.id)).toEqual(['s-5'])
+    const parsed = parseLocalHistory(JSON.stringify(synced))
+    expect(serverCopy(parsed, 's-5')).toEqual(detail('s-5'))
+    expect(serverCopy(parsed, 's-4')).toBeNull()
+  })
+})
+
+describe('saves that did not reach the server', () => {
+  const input: TranscriptionTranscriptCreate = {
+    idempotencyKey: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+    title: 'Gruppe 1',
+    jobIds: ['0b7c2a4e-6f4d-4b8e-9a51-1d1f1c3e5a77'],
+    language: 'de',
+    duration: 10,
+    segments: [{ id: 0, start: 0, end: 10, text: 'Hallo zusammen', speaker: 'Anna' }],
+    sourceFiles: [
+      {
+        name: 'a.wav',
+        size: 12,
+        duration: 10,
+        startTime: 0,
+        endTime: 10,
+        jobId: '0b7c2a4e-6f4d-4b8e-9a51-1d1f1c3e5a77'
+      }
+    ]
+  }
+  const now = new Date('2026-10-04T12:00:00.000Z')
+
+  it('keeps a failed save once as a transcript of this browser that opens after a reload', () => {
+    const records = recordSaveOutcome([], { input, error: new Error('offline') }, now)
+    expect(records).toHaveLength(1)
+    const record = records[0]!
+    expect(record).toMatchObject({ id: localIdFor(input.idempotencyKey), local: true })
+    expect(isLocalTranscriptId(record.id)).toBe(true)
+    expect(record.transcript).toMatchObject({
+      title: 'Gruppe 1',
+      originalFilename: 'a.wav',
+      createdAt: now.toISOString(),
+      segments: [{ text: 'Hallo zusammen', speaker: 'Anna', redactions: [] }]
+    })
+    // A second failure of the same save adds nothing.
+    expect(recordSaveOutcome(records, { input, error: new Error('again') }, now)).toEqual(records)
+    // After a reload the record is read back with its whole transcript.
+    expect(parseLocalHistory(JSON.stringify(records))).toEqual(records)
+  })
+
+  it('drops the copy once a retry reached the server, unless the user changed it', () => {
+    const records = recordSaveOutcome([], { input, error: new Error('offline') }, now)
+    const saved = { input, transcript: detail('0b7c2a4e-6f4d-4b8e-9a51-1d1f1c3e5a77') }
+    expect(recordSaveOutcome(records, saved, now)).toEqual([])
+    const edited = updateRecord(records, records[0]!.id, (record) => ({
+      ...record,
+      transcript: { ...record.transcript!, updatedAt: '2026-10-04T12:05:00.000Z' }
+    }))
+    expect(recordSaveOutcome(edited, saved, now)).toEqual(edited)
   })
 })

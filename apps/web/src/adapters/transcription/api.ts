@@ -5,6 +5,7 @@ import {
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
+  type UseQueryOptions,
   type UseQueryResult
 } from '@tanstack/react-query'
 import {
@@ -65,6 +66,7 @@ import {
   type TranscriptionUploadTarget
 } from '@justcampus/shared'
 import { ApiRequestError, apiFetch } from '@/lib/api'
+import { withParsedSegments } from './segments/payload'
 
 /**
  * Every endpoint of the transcription module as a typed function, plus TanStack Query keys and
@@ -182,21 +184,50 @@ export async function listTranscripts(
   ).transcripts
 }
 
+/** What became of a save of a new transcript: the saved one, or the error (T-39). */
+export type TranscriptCreateOutcome =
+  | { input: TranscriptionTranscriptCreate; transcript: TranscriptionTranscript }
+  | { input: TranscriptionTranscriptCreate; error: unknown }
+
+const createListeners = new Set<(outcome: TranscriptCreateOutcome) => void>()
+
+/**
+ * Hears of every save of a new transcript, wherever it starts; the history keeps one that failed
+ * in this browser and drops that copy once a retry reached the server (T-39).
+ */
+export function onTranscriptCreate(
+  listener: (outcome: TranscriptCreateOutcome) => void
+): () => void {
+  createListeners.add(listener)
+  return () => {
+    createListeners.delete(listener)
+  }
+}
+
 /** Saves a group's merged result once; the same idempotency key answers the first save (T-13). */
 export async function createTranscript(
   input: TranscriptionTranscriptCreate
 ): Promise<TranscriptionTranscript> {
-  return transcriptionTranscriptSchema.parse(
-    await apiFetch<unknown>(TRANSCRIPTION_API.transcripts, { ...post, json: input })
-  )
+  let transcript: TranscriptionTranscript
+  try {
+    transcript = transcriptionTranscriptSchema.parse(
+      await apiFetch<unknown>(TRANSCRIPTION_API.transcripts, { ...post, json: input })
+    )
+  } catch (error) {
+    createListeners.forEach((listener) => listener({ input, error }))
+    throw error
+  }
+  createListeners.forEach((listener) => listener({ input, transcript }))
+  return transcript
 }
 
+/** A saved transcript; segments sent as the JSON text of their array are read too (T-39). */
 export async function getTranscript(
   id: string,
   signal?: AbortSignal
 ): Promise<TranscriptionTranscript> {
   return transcriptionTranscriptSchema.parse(
-    await apiFetch<unknown>(TRANSCRIPTION_API.transcript(id), { signal })
+    withParsedSegments(await apiFetch<unknown>(TRANSCRIPTION_API.transcript(id), { signal }))
   )
 }
 
@@ -508,16 +539,29 @@ export function useTranscripts(): UseQueryResult<TranscriptionTranscriptSummary[
   })
 }
 
-export function useTranscript(id: string | null): UseQueryResult<TranscriptionTranscript> {
-  return useQuery({
-    queryKey: transcriptionKeys.transcript(id ?? ''),
-    queryFn: ({ signal }) => getTranscript(id!, signal),
-    enabled: id !== null,
+/** The detail of a saved transcript, as the result view loads it. */
+export function transcriptQuery(
+  id: string
+): UseQueryOptions<
+  TranscriptionTranscript,
+  Error,
+  TranscriptionTranscript,
+  ReturnType<typeof transcriptionKeys.transcript>
+> {
+  return queryOptions({
+    queryKey: transcriptionKeys.transcript(id),
+    queryFn: ({ signal }) => getTranscript(id, signal),
     retry,
     networkMode: NETWORK_MODE,
-    // The workspace holds the edits; a refetch must not overwrite them behind its back.
-    staleTime: Infinity
+    // The workspace holds the edits; a refetch must not overwrite them behind its back. Opening a
+    // transcript loads it afresh all the same, so changes from elsewhere show (T-39).
+    staleTime: Infinity,
+    refetchOnMount: 'always'
   })
+}
+
+export function useTranscript(id: string | null): UseQueryResult<TranscriptionTranscript> {
+  return useQuery({ ...transcriptQuery(id ?? ''), enabled: id !== null })
 }
 
 export function useTranscriptionFormats(): UseQueryResult<TranscriptionFormat[]> {

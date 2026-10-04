@@ -9,7 +9,13 @@ import {
   type RunningMock
 } from '../transcripts/testing.js'
 import { optimizeRouter } from './index.js'
-import { applyAssignments, optimizationInput, parseAssignments } from './speakers.js'
+import {
+  applyAssignments,
+  optimizationInput,
+  optimizeSpeakers,
+  parseAssignments,
+  UnusableOptimizationError
+} from './speakers.js'
 
 vi.mock('../transcripts/store.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../transcripts/store.js')>()),
@@ -57,6 +63,28 @@ describe('assignments', () => {
     )
     expect([...parseAssignments('{"1": "Anna", "x": "Ben"}', speakers)]).toEqual([[1, 'Anna']])
     expect([...parseAssignments('keine Ahnung', speakers)]).toEqual([])
+  })
+
+  it('fails a batch the model answered without a usable assignment', async () => {
+    const answers = [
+      'I cannot provide an assignment',
+      '{"segments": [{"id": 99, "speaker": "Anna"}]}'
+    ]
+    for (const content of answers) {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+      await expect(
+        optimizeSpeakers(
+          { baseUrl: 'https://llm.example/v1', apiKey: null, model: 'm', timeoutMs: 5000 },
+          segments
+        )
+      ).rejects.toBeInstanceOf(UnusableOptimizationError)
+      fetchMock.mockRestore()
+    }
   })
 
   it('changes nothing but the speaker', () => {
@@ -126,5 +154,15 @@ describe('speaker optimisation route', () => {
     const failing = await app.request(path, json('POST', { segments, model: 'mock-fail' }))
     expect(failing.status).toBe(502)
     expect(await failing.json()).toMatchObject({ error: { code: 'module_unavailable' } })
+  })
+
+  it('reports an answer without a usable assignment as an error, not as a success', async () => {
+    const app = testApp(optimizeRouter, { config: mockChatConfig(mock.origin) })
+    const response = await app.request(
+      path,
+      json('POST', { segments, transcriptId, model: 'mock-prose' })
+    )
+    expect(response.status).toBe(502)
+    expect(await response.json()).toMatchObject({ error: { code: 'module_unavailable' } })
   })
 })

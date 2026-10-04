@@ -20,9 +20,9 @@ import type { TranscriptionSourceFile } from '@justcampus/shared'
 import { mediaUrlExpiresSoon, useJobAudioUrl } from '../api'
 import { formatTime, WaveformPlayer, type WaveformPlayerHandle } from '../audio'
 import {
+  playbackStep,
   sourceIndexAt,
   sourceTimeline,
-  toGlobalTime,
   toLocalTime,
   type SpeakerBlock
 } from '../segments'
@@ -48,15 +48,16 @@ interface GlobalPlayerProps {
 interface PendingAction {
   local: number
   play: boolean
-  end: number | null
 }
 
 /**
  * The result's global player (T-24), after kiChat's `initGlobalAudioPlayer`: a waveform with the
  * speakers' time line, play and pause, seeking and the time over all source files of the
  * transcript. Each file's audio comes from a fresh signed URL of its job, fetched again before it
- * expires and when playback fails; at a file's end the next one plays on. Above 100 MB the
- * waveform is not decoded, the audio still plays.
+ * expires and when playback fails. Playback keeps to the saved ranges (`playbackStep`): at a
+ * file's saved end the next one plays on, also when its audio runs longer, and a block played in
+ * Corrections stops at its end in whichever file that lies. Above 100 MB the waveform is not
+ * decoded, the audio still plays.
  */
 export function GlobalPlayer({
   sources,
@@ -79,6 +80,13 @@ export function GlobalPlayer({
   const ready = useRef(false)
   const retried = useRef(false)
   const playing = useRef(false)
+  const [active, setActive] = useState(false)
+  /** The global end of the block being played, across files; `null` plays on. */
+  const rangeEnd = useRef<number | null>(null)
+  /** The global time shown last, to tell when the block's end is crossed. */
+  const shown = useRef<number | null>(null)
+  /** Set while the next file is being loaded, so the hand-over happens once. */
+  const switching = useRef(false)
   const timeline = useMemo(() => sourceTimeline(blocks, source), [blocks, source])
 
   const apply = useCallback(() => {
@@ -86,12 +94,16 @@ export function GlobalPlayer({
     const player = wave.current
     if (!action || !player || !ready.current) return
     pending.current = null
-    if (!action.play) player.seek(action.local)
-    else if (action.end !== null) void player.playRange(action.local, action.end)
-    else {
-      player.seek(action.local)
-      void player.play()
-    }
+    switching.current = false
+    player.seek(action.local)
+    if (action.play) void player.play()
+  }, [])
+
+  /** Loads another file and plays or shows it from `local` once it is ready. */
+  const load = useCallback((target: number, local: number, play: boolean) => {
+    pending.current = { local, play }
+    ready.current = false
+    setIndex(target)
   }, [])
 
   const go = useCallback(
@@ -99,11 +111,9 @@ export function GlobalPlayer({
       const target = sourceIndexAt(sources, global)
       const file = sources[target]
       if (!file) return
-      pending.current = {
-        local: toLocalTime(file, global),
-        play,
-        end: end === null ? null : toLocalTime(file, Math.min(end, file.endTime))
-      }
+      rangeEnd.current = play ? end : null
+      shown.current = null
+      pending.current = { local: toLocalTime(file, global), play }
       if (target !== index) {
         ready.current = false
         setIndex(target)
@@ -130,15 +140,58 @@ export function GlobalPlayer({
     [go]
   )
 
-  // The next file at a file's end; a fresh URL when the audio fails (an expired signature).
+  /**
+   * Shows the time of the playing file's `local` second on the global time line and keeps
+   * playback to the saved ranges: the next file at a file's saved end, a stop at a block's end.
+   */
+  const follow = useCallback(
+    (local: number) => {
+      const step = playbackStep(sources, index, local, rangeEnd.current, shown.current)
+      shown.current = step.time
+      setTime(step.time)
+      onTime(step.time)
+      if (!playing.current || switching.current) return
+      if (step.kind === 'stop') {
+        rangeEnd.current = null
+        wave.current?.pause()
+        // At the saved end of the last file the audio counts as ended, so the next play starts it
+        // from the beginning instead of stopping again at once.
+        const element = wave.current?.audio()
+        if (step.last && element && Number.isFinite(element.duration)) {
+          element.currentTime = element.duration
+        }
+      } else if (step.kind === 'next') {
+        switching.current = true
+        wave.current?.pause()
+        load(step.index, step.local, true)
+      }
+    },
+    [sources, index, onTime, load]
+  )
+
+  // While playing, the boundaries are checked every frame; `timeupdate` alone is too coarse.
+  useEffect(() => {
+    if (!active) return
+    let frame = 0
+    const tick = (): void => {
+      const player = wave.current
+      if (player) follow(player.currentTime())
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [active, follow])
+
+  // The next file when a file's audio ends before its saved end; a fresh URL when the audio fails
+  // (an expired signature).
   useEffect(() => {
     const element = wave.current?.audio()
     if (!element) return
     const onEnded = (): void => {
-      if (index >= sources.length - 1) return
-      pending.current = { local: 0, play: true, end: null }
-      ready.current = false
-      setIndex(index + 1)
+      if (index >= sources.length - 1 || switching.current) return
+      const next = sources[index + 1]!
+      switching.current = true
+      load(index + 1, toLocalTime(next, sources[index]!.endTime), true)
     }
     const onError = (): void => {
       if (!element.getAttribute('src')) return
@@ -147,7 +200,7 @@ export function GlobalPlayer({
         return
       }
       retried.current = true
-      pending.current = { local: element.currentTime, play: playing.current, end: null }
+      pending.current = { local: element.currentTime, play: playing.current }
       ready.current = false
       void refetchAudio()
     }
@@ -162,7 +215,7 @@ export function GlobalPlayer({
       element.removeEventListener('error', onError)
       element.removeEventListener('playing', onPlaying)
     }
-  }, [index, sources.length, refetchAudio])
+  }, [index, sources, refetchAudio, load])
 
   if (sources.length === 0) {
     return <p className="m-0">{t('transcription.result.noAudio')}</p>
@@ -203,14 +256,10 @@ export function GlobalPlayer({
         size={source?.size || undefined}
         segments={timeline}
         compact
-        onTimeUpdate={(local) => {
-          if (!source) return
-          const global = toGlobalTime(source, local)
-          setTime(global)
-          onTime(global)
-        }}
+        onTimeUpdate={follow}
         onPlayingChange={(value) => {
           playing.current = value
+          setActive(value)
           onPlayingChange(value)
         }}
         onDuration={onDuration}

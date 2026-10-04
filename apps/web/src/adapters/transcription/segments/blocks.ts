@@ -176,6 +176,19 @@ export function isSoloed(
   )
 }
 
+/**
+ * What the speaker panel shows when a speaker is chosen to focus (T-26): a hidden speaker (by the
+ * eye or by another's solo, which may still be set from the Preview) is shown again, so the
+ * focused blocks can be seen and scrolled to; everyone else stays as they are. The same set when
+ * the speaker is shown already.
+ */
+export function revealSpeaker(hidden: ReadonlySet<string>, speaker: string): ReadonlySet<string> {
+  if (!hidden.has(speaker)) return hidden
+  const next = new Set(hidden)
+  next.delete(speaker)
+  return next
+}
+
 /** Shows only `speaker`, or everyone again when it is already the only one shown. */
 export function toggleSolo(
   speakers: readonly string[],

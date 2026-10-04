@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { TriangleAlertIcon, Undo2Icon, WandSparklesIcon } from 'lucide-react'
+import { Undo2Icon, WandSparklesIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -15,7 +15,6 @@ import {
   Spinner
 } from '@ki4jlu/design-system'
 import type { TranscriptionTranscript, TranscriptionTranscriptSummary } from '@justcampus/shared'
-import { Alert, AlertAction, AlertDescription } from '@/components/ui/alert'
 import { ApiRequestError } from '@/lib/api'
 import {
   generateSubtitle,
@@ -29,10 +28,13 @@ import { ExportView } from '../export'
 import {
   changeLocalHistory,
   isLocalTranscriptId,
+  keepServerCopy,
+  serverCopy,
   updateRecord,
   useLocalHistory,
   withoutRecord
 } from '../history/local-store'
+import { Notice } from '../notice'
 import {
   blockAt,
   blockCopyText,
@@ -45,6 +47,7 @@ import { useTranscriptionWorkspace } from '../use-workspace'
 import { scrollToBlock } from './dom'
 import { ResultHeader } from './header'
 import { IconButton } from './icon-button'
+import { formatExpiry, openingCopy } from './opening'
 import { GlobalPlayer, type GlobalPlayerHandle } from './player'
 import {
   closeResultSession,
@@ -81,12 +84,13 @@ function useOpenSession(
   id: string,
   transcript: TranscriptionTranscript | null,
   deps: SessionDeps,
-  local: boolean
+  local: boolean,
+  keptCopy = false
 ): ResultSession | null {
   const current = useResultSession()
   useEffect(() => {
-    if (transcript) ensureResultSession(transcript, deps, local)
-  }, [transcript, deps, local])
+    if (transcript) ensureResultSession(transcript, deps, local, keptCopy)
+  }, [transcript, deps, local, keptCopy])
   useEffect(() => () => closeResultSession(id), [id])
   return current && current.id === id && !current.isClosed ? current : null
 }
@@ -95,9 +99,26 @@ function ServerResult({ id }: { id: string }): React.JSX.Element {
   const { t } = useTranslation()
   const client = useQueryClient()
   const { component, capabilities, newTranscription } = useTranscriptionWorkspace()
-  const { key } = useLocalHistory(component.id)
+  const { key, records } = useLocalHistory(component.id)
   const query = useTranscript(id)
   const writesSubtitles = Boolean(capabilities?.summaries)
+
+  // A transcript deleted meanwhile leaves the history too, and is not brought back (T-39).
+  const gone =
+    query.error instanceof ApiRequestError &&
+    (query.error.status === 404 || query.error.status === 410)
+  // Only what was loaded since opening counts: the cache may hold an older revision (T-39). Once
+  // the session is open it holds the document; later copies do not replace it.
+  const fresh = query.isFetchedAfterMount && query.isSuccess ? query.data : null
+  const kept = query.isError ? serverCopy(records, id) : null
+  const opening = gone
+    ? null
+    : openingCopy({
+        fresh,
+        failed: query.isError && query.isFetchedAfterMount,
+        kept,
+        earlier: query.data ?? null
+      })
 
   const deps = useMemo<SessionDeps>(
     () => ({
@@ -106,6 +127,7 @@ function ServerResult({ id }: { id: string }): React.JSX.Element {
       generateSubtitle,
       optimize: (request) => optimizeSpeakers(request),
       onServerCopy: (saved) => {
+        if (key) changeLocalHistory(key, (stored) => keepServerCopy(stored, saved))
         client.setQueryData(transcriptionKeys.transcript(saved.id), saved)
         client.setQueryData<TranscriptionTranscriptSummary[]>(
           transcriptionKeys.transcripts,
@@ -124,19 +146,26 @@ function ServerResult({ id }: { id: string }): React.JSX.Element {
         )
       }
     }),
-    [client]
+    [client, key]
   )
-  const session = useOpenSession(id, query.data ?? null, deps, false)
+  const session = useOpenSession(
+    id,
+    opening?.transcript ?? null,
+    deps,
+    false,
+    Boolean(opening?.fallback)
+  )
+
+  // The copy the server just answered is kept for a later transient failure (T-39).
+  useEffect(() => {
+    if (fresh && key) changeLocalHistory(key, (stored) => keepServerCopy(stored, fresh))
+  }, [fresh, key])
 
   // A transcript saved a moment ago gets its AI subtitle shortly after (T-23).
   useEffect(() => {
     if (session && writesSubtitles) session.expectSubtitle()
   }, [session, writesSubtitles])
 
-  // A transcript deleted meanwhile leaves the history too, and is not brought back (T-39).
-  const gone =
-    query.error instanceof ApiRequestError &&
-    (query.error.status === 404 || query.error.status === 410)
   useEffect(() => {
     if (!gone) return
     if (key) changeLocalHistory(key, (records) => withoutRecord(records, id))
@@ -145,38 +174,42 @@ function ServerResult({ id }: { id: string }): React.JSX.Element {
     )
   }, [gone, key, id, client])
 
-  if (gone) {
+  if (gone) return <NotFound onStartNew={() => void newTranscription()} />
+  if (query.isError && !opening) {
     return (
-      <Alert variant="warning">
-        <TriangleAlertIcon aria-hidden="true" />
-        <AlertDescription>{t('transcription.result.notFound')}</AlertDescription>
-        <AlertAction>
-          <Button type="button" variant="outline" onClick={() => void newTranscription()}>
-            {t('transcription.common.startNew')}
-          </Button>
-        </AlertAction>
-      </Alert>
-    )
-  }
-  if (query.isError) {
-    return (
-      <Alert variant="destructive">
-        <TriangleAlertIcon aria-hidden="true" />
-        <AlertDescription>{t('transcription.common.loadFailed')}</AlertDescription>
-        <AlertAction>
+      <Notice
+        tone="error"
+        action={
           <Button type="button" variant="outline" onClick={() => void query.refetch()}>
             {t('transcription.common.retry')}
           </Button>
-        </AlertAction>
-      </Alert>
+        }
+      >
+        {t('transcription.common.loadFailed')}
+      </Notice>
     )
   }
   if (!session) return <Loading />
   return <ResultWorkspace session={session} />
 }
 
-function LocalResult({ id }: { id: string }): React.JSX.Element {
+function NotFound({ onStartNew }: { onStartNew: () => void }): React.JSX.Element {
   const { t } = useTranslation()
+  return (
+    <Notice
+      tone="warning"
+      action={
+        <Button type="button" variant="outline" onClick={onStartNew}>
+          {t('transcription.common.startNew')}
+        </Button>
+      }
+    >
+      {t('transcription.result.notFound')}
+    </Notice>
+  )
+}
+
+function LocalResult({ id }: { id: string }): React.JSX.Element {
   const { component, newTranscription } = useTranscriptionWorkspace()
   const { key, records } = useLocalHistory(component.id)
   const transcript = records.find((record) => record.id === id)?.transcript ?? null
@@ -203,19 +236,7 @@ function LocalResult({ id }: { id: string }): React.JSX.Element {
   )
   const session = useOpenSession(id, transcript, deps, true)
 
-  if (!transcript) {
-    return (
-      <Alert variant="warning">
-        <TriangleAlertIcon aria-hidden="true" />
-        <AlertDescription>{t('transcription.result.notFound')}</AlertDescription>
-        <AlertAction>
-          <Button type="button" variant="outline" onClick={() => void newTranscription()}>
-            {t('transcription.common.startNew')}
-          </Button>
-        </AlertAction>
-      </Alert>
-    )
-  }
+  if (!transcript) return <NotFound onStartNew={() => void newTranscription()} />
   if (!session) return <Loading />
   return <ResultWorkspace session={session} />
 }
@@ -236,7 +257,7 @@ function Loading(): React.JSX.Element {
  * and asks before unsaved edits are dropped.
  */
 function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Element {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const speakerLabel = useSpeakerLabel()
   const { resultTab, setResultTab, setCurrentDocument, setBeforeLeave, capabilities } =
     useTranscriptionWorkspace()
@@ -353,34 +374,44 @@ function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Ele
         onDownload={resultTab === 'export' ? null : download}
         canGenerateSubtitle={Boolean(capabilities?.summaries)}
       />
+      {state.keptCopy ? (
+        <Notice tone="warning">{t('transcription.result.offlineCopy')}</Notice>
+      ) : null}
+      {transcript.expiresAt && !state.local ? (
+        <Notice tone="info">
+          {t('transcription.result.retentionNotice', {
+            date: formatExpiry(transcript.expiresAt, i18n.language)
+          })}
+        </Notice>
+      ) : null}
       {state.saveStatus === 'failed' ? (
-        <Alert variant="destructive">
-          <TriangleAlertIcon aria-hidden="true" />
-          <AlertDescription>{t('transcription.result.saveFailed')}</AlertDescription>
-          <AlertAction>
+        <Notice
+          tone="error"
+          action={
             <Button type="button" variant="outline" onClick={() => session.retry()}>
               {t('transcription.common.retry')}
             </Button>
-          </AlertAction>
-        </Alert>
+          }
+        >
+          {t('transcription.result.saveFailed')}
+        </Notice>
       ) : null}
       {state.saveStatus === 'conflict' ? (
-        <Alert variant="warning">
-          <TriangleAlertIcon aria-hidden="true" />
-          <AlertDescription>
-            <span className="flex flex-col gap-2">
-              {t('transcription.result.saveConflict')}
-              <span className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={() => void session.reload()}>
-                  {t('transcription.result.conflictReload')}
-                </Button>
-                <Button type="button" variant="outline" onClick={() => void session.overwrite()}>
-                  {t('transcription.result.conflictOverwrite')}
-                </Button>
-              </span>
+        <Notice
+          tone="warning"
+          action={
+            <span className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={() => void session.reload()}>
+                {t('transcription.result.conflictReload')}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => void session.overwrite()}>
+                {t('transcription.result.conflictOverwrite')}
+              </Button>
             </span>
-          </AlertDescription>
-        </Alert>
+          }
+        >
+          {t('transcription.result.saveConflict')}
+        </Notice>
       ) : null}
       {resultTab === 'export' ? (
         <ExportView />
