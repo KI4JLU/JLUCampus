@@ -71,17 +71,91 @@ export interface SamplePlayer {
   element: React.JSX.Element
 }
 
+/** The part of `<audio>` a sample's start needs. */
+export interface SampleMedia {
+  src: string
+  currentTime: number
+  readonly error: unknown
+  play: () => Promise<void>
+  addEventListener: (type: 'loadedmetadata' | 'error', listener: () => void) => void
+  removeEventListener: (type: 'loadedmetadata' | 'error', listener: () => void) => void
+}
+
+/**
+ * Play requests in order: each begins a new one, and `cancel` (stop, a new analysis, closing the
+ * dialog) ends the one pending, so a request still waiting for its URL or the audio's metadata
+ * does not start after it (T-19, T-21).
+ */
+export class PlayRequests {
+  private generation = 0
+
+  /** A new request; the function tells whether it is still the current one. */
+  begin(): () => boolean {
+    const mine = ++this.generation
+    return () => mine === this.generation
+  }
+
+  cancel(): void {
+    this.generation++
+  }
+}
+
+/**
+ * Loads the audio if its URL changed and plays from `start`, checking after every wait that the
+ * request is still current. `onStart` runs right before the sound starts.
+ */
+export async function startSample(
+  audio: SampleMedia,
+  request: {
+    resolve: () => Promise<string | null>
+    /** The URL the element holds already. */
+    loaded: { current: string | null }
+    start: number
+    current: () => boolean
+    onStart: () => void
+  }
+): Promise<'stale' | 'noUrl' | 'playing' | 'failed'> {
+  const url = await request.resolve()
+  if (!request.current()) return 'stale'
+  if (!url) return 'noUrl'
+  if (request.loaded.current !== url) {
+    request.loaded.current = url
+    audio.src = url
+    await new Promise<void>((done) => {
+      const finish = (): void => {
+        audio.removeEventListener('loadedmetadata', finish)
+        audio.removeEventListener('error', finish)
+        done()
+      }
+      audio.addEventListener('loadedmetadata', finish)
+      audio.addEventListener('error', finish)
+    })
+    if (!request.current()) return 'stale'
+  }
+  audio.currentTime = request.start
+  request.onStart()
+  try {
+    await audio.play()
+    return 'playing'
+  } catch {
+    // A stop during the start rejects the play; that is no failure.
+    return request.current() ? 'failed' : 'stale'
+  }
+}
+
 /** One player for every sample of the dialog, so only one plays at a time (kiChat's preview). */
 export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePlayer {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const loaded = useRef<string | null>(null)
   const range = useRef<Playing | null>(null)
+  const requests = useRef(new PlayRequests())
   const [playing, setPlaying] = useState<string | null>(null)
   const [time, setTime] = useState(0)
   const [duration, setDuration] = useState<number | null>(null)
   const [failed, setFailed] = useState(false)
 
   const stop = useCallback(() => {
+    requests.current.cancel()
     range.current = null
     audioRef.current?.pause()
     setPlaying(null)
@@ -91,32 +165,21 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
     async (key: string, start: number, end: number): Promise<void> => {
       const audio = audioRef.current
       if (!audio) return
-      const url = await resolve()
-      if (!url) {
-        setFailed(true)
-        return
-      }
-      setFailed(false)
-      if (loaded.current !== url) {
-        loaded.current = url
-        audio.src = url
-        await new Promise<void>((done) => {
-          const finish = (): void => {
-            audio.removeEventListener('loadedmetadata', finish)
-            audio.removeEventListener('error', finish)
-            done()
-          }
-          audio.addEventListener('loadedmetadata', finish)
-          audio.addEventListener('error', finish)
-        })
-      }
-      audio.currentTime = start
-      range.current = { key, end }
-      setPlaying(key)
-      setTime(start)
-      try {
-        await audio.play()
-      } catch {
+      const current = requests.current.begin()
+      const outcome = await startSample(audio, {
+        resolve,
+        loaded,
+        start,
+        current,
+        onStart: () => {
+          range.current = { key, end }
+          setPlaying(key)
+          setTime(start)
+          setFailed(false)
+        }
+      })
+      if (outcome === 'noUrl') setFailed(true)
+      if (outcome === 'failed') {
         range.current = null
         setPlaying(null)
         setFailed(audio.error !== null)
@@ -153,10 +216,14 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
     return () => cancelAnimationFrame(frame)
   }, [playing])
 
-  // Leaving the dialog stops the sound.
+  // Leaving the dialog stops the sound, and a start still pending.
   useEffect(() => {
     const audio = audioRef.current
-    return () => audio?.pause()
+    const pending = requests.current
+    return () => {
+      pending.cancel()
+      audio?.pause()
+    }
   }, [])
 
   return {

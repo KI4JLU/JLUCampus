@@ -31,7 +31,7 @@ import {
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { UploadDialog } from './dialogs'
 import { useDialogHost } from './use-dialog-host'
-import { dropTargetIndex, type FilePosition } from './queue'
+import { dropTargetIndex, fitIntoGroup, type FilePosition } from './queue'
 import { UploadQueue, type QueueLabels } from './store'
 import { UploadContext } from './use-upload'
 import { limitMegabytes, partitionFiles } from './validation'
@@ -117,7 +117,8 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
 
   const { capabilities, openTranscript } = workspace
   const maxBytes = capabilities?.limits.maxFileBytes ?? TRANSCRIPTION_MAX_FILE_BYTES
-  // A saved transcript combines at most this many files; the server says if the admin set fewer.
+  // The admin's limit per transcript; without one (kiChat has none) only the contract's
+  // anti-abuse bound, far above usual groups.
   const maxFiles = capabilities?.limits.maxFilesPerGroup ?? TRANSCRIPTION_GROUP_FILES_MAX
 
   useEffect(() => {
@@ -154,40 +155,41 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     [dialogs, maxBytes, t]
   )
 
-  /** Files beyond the admin's limit per transcript are not added; the alert says so. */
-  const fitGroup = useCallback(
-    async (files: File[], present: number): Promise<File[]> => {
-      if (present + files.length <= maxFiles) return files
-      await dialogs.alert({
+  /** The alert for files beyond the limit per transcript, which are not added. */
+  const alertGroupFull = useCallback(
+    () =>
+      dialogs.alert({
         title: t('transcription.common.error'),
         message: t('transcription.upload.groupFull', { count: maxFiles })
-      })
-      return files.slice(0, Math.max(0, maxFiles - present))
-    },
+      }),
     [dialogs, maxFiles, t]
   )
 
+  /**
+   * Adds the files that fit; duplicates take no place (T-05). Distinct files beyond the limit are
+   * left out, and the alert says so.
+   */
   const addFiles = useCallback(
     async (files: readonly File[], groupIndex: number | null): Promise<void> => {
       const accepted = await checkFiles(files)
       if (accepted.length === 0) return
       const groups = queue.getSnapshot().groups
-      const present = groups[groupIndex ?? dropTargetIndex(groups)]?.files.length ?? 0
-      queue.addFiles(await fitGroup(accepted, present), groupIndex)
+      const present = groups[groupIndex ?? dropTargetIndex(groups)]?.files ?? []
+      const room = Math.max(0, maxFiles - present.length)
+      const { overflow } = fitIntoGroup(present, accepted, room)
+      queue.addFiles(accepted, groupIndex)
+      if (overflow) await alertGroupFull()
     },
-    [checkFiles, fitGroup, queue]
+    [alertGroupFull, checkFiles, maxFiles, queue]
   )
 
   /** Moves a file; one refused because the target group is full gets the catalog's alert. */
   const moveFile = useCallback(
     (from: FilePosition, toGroupIndex: number, toFileIndex: number | null = null): void => {
       if (queue.moveFile(from, toGroupIndex, toFileIndex) || queue.getSnapshot().processing) return
-      void dialogs.alert({
-        title: t('transcription.common.error'),
-        message: t('transcription.upload.groupFull', { count: maxFiles })
-      })
+      void alertGroupFull()
     },
-    [dialogs, maxFiles, queue, t]
+    [alertGroupFull, queue]
   )
 
   const start = useCallback(async (): Promise<void> => {
@@ -212,11 +214,13 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     if (pendingUploads.length === 0 || processing) return
     void (async () => {
       for (const pending of takePendingUploads()) {
-        const accepted = await fitGroup(await checkFiles(pending.files), 0)
+        const accepted = await checkFiles(pending.files)
+        const { overflow } = fitIntoGroup([], accepted, maxFiles)
         queue.addGroupOfFiles(accepted, pending.title)
+        if (overflow) await alertGroupFull()
       }
     })()
-  }, [checkFiles, fitGroup, pendingUploads, processing, queue, takePendingUploads])
+  }, [alertGroupFull, checkFiles, maxFiles, pendingUploads, processing, queue, takePendingUploads])
 
   useEffect(() => {
     queue.showView(workspace.view)

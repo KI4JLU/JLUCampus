@@ -19,6 +19,7 @@ import {
   transcriptionFormatSchema,
   transcriptionJobCreatedSchema,
   transcriptionJobListSchema,
+  transcriptionJobPeaksSchema,
   transcriptionJobSchema,
   transcriptionMediaUrlSchema,
   transcriptionModelListSchema,
@@ -43,6 +44,7 @@ import {
   type TranscriptionJob,
   type TranscriptionJobCreate,
   type TranscriptionJobCreated,
+  type TranscriptionJobPeaks,
   type TranscriptionMediaUrl,
   type TranscriptionModel,
   type TranscriptionModelsRequest,
@@ -162,6 +164,24 @@ export async function getJobAudioUrl(
   return transcriptionMediaUrlSchema.parse(
     await apiFetch<unknown>(TRANSCRIPTION_API.jobAudio(id), { signal })
   )
+}
+
+/**
+ * The waveform the analysis computed, for audio too large to decode here (T-12, T-19); `null`
+ * before the analysis or without one.
+ */
+export async function getJobPeaks(
+  id: string,
+  signal?: AbortSignal
+): Promise<TranscriptionJobPeaks | null> {
+  try {
+    return transcriptionJobPeaksSchema.parse(
+      await apiFetch<unknown>(TRANSCRIPTION_API.jobPeaks(id), { signal })
+    )
+  } catch (error) {
+    if (error instanceof ApiRequestError && error.status === 404) return null
+    throw error
+  }
 }
 
 /** A fresh signed URL of one analysed voice sample (T-17, T-21). */

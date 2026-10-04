@@ -12,6 +12,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  lte,
   or,
   sql,
   type SQL
@@ -19,7 +20,7 @@ import {
 
 import { db } from '../../../db/index.js'
 import { transcriptionJob } from '../../../db/schema.js'
-import type { JobRow } from './rows.js'
+import { UPLOAD_SETTLE_MS, type JobRow } from './rows.js'
 import { WORK_STATUSES } from './state.js'
 
 /**
@@ -116,20 +117,6 @@ export async function countActiveJobs(
         visible(now)
       )
     )
-  return row?.value ?? 0
-}
-
-/** Files the user's upload group holds so far. */
-export async function countGroupJobs(
-  componentId: string,
-  userId: string,
-  groupId: string,
-  now = new Date()
-): Promise<number> {
-  const [row] = await db
-    .select({ value: count() })
-    .from(transcriptionJob)
-    .where(and(owned(componentId, userId), eq(transcriptionJob.groupId, groupId), visible(now)))
   return row?.value ?? 0
 }
 
@@ -312,7 +299,9 @@ export async function releaseClaim(id: string, claimedAt: Date): Promise<void> {
 /**
  * Jobs whose objects and row go now (T-08, retention): deleted ones, unsaved ones past their
  * expiry, and ones whose transcript was deleted (`transcript_id` set to null by the foreign key,
- * `expires_at` cleared when saved) once `orphanBefore` passed. Jobs a worker still holds wait.
+ * `expires_at` cleared when saved) once `orphanBefore` passed. Jobs a worker still holds wait, and
+ * so do jobs whose signed upload may still store audio (`uploadSettled`): removing their row
+ * earlier would leave that audio without anything that finds it.
  */
 export async function purgeCandidates(
   now: Date,
@@ -338,7 +327,8 @@ export async function purgeCandidates(
           isNull(transcriptionJob.claimedAt),
           isNull(transcriptionJob.heartbeatAt),
           lt(transcriptionJob.heartbeatAt, new Date(now.getTime() - leaseMs))
-        )
+        ),
+        lte(transcriptionJob.createdAt, new Date(now.getTime() - UPLOAD_SETTLE_MS))
       )
     )
     .limit(limit)

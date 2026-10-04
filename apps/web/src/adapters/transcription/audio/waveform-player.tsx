@@ -23,6 +23,7 @@ import {
   blobWaveform,
   formatMegabytes,
   formatTime,
+  jobWaveform,
   placeholderPeaks,
   urlWaveform,
   type DecodedWaveform
@@ -62,6 +63,11 @@ export interface WaveformPlayerProps {
   name?: string
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
+  /**
+   * The analysed job of this audio: above the decode limit the waveform the analysis computed is
+   * drawn instead (T-12).
+   */
+  jobId?: string | null
   /** The speaker timeline, coloured per speaker. */
   segments?: readonly WaveformSegment[]
   region?: WaveformRegion | null
@@ -90,12 +96,14 @@ function cssColor(element: Element, name: string): string {
  * The audio player the transcription page uses everywhere, after kiChat's `WaveformAudioPlayer`
  * and its global player: play/pause, a waveform that is the seek bar (pointer and keyboard), the
  * time, an optional speaker timeline and a highlighted region. Local files play from an object
- * URL; remote audio from a signed URL. Above 100 MB no waveform is decoded, but the audio plays.
+ * URL; remote audio from a signed URL. Above 100 MB nothing is decoded here: the waveform the
+ * analysis computed is drawn (`jobId`), and the audio plays either way.
  */
 export function WaveformPlayer({
   source,
   name,
   size,
+  jobId = null,
   segments,
   region,
   compact = false,
@@ -140,15 +148,22 @@ export function WaveformPlayer({
   }, [source])
 
   useEffect(() => {
-    if (!source || tooLarge) return
+    if (!source) return
     const controller = new AbortController()
-    const decoding =
-      source instanceof Blob ? blobWaveform(source) : urlWaveform(source, controller.signal)
+    // Too large to decode here: the waveform the analysis computed, once there is one.
+    const decoding = tooLarge
+      ? jobId
+        ? jobWaveform(jobId)
+        : null
+      : source instanceof Blob
+        ? blobWaveform(source)
+        : urlWaveform(source, controller.signal)
+    if (!decoding) return
     void decoding.then((result) => {
       if (!controller.signal.aborted) setDecoded({ source, waveform: result })
     })
     return () => controller.abort()
-  }, [source, tooLarge])
+  }, [jobId, source, tooLarge])
 
   const knownDuration = duration || waveform?.duration || 0
   useEffect(() => {
@@ -371,7 +386,7 @@ export function WaveformPlayer({
           <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" />
         </div>
       </div>
-      {tooLarge && !compact ? (
+      {tooLarge && !waveform && !compact ? (
         <span>{t('transcription.common.player.waveformUnavailable')}</span>
       ) : null}
       <audio

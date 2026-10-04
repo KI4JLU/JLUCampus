@@ -165,13 +165,39 @@ export function restoredGroupName(filename: string): string {
   return filename.replace(/\.[^.]+$/, '') || filename
 }
 
-/** kiChat's duplicate identity within a group: name, byte size and last change (T-05). */
-export function duplicateKey(file: {
+/** What tells a file apart from the others of its group. */
+export interface FileIdentity {
   name: string
   size: number
   lastModified: number | null
-}): string {
+}
+
+/** kiChat's duplicate identity within a group: name, byte size and last change (T-05). */
+export function duplicateKey(file: FileIdentity): string {
   return `${file.name}_${file.size}_${file.lastModified ?? ''}`
+}
+
+/**
+ * The incoming files a group takes (T-05): duplicates of its files or of each other are left out
+ * first, so they take no place; of the others, as many as `room` allows. `overflow` tells whether
+ * distinct files did not fit.
+ */
+export function fitIntoGroup<T extends FileIdentity>(
+  present: readonly FileIdentity[],
+  incoming: readonly T[],
+  room = Infinity
+): { fitting: T[]; overflow: boolean } {
+  const keys = new Set(present.map(duplicateKey))
+  const fitting: T[] = []
+  let overflow = false
+  for (const file of incoming) {
+    const key = duplicateKey(file)
+    if (keys.has(key)) continue
+    keys.add(key)
+    if (fitting.length < room) fitting.push(file)
+    else overflow = true
+  }
+  return { fitting, overflow }
 }
 
 /** A queue row for a local file, before anything is uploaded. */
@@ -202,26 +228,21 @@ export function queueFileFrom(file: File): QueueFile {
 /**
  * Adds files to a group, creating it with the next default name if it is not there (kiChat's
  * `handleFileSelect`). Files that are already in the group (same name, size and last change) are
- * left out; the others are added after the group's files. Returns the rows really added.
+ * left out; of the others, as many as `room` allows are added after the group's files. Returns the
+ * rows really added.
  */
 export function addToGroup(
   groups: readonly QueueGroup[],
   groupIndex: number,
-  files: readonly QueueFile[]
-): { groups: QueueGroup[]; added: QueueFile[] } {
+  files: readonly QueueFile[],
+  room = Infinity
+): { groups: QueueGroup[]; added: QueueFile[]; overflow: boolean } {
   const next = [...groups]
   while (next.length <= groupIndex) next.push(newGroup(next.length))
   const group = next[groupIndex]!
-  const keys = new Set(group.files.map(duplicateKey))
-  const added: QueueFile[] = []
-  for (const file of files) {
-    const key = duplicateKey(file)
-    if (keys.has(key)) continue
-    keys.add(key)
-    added.push(file)
-  }
+  const { fitting: added, overflow } = fitIntoGroup(group.files, files, room)
   next[groupIndex] = { ...group, files: [...group.files, ...added] }
-  return { groups: next, added }
+  return { groups: next, added, overflow }
 }
 
 /**

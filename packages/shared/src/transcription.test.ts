@@ -17,6 +17,7 @@ import {
   TRANSCRIPTION_BUILTIN_TEMPLATES,
   TRANSCRIPTION_DEFAULT_CONFIG,
   TRANSCRIPTION_DEFAULT_TEMPLATE_ID,
+  TRANSCRIPTION_GROUP_FILES_MAX,
   TRANSCRIPTION_MAX_FILE_BYTES,
   TRANSCRIPTION_SPEAKER_COLORS,
   transcriptionComponentConfigSchema,
@@ -26,6 +27,7 @@ import {
   transcriptionSummaryRequestSchema,
   transcriptionTemplateInputSchema,
   transcriptionTemplateSchema,
+  transcriptionTranscriptCreateSchema,
   transcriptionTranscriptPatchSchema,
   widgetDefinition
 } from './index'
@@ -172,6 +174,41 @@ describe('jobs', () => {
         snippets: [{ id: 'SPEAKER_00', name: 'Test speaker', start: 2, end: 2 }]
       }).success
     ).toBe(false)
+  })
+
+  it('saves groups far larger than usual: no file limit unless the admin sets one (T-04)', () => {
+    expect(TRANSCRIPTION_DEFAULT_CONFIG.maxFilesPerGroup).toBeNull()
+    expect(transcriptionComponentConfigSchema.safeParse({ maxFilesPerGroup: 500 }).success).toBe(
+      true
+    )
+    const ids = Array.from(
+      { length: 150 },
+      (_, index) => `${index.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`
+    )
+    const group = {
+      idempotencyKey: '33333333-3333-4333-8333-333333333333',
+      title: 'Transkript 1',
+      jobIds: ids,
+      language: 'de',
+      duration: 1500,
+      segments: [],
+      sourceFiles: ids.map((jobId, index) => ({
+        jobId,
+        name: `${index}.wav`,
+        size: 1,
+        duration: 10,
+        startTime: index * 10,
+        endTime: index * 10 + 10
+      }))
+    }
+    expect(transcriptionTranscriptCreateSchema.safeParse(group).success).toBe(true)
+    expect(
+      transcriptionJobCreateSchema.safeParse({
+        filename: 'a.wav',
+        size: 1,
+        groupOrder: TRANSCRIPTION_GROUP_FILES_MAX - 1
+      }).success
+    ).toBe(true)
   })
 
   it('tells active and terminal states apart', () => {

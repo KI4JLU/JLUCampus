@@ -1,6 +1,5 @@
 import {
   TRANSCRIPTION_DEFAULT_CONFIG,
-  TRANSCRIPTION_GROUP_FILES_MAX,
   transcriptionCapabilitiesSchema,
   transcriptionComponentConfigSchema,
   type TranscriptionCapabilities,
@@ -115,9 +114,9 @@ export function capabilitiesOf(
     limits: {
       maxFileBytes: config.maxFileBytes,
       maxDurationSeconds: config.maxDurationSeconds,
-      // Without the admin's limit the contract's own one applies, which the save takes at most
-      // (T-04, T-13): the browser stops at it with its alert instead of failing the save.
-      maxFilesPerGroup: config.maxFilesPerGroup ?? TRANSCRIPTION_GROUP_FILES_MAX,
+      // `null` without the admin's limit: no limit, as in kiChat (T-04, T-13). The browser still
+      // stops at the contract's anti-abuse bound, `TRANSCRIPTION_GROUP_FILES_MAX`.
+      maxFilesPerGroup: config.maxFilesPerGroup,
       maxActiveJobs: config.maxActiveJobsPerUser
     },
     retention: {

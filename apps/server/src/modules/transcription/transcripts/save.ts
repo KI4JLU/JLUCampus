@@ -10,8 +10,8 @@ type TranscriptCreate = z.output<typeof transcriptionTranscriptCreateSchema>
 
 /**
  * Checks a group's jobs and makes the transcript's columns (T-13, T-14). Every job must be the
- * user's (else `404`), completed and not yet saved (else `409`); source files may only name the
- * group's jobs. Model and provider come from the jobs' results, else from the settings, as kiChat's
+ * user's (else `404`), completed and not yet saved (else `409`), at most the admin's files per
+ * transcript; source files may only name the group's jobs. Model and provider come from the jobs' results, else from the settings, as kiChat's
  * backend supplies them.
  */
 export function buildNewTranscript(
@@ -23,6 +23,13 @@ export function buildNewTranscript(
     expiresAt: Date | null
   }
 ): NewTranscript {
+  // The admin's optional limit per transcript (T-04); the browser stops before uploading more.
+  const limit = context.config.maxFilesPerGroup
+  if (limit !== null && input.jobIds.length > limit) {
+    throw new ApiError(400, 'validation', 'Request validation failed', [
+      { path: ['jobIds'], message: 'The transcript has more files than allowed' }
+    ])
+  }
   if (new Set(input.jobIds).size !== input.jobIds.length) {
     throw new ApiError(400, 'validation', 'Request validation failed', [
       { path: ['jobIds'], message: 'A job is named twice' }

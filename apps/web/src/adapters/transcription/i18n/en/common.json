@@ -65,7 +65,7 @@
     "seek": "Position in {{name}}",
     "seekUnnamed": "Position in the recording",
     "time": "{{current}} of {{total}}",
-    "waveformUnavailable": "No waveform is drawn for files over 100 MB."
+    "waveformUnavailable": "The waveform of files over 100 MB appears after the analysis."
   },
   "views": {
     "label": "View",

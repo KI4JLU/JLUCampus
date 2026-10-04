@@ -11,9 +11,14 @@ export {
   decodeWaveform,
   formatMegabytes,
   formatTime,
+  jobTimePeaks,
+  jobWaveform,
+  overviewPeaks,
   PEAK_RESOLUTION,
   placeholderPeaks,
+  serverTimePeaks,
   urlWaveform,
-  type DecodedWaveform
+  type DecodedWaveform,
+  type JobTimePeaks
 } from './peaks'
 export { playExclusively } from './exclusive'

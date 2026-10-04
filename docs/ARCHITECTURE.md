@@ -292,8 +292,12 @@ OpenAI-compatible `POST /audio/transcriptions` (`verbose_json` with segments) an
 the text with an OpenAI-compatible chat endpoint, which also writes summaries, subtitles
 and speaker optimisations. Diarised speakers get the name of the user's voice whose sample
 windows overlap them most. Playback and samples use fresh signed `GET` URLs from
-authenticated routes; signed URLs are never stored. All of a job's objects lie below
-`transcription/<component>/jobs/<job>/`. Upstream calls (`http.ts`) refuse redirects,
+authenticated routes; signed URLs are never stored. The analysis also stores the waveform
+(20 peaks per second) for files too large for the browser to decode. All of a job's objects
+lie below `transcription/<component>/jobs/<job>/`; a deleted job's row stays hidden until
+its signed upload can no longer write, so the sweep removes anything that upload stored.
+The number of files per transcript is limited only by the admin's optional setting (and a
+generous anti-abuse bound in the contract), checked when the group is saved. Upstream calls (`http.ts`) refuse redirects,
 time out and follow the caller's abort; failures answer `502 module_unavailable`.
 
 Storage is configured by `TRANSCRIPTION_S3_*`: the endpoint the server uses, the public

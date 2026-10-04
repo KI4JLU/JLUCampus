@@ -1,13 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES,
+  type TranscriptionJobPeaks
+} from '@justcampus/shared'
+import { getJobPeaks } from '../api'
 import {
   blobWaveform,
   computePeaks,
   formatMegabytes,
   formatTime,
+  jobWaveform,
+  overviewPeaks,
   placeholderPeaks,
+  serverTimePeaks,
   urlWaveform
 } from './peaks'
+
+vi.mock('../api', () => ({ getJobPeaks: vi.fn() }))
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -65,5 +74,37 @@ describe('formatting', () => {
   it('shows sizes in megabytes with one decimal', () => {
     expect(formatMegabytes(495_752)).toBe('0.5 MB')
     expect(formatMegabytes(524_288_000)).toBe('500.0 MB')
+  })
+})
+
+describe('the server waveform of large files (T-12)', () => {
+  const peaks = (bytes: number[]): TranscriptionJobPeaks => ({
+    perSecond: 20,
+    duration: bytes.length / 20,
+    peaks: btoa(String.fromCharCode(...bytes))
+  })
+
+  it('reads the analysis bytes as peaks from 0 to 1', () => {
+    expect(serverTimePeaks(peaks([0, 51, 255]))).toEqual([0, 0.2, 1])
+  })
+
+  it('folds peaks by time into the players’ fixed number, the loudest of each stretch', () => {
+    expect(overviewPeaks([0.1, 0.5, 0.2, 0.25], 2)).toEqual([1, 0.5])
+    // Fewer peaks than bars are stretched.
+    expect(overviewPeaks([0.5, 1], 4)).toEqual([0.5, 0.5, 1, 1])
+    expect(overviewPeaks([], 3)).toEqual(placeholderPeaks(3))
+  })
+
+  it('takes a job’s waveform once there is one', async () => {
+    const fetchPeaks = vi.mocked(getJobPeaks)
+    fetchPeaks.mockResolvedValueOnce(null)
+    expect(await jobWaveform('job-large')).toBeNull()
+    // Not there before the analysis: asked for again later.
+    fetchPeaks.mockResolvedValueOnce(peaks(new Array(400).fill(255)))
+    const waveform = await jobWaveform('job-large')
+    expect(waveform?.duration).toBe(20)
+    expect(waveform?.peaks).toHaveLength(200)
+    expect(await jobWaveform('job-large')).toEqual(waveform)
+    expect(fetchPeaks).toHaveBeenCalledTimes(2)
   })
 })

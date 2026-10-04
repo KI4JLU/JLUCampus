@@ -1,24 +1,29 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Popover, PopoverContent, PopoverTrigger } from '@ki4jlu/design-system'
+import {
+  AccentSwatch,
+  Button,
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '@ki4jlu/design-system'
 import {
   TRANSCRIPTION_SPEAKER_COLOR_IDS,
   TRANSCRIPTION_SPEAKER_COLORS,
   type TranscriptionSpeakerColorId
 } from '@justcampus/shared'
 
-/**
- * A speaker colour as a dot. DS gap (a dependency for the DS repo): `AccentSwatch` draws only the
- * six theme accents and `Avatar` takes no colour, but the ten speaker colours are data (kept per
- * transcript by id, used by the exports), so the dot takes kiChat's colour inline. Nothing else
- * of it is styled; the controls around it are DS Buttons in a DS Popover.
- */
+/** A speaker colour as the DS's round swatch. */
 export function ColorDot({ colorId }: { colorId: TranscriptionSpeakerColorId }): React.JSX.Element {
+  // DS gap: `AccentSwatch` takes only the six theme accents (`--accent-swatch-*`), the chart
+  // tokens are four series, and `Avatar` takes no colour; nothing shows one of ten fixed
+  // categorical colours. The speaker colours are data (stored by id, used by the exports), so the
+  // swatch gets kiChat's colour inline and a size; its shape stays the DS's.
   return (
-    <span
-      aria-hidden="true"
-      className="block size-6 shrink-0 rounded-full"
-      style={{ backgroundColor: TRANSCRIPTION_SPEAKER_COLORS[colorId] }}
+    <AccentSwatch
+      accent="standard"
+      className="size-6"
+      style={{ background: TRANSCRIPTION_SPEAKER_COLORS[colorId] }}
     />
   )
 }

@@ -14,12 +14,13 @@ import { z } from 'zod'
 
 import { asrModel, llmModel, type TranscriptionRuntime } from '../config.js'
 import { UpstreamError } from '../http.js'
-import { objectKeys, type TranscriptionStorage } from '../storage.js'
+import { missingObject, objectKeys, type TranscriptionStorage } from '../storage.js'
 import { transcribeFile, type AsrResult } from './asr.js'
 import { correctSegments } from './correction.js'
 import { diarizeFile } from './diarization.js'
 import { cutAudio, MediaToolError, normalizeAudio, probeMedia, workDirectory } from './media.js'
 import { joinText, mergeChunks, planChunks, type ChunkPlan } from './merge.js'
+import { wavPeaks } from './peaks.js'
 import { jobExpiry, type JobRow } from './rows.js'
 import {
   assignSpeakers,
@@ -152,11 +153,6 @@ async function storageStep<T>(signal: AbortSignal, call: () => Promise<T>): Prom
   }
 }
 
-function isMissingObject(error: unknown): boolean {
-  const named = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null
-  return named?.name === 'NoSuchKey' || named?.$metadata?.httpStatusCode === 404
-}
-
 // ---------------------------------------------------------------------------
 // Shared steps
 // ---------------------------------------------------------------------------
@@ -190,7 +186,7 @@ async function normalizeSource(
   try {
     await storage.downloadToFile(job.objectKey, source, signal)
   } catch (error) {
-    if (!signal.aborted && isMissingObject(error)) {
+    if (!signal.aborted && missingObject(error)) {
       throw new JobFailure('upload_missing', 'Die hochgeladene Datei wurde nicht gefunden.')
     }
     storageFailed(error, signal)
@@ -261,7 +257,7 @@ async function normalizedAudio(
       if (duration !== null && duration > 0) return { path, duration }
     } catch (error) {
       if (signal.aborted) throw error
-      if (!isMissingObject(error)) storageFailed(error, signal)
+      if (!missingObject(error)) storageFailed(error, signal)
     }
   }
   return normalizeSource(run, directory)
@@ -340,7 +336,7 @@ async function readObject(run: JobRun, key: string): Promise<Buffer | null> {
     return Buffer.concat(chunks)
   } catch (error) {
     if (run.signal.aborted) throw error
-    if (isMissingObject(error)) return null
+    if (missingObject(error)) return null
     storageFailed(error, run.signal)
   }
 }
@@ -354,6 +350,23 @@ async function writeJson(run: JobRun, key: string, value: unknown): Promise<void
       signal: run.signal
     })
   )
+}
+
+/**
+ * Stores the waveform of the normalised audio for players that cannot decode the file themselves
+ * (T-12, T-19). A waveform is a preview only: if it cannot be computed, the analysis goes on and
+ * the players draw placeholder bars.
+ */
+async function storeWaveform(run: JobRun, path: string): Promise<void> {
+  let peaks: Awaited<ReturnType<typeof wavPeaks>>
+  try {
+    peaks = await wavPeaks(path, run.signal)
+  } catch (error) {
+    if (run.signal.aborted) throw error
+    console.warn('Transcription waveform could not be computed', run.job.id, error)
+    return
+  }
+  if (peaks) await writeJson(run, objectKeys.peaks(run.job.componentId, run.job.id), peaks)
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +383,7 @@ export async function runAnalysis(run: JobRun): Promise<JobChanges> {
   try {
     await advance(run, 'analyzing', 'normalizing')
     const { path, duration } = await normalizeSource(run, directory.path)
+    await storeWaveform(run, path)
 
     let turns: SpeakerTurn[] = []
     if (diarizationConfigured(run)) {

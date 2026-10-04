@@ -153,6 +153,56 @@ describe('buildNewTranscript', () => {
   })
 })
 
+describe('large groups (T-04, T-13)', () => {
+  /** A group of `count` one-segment files, as the browser's merge sends it. */
+  function largeGroup(count: number): { body: ReturnType<typeof input>; jobs: GroupJob[] } {
+    const ids = Array.from(
+      { length: count },
+      (_, index) => `${index.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`
+    )
+    const body = input({
+      jobIds: ids,
+      duration: count * 10,
+      segments: ids.map((_, index) => ({
+        id: index,
+        start: index * 10,
+        end: index * 10 + 9,
+        text: `Datei ${index + 1}.`,
+        speaker: 'Anna'
+      })),
+      sourceFiles: ids.map((jobId, index) => ({
+        jobId,
+        name: `${index}.wav`,
+        size: 1000,
+        duration: 10,
+        startTime: index * 10,
+        endTime: index * 10 + 10
+      }))
+    })
+    return { body, jobs: ids.map((id) => job(id)) }
+  }
+
+  it('saves a group of 150 files without an admin limit, as kiChat has none', () => {
+    const { body, jobs } = largeGroup(150)
+    const values = buildNewTranscript(body, jobs, context)
+    expect(values.sourceFiles).toHaveLength(150)
+    expect(values.fileSize).toBe(150_000)
+    expect(values.text).toContain('Datei 150.')
+  })
+
+  it('refuses a group above the admin’s limit', () => {
+    const { body, jobs } = largeGroup(3)
+    const config = { ...TRANSCRIPTION_DEFAULT_CONFIG, maxFilesPerGroup: 2 }
+    expect(refusal(() => buildNewTranscript(body, jobs, { ...context, config }))).toEqual({
+      status: 400,
+      code: 'validation'
+    })
+    expect(
+      buildNewTranscript(body, jobs, { ...context, config: { ...config, maxFilesPerGroup: 3 } })
+    ).toBeTruthy()
+  })
+})
+
 describe('AI title and subtitle', () => {
   it('only replaces titles the app made up', () => {
     expect(isDefaultTitle('interview-01', 'interview-01.mp3')).toBe(true)

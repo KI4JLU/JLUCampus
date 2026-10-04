@@ -1,4 +1,8 @@
-import { TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES,
+  type TranscriptionJobPeaks
+} from '@justcampus/shared'
+import { getJobPeaks } from '../api'
 
 /**
  * Waveform data for the players, after kiChat's `WaveformAudioPlayer`: a fixed number of
@@ -115,6 +119,66 @@ export async function urlWaveform(
     offset += chunk.byteLength
   }
   return decodeWaveform(bytes.buffer)
+}
+
+/** The analysis's peaks as numbers from 0 to 1, one per `1 / perSecond` seconds. */
+export function serverTimePeaks(peaks: TranscriptionJobPeaks): number[] {
+  return Array.from(atob(peaks.peaks), (char) => char.charCodeAt(0) / 255)
+}
+
+/**
+ * `resolution` peaks of the whole audio from peaks by time: the loudest of each stretch, scaled
+ * so the loudest is 1. Fewer peaks than that are stretched.
+ */
+export function overviewPeaks(
+  timePeaks: readonly number[],
+  resolution = PEAK_RESOLUTION
+): number[] {
+  if (timePeaks.length === 0) return placeholderPeaks(resolution)
+  const peaks = new Array<number>(resolution).fill(0)
+  for (let bucket = 0; bucket < resolution; bucket++) {
+    const from = Math.floor((bucket * timePeaks.length) / resolution)
+    const to = Math.max(from + 1, Math.floor(((bucket + 1) * timePeaks.length) / resolution))
+    let max = 0
+    for (let index = from; index < to; index++) max = Math.max(max, timePeaks[index] ?? 0)
+    peaks[bucket] = max
+  }
+  const loudest = Math.max(...peaks, 0.01)
+  return peaks.map((peak) => peak / loudest)
+}
+
+/** A job's waveform from the analysis by time, and the audio's length. */
+export interface JobTimePeaks {
+  peaks: number[]
+  duration: number
+}
+
+// By job: the analysis computes the waveform once. A missing one is asked for again later.
+const jobPeaksCache = new Map<string, Promise<JobTimePeaks | null>>()
+
+/**
+ * The waveform the analysis computed for a job (T-12, T-19), for audio too large to decode here;
+ * `null` before the analysis, without one or when the request fails.
+ */
+export function jobTimePeaks(jobId: string): Promise<JobTimePeaks | null> {
+  let pending = jobPeaksCache.get(jobId)
+  if (!pending) {
+    pending = getJobPeaks(jobId)
+      .then((peaks) => (peaks ? { peaks: serverTimePeaks(peaks), duration: peaks.duration } : null))
+      .catch(() => null)
+      .then((result) => {
+        if (!result) jobPeaksCache.delete(jobId)
+        return result
+      })
+    jobPeaksCache.set(jobId, pending)
+  }
+  return pending
+}
+
+/** A job's waveform from the analysis, as the players draw it. */
+export async function jobWaveform(jobId: string): Promise<DecodedWaveform | null> {
+  const time = await jobTimePeaks(jobId)
+  return time ? { peaks: overviewPeaks(time.peaks), duration: time.duration } : null
 }
 
 /** `mm:ss`, or `hh:mm:ss` from an hour on; anything not a time shows `00:00`. */

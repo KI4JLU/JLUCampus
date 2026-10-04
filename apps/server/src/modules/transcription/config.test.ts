@@ -100,10 +100,12 @@ describe('capabilitiesOf', () => {
     })
   })
 
-  it('names the file limit per transcript the save takes, unless the admin set a lower one', () => {
+  it('names no file limit per transcript unless the admin set one (T-04, as kiChat)', () => {
     expect(capabilitiesOf(TRANSCRIPTION_DEFAULT_CONFIG, noSecrets, true).limits).toMatchObject({
-      maxFilesPerGroup: TRANSCRIPTION_GROUP_FILES_MAX
+      maxFilesPerGroup: null
     })
+    // The anti-abuse bound is generous: an admin may allow far more than kiChat's usual groups.
+    expect(TRANSCRIPTION_GROUP_FILES_MAX).toBeGreaterThanOrEqual(1000)
     const limited = { ...TRANSCRIPTION_DEFAULT_CONFIG, maxFilesPerGroup: 5 }
     expect(capabilitiesOf(limited, noSecrets, true).limits.maxFilesPerGroup).toBe(5)
   })

@@ -133,13 +133,14 @@ function MappingContent({
   const source = useSampleSource(file)
   const player = useSamplePlayer(source.resolve)
   const remote = useJobAudioUrl(file.file ? null : file.jobId)
-  const peaks = useTimePeaks(
+  const loadedPeaks = useTimePeaks(
     file.file
-      ? { blob: file.file }
+      ? { blob: file.file, jobId: file.jobId }
       : file.jobId
         ? { jobId: file.jobId, url: remote.data?.url ?? null }
         : null
   )
+  const peaks = loadedPeaks ?? null
   const duration = file.duration ?? peaks?.duration ?? player.duration
 
   const updateVoice = (
@@ -257,8 +258,8 @@ function MappingContent({
       {player.failed ? (
         <Notice tone="error" title={t('transcription.upload.mapping.audioUnavailable')} />
       ) : null}
-      {/* As the queue's player says it: the sample tracks draw no waveform for such files (T-12). */}
-      {file.size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES ? (
+      {/* A large file without the server's waveform: the sample tracks draw placeholders (T-12). */}
+      {loadedPeaks === null && file.size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES ? (
         <Badge appearance="text">{t('transcription.common.player.waveformUnavailable')}</Badge>
       ) : null}
 

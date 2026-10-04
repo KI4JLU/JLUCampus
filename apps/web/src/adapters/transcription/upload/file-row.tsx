@@ -121,6 +121,7 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
             <WaveformPlayer
               source={file.file}
               name={file.name}
+              jobId={waveformJob(file)}
               onDuration={(seconds) => queue.setDuration(file.id, seconds)}
             />
           ) : (
@@ -216,7 +217,19 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
 /** A restored job has no local file: it plays from storage (T-15). */
 function RestoredPlayer({ file }: { file: QueueFile }): React.JSX.Element {
   const audio = useJobAudioUrl(file.uploaded ? file.jobId : null)
-  return <WaveformPlayer source={audio.data?.url ?? null} name={file.name} size={file.size} />
+  return (
+    <WaveformPlayer
+      source={audio.data?.url ?? null}
+      name={file.name}
+      size={file.size}
+      jobId={waveformJob(file)}
+    />
+  )
+}
+
+/** The job whose waveform the server computed: once the analysis gave the voices (T-12). */
+function waveformJob(file: QueueFile): string | null {
+  return file.voices !== null ? file.jobId : null
 }
 
 /** The keyboard's way to reorder and regroup a file (T-07). */

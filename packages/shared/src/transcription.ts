@@ -66,8 +66,12 @@ export const TRANSCRIPTION_REDACTIONS_PER_SEGMENT_MAX = 500
 export const TRANSCRIPTION_SECONDS_MAX = 7 * 24 * 60 * 60
 export const TRANSCRIPTION_SPEAKERS_MAX = 50
 export const TRANSCRIPTION_SAMPLES_PER_SPEAKER_MAX = 20
-/** Files one transcript (an upload group) may combine. */
-export const TRANSCRIPTION_GROUP_FILES_MAX = 100
+/**
+ * Files one transcript (an upload group) may combine at most. kiChat has no such limit, and the
+ * admin's optional `maxFilesPerGroup` is the only product limit (unset: none, T-04, T-13); this
+ * generous bound only guards the save request and the admin field against abuse.
+ */
+export const TRANSCRIPTION_GROUP_FILES_MAX = 1000
 
 /** A voice sample's window, as the mapping dialog clamps it (T-19). */
 export const TRANSCRIPTION_SAMPLE_MIN_SECONDS = 0.2
@@ -92,7 +96,10 @@ export const TRANSCRIPTION_MEDIA_URL_REFRESH_SECONDS = 300
 /** Unsaved, failed and cancelled jobs and their audio are deleted after this, as in kiChat. */
 export const TRANSCRIPTION_UNSAVED_JOB_TTL_HOURS = 24
 
-/** Above this the players keep the audio playable but draw no decoded waveform (T-24). */
+/**
+ * Above this the browser decodes no waveform (T-12, T-24): the audio stays playable, and players
+ * that know the job draw the waveform its analysis computed (`TRANSCRIPTION_API.jobPeaks`).
+ */
 export const TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES = 100 * 1024 * 1024
 
 /** What an inserted speaker block holds until edited, and empty text becomes (T-27, T-30). */
@@ -539,6 +546,21 @@ export const transcriptionMediaUrlSchema = z.object({
   expiresAt: z.iso.datetime()
 })
 export type TranscriptionMediaUrl = z.infer<typeof transcriptionMediaUrlSchema>
+
+/** Waveform peaks per second of audio the analysis computes, as kiChat's editor draws them. */
+export const TRANSCRIPTION_PEAKS_PER_SECOND = 20
+
+/**
+ * `GET TRANSCRIPTION_API.jobPeaks`: the waveform the analysis computed from the normalised audio
+ * with ffmpeg, for files too large to decode in the browser (T-12, T-19).
+ */
+export const transcriptionJobPeaksSchema = z.object({
+  perSecond: z.literal(TRANSCRIPTION_PEAKS_PER_SECOND),
+  duration: secondsSchema,
+  /** One byte per peak, 0 to 255 scaled to the loudest, base64-encoded. */
+  peaks: z.base64()
+})
+export type TranscriptionJobPeaks = z.infer<typeof transcriptionJobPeaksSchema>
 
 // ---------------------------------------------------------------------------
 // Saved transcripts (history)
@@ -1429,6 +1451,8 @@ export const TRANSCRIPTION_API = {
   jobDispatch: (id: string) => `${MODULE}/jobs/${id}/dispatch`,
   /** GET: `transcriptionMediaUrlSchema` for the uploaded audio. */
   jobAudio: (id: string) => `${MODULE}/jobs/${id}/audio`,
+  /** GET: `transcriptionJobPeaksSchema` once analysed; `404` before or without a waveform. */
+  jobPeaks: (id: string) => `${MODULE}/jobs/${id}/peaks`,
   /** GET: `transcriptionMediaUrlSchema` for one analysed voice sample. */
   jobSample: (id: string, sampleId: string) =>
     `${MODULE}/jobs/${id}/samples/${encodeURIComponent(sampleId)}`,

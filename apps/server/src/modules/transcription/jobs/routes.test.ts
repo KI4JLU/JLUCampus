@@ -1,6 +1,9 @@
+import { Readable } from 'node:stream'
+
 import {
   TRANSCRIPTION_API,
   TRANSCRIPTION_DEFAULT_CONFIG,
+  TRANSCRIPTION_GROUP_FILES_MAX,
   TRANSCRIPTION_MAX_FILE_BYTES,
   type TranscriptionComponentConfig
 } from '@justcampus/shared'
@@ -9,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../../../api.js'
 import type { AppEnvironment } from '../../types.js'
-import type { JobRow } from './rows.js'
+import { UPLOAD_SETTLE_MS, type JobRow } from './rows.js'
 import type { JobChanges, JobInsert } from './store.js'
 
 /** The jobs table in memory, with the store's ownership and status rules. */
@@ -20,6 +23,7 @@ const state = vi.hoisted(() => ({
     presignUpload: vi.fn(),
     presignDownload: vi.fn(),
     head: vi.fn(),
+    get: vi.fn(),
     deletePrefix: vi.fn()
   }
 }))
@@ -54,9 +58,6 @@ vi.mock('./store.js', () => {
           live(row) &&
           !['analyzed', 'completed', 'failed'].includes(row.status)
       ).length,
-    countGroupJobs: async (_componentId: string, userId: string, groupId: string) =>
-      [...state.rows.values()].filter((row) => row.userId === userId && row.groupId === groupId)
-        .length,
     insertJob: async (values: JobInsert) => {
       const now = new Date()
       const row = {
@@ -276,20 +277,33 @@ describe('upload session', () => {
     expect(body.upload).toMatchObject({ headers: { 'Content-Type': 'audio/wav' } })
   })
 
-  it('limits active jobs and files per group', async () => {
+  it('limits active jobs', async () => {
     for (let index = 0; index < 3; index++) {
       expect((await createJob('alice')).response.status).toBe(201)
     }
     const limited = await createJob('alice')
     expect(limited.response.status).toBe(429)
+  })
+
+  it('does not count files by the group named at upload, as files move later (T-07)', async () => {
+    // Two files per group: a file moved out of the first group frees its place, so a third
+    // upload for the group named first is fine. The save checks the group it really is.
     const groupId = '22222222-2222-4222-8222-222222222222'
-    expect((await createJob('bob', { ...upload, groupId })).response.status).toBe(201)
-    expect((await createJob('bob', { ...upload, groupId, groupOrder: 1 })).response.status).toBe(
-      201
-    )
-    expect((await createJob('bob', { ...upload, groupId, groupOrder: 2 })).response.status).toBe(
-      400
-    )
+    for (const groupOrder of [0, 1, 1]) {
+      const { response, body } = await createJob('bob', { ...upload, groupId, groupOrder })
+      expect(response.status).toBe(201)
+      setRow(body.job.id, { status: 'analyzed' })
+    }
+  })
+
+  it('takes a group order up to the anti-abuse bound', async () => {
+    const created = await createJob('bob', { ...upload, groupOrder: TRANSCRIPTION_GROUP_FILES_MAX })
+    expect(created.response.status).toBe(201)
+    const beyond = await createJob('carol', {
+      ...upload,
+      groupOrder: TRANSCRIPTION_GROUP_FILES_MAX + 1
+    })
+    expect(beyond.response.status).toBe(400)
   })
 
   it('offers no uploads before transcription is set up', async () => {
@@ -585,10 +599,38 @@ describe('status, list and media', () => {
   })
 })
 
-describe('deletion', () => {
-  it('cancels, deletes the audio and answers 404 once it is gone', async () => {
+/** A job created so long ago that its signed upload can no longer store anything. */
+async function settledJob(): Promise<string> {
+  const { body } = await createJob()
+  setRow(body.job.id, { createdAt: new Date(Date.now() - UPLOAD_SETTLE_MS - 1000) })
+  return body.job.id
+}
+
+describe('server waveform (T-12, T-19)', () => {
+  it('answers the peaks the analysis stored, else 404', async () => {
     const { body } = await createJob()
     const id = body.job.id
+    const peaks = { perSecond: 20, duration: 0.1, peaks: Buffer.from([0, 255]).toString('base64') }
+    state.storage.get.mockImplementationOnce(async (key: string) => {
+      expect(key).toBe(`transcription/${componentId}/jobs/${id}/peaks.json`)
+      return Readable.from([Buffer.from(JSON.stringify(peaks))])
+    })
+    const found = await app('alice').request(local(TRANSCRIPTION_API.jobPeaks(id)))
+    expect(found.status).toBe(200)
+    expect(await found.json()).toEqual(peaks)
+
+    state.storage.get.mockRejectedValueOnce(
+      Object.assign(new Error('missing'), { name: 'NoSuchKey' })
+    )
+    expect((await app('alice').request(local(TRANSCRIPTION_API.jobPeaks(id)))).status).toBe(404)
+    // Another user's job has none either.
+    expect((await app('bob').request(local(TRANSCRIPTION_API.jobPeaks(id)))).status).toBe(404)
+  })
+})
+
+describe('deletion', () => {
+  it('cancels, deletes the audio and answers 404 once it is gone', async () => {
+    const id = await settledJob()
     const first = await app('alice').request(local(TRANSCRIPTION_API.job(id)), { method: 'DELETE' })
     expect(first.status).toBe(204)
     expect(state.storage.deletePrefix).toHaveBeenCalledWith(
@@ -619,9 +661,33 @@ describe('deletion', () => {
     expect((await app('alice').request(local(TRANSCRIPTION_API.job(id)))).status).toBe(404)
   })
 
-  it('reports a storage failure and finishes on the next try', async () => {
+  it('keeps a job whose signed upload may still arrive for the sweep (T-08)', async () => {
+    // The browser's PUT may store the audio after this deletion; the hidden row lets the sweep
+    // find and delete it once the upload URL can no longer be used.
     const { body } = await createJob()
     const id = body.job.id
+    const response = await app('alice').request(local(TRANSCRIPTION_API.job(id)), {
+      method: 'DELETE'
+    })
+    expect(response.status).toBe(204)
+    expect(state.storage.deletePrefix).toHaveBeenCalledWith(
+      `transcription/${componentId}/jobs/${id}/`
+    )
+    expect(state.rows.get(id)).toMatchObject({ status: 'cancelled' })
+    expect(state.rows.get(id)!.deletedAt).not.toBeNull()
+    expect((await app('alice').request(local(TRANSCRIPTION_API.job(id)))).status).toBe(404)
+    expect((await app('alice').request(local(TRANSCRIPTION_API.jobs))).status).toBe(200)
+    expect(
+      (
+        (await (await app('alice').request(local(TRANSCRIPTION_API.jobs))).json()) as {
+          jobs: unknown[]
+        }
+      ).jobs
+    ).toEqual([])
+  })
+
+  it('reports a storage failure and finishes on the next try', async () => {
+    const id = await settledJob()
     state.storage.deletePrefix.mockRejectedValueOnce(new Error('storage down'))
     const failed = await app('alice').request(local(TRANSCRIPTION_API.job(id)), {
       method: 'DELETE'

@@ -323,15 +323,16 @@ export class UploadQueue {
 
   /**
    * Adds checked files to a group (`null`: where dropped files go) and uploads them. Files already
-   * in that group are skipped. Nothing is added while a start runs. Returns the rows added.
+   * in that group are skipped before the limit counts (T-05). Nothing is added while a start runs.
+   * Returns the rows added.
    */
   addFiles(files: readonly File[], groupIndex: number | null = null): QueueFile[] {
     if (this.state.processing || files.length === 0) return []
     let groups = this.state.groups
     const index = groupIndex ?? dropTargetIndex(groups)
     if (groups[index]?.saved) return []
-    const fitting = files.slice(0, this.room(groups[index]?.files.length ?? 0))
-    const result = addToGroup(groups, index, fitting.map(queueFileFrom))
+    const room = this.room(groups[index]?.files.length ?? 0)
+    const result = addToGroup(groups, index, files.map(queueFileFrom), room)
     groups = renumberGroups(result.groups)
     this.set({ ...this.state, groups })
     for (const row of result.added) this.track(row)
@@ -350,15 +351,14 @@ export class UploadQueue {
       index = groups.length
       groups.push(newGroup(index, name ?? defaultGroupName(index)))
     } else if (name) groups[index] = { ...groups[index]!, name }
-    const fitting = files.slice(0, this.room(0))
-    const result = addToGroup(groups, index, fitting.map(queueFileFrom))
+    const result = addToGroup(groups, index, files.map(queueFileFrom), this.room(0))
     groups = renumberGroups(result.groups)
     this.set({ ...this.state, groups })
     for (const row of result.added) this.track(row)
     return result.added
   }
 
-  /** How many more files a group of `present` files takes (T-04: the save's limit). */
+  /** How many more files a group of `present` files takes (T-04: the admin's limit, if set). */
   private room(present: number): number {
     const limit = this.options.maxFilesPerGroup
     return limit === null || limit === undefined ? Infinity : Math.max(0, limit - present)
@@ -1137,6 +1137,8 @@ export class UploadQueue {
     if (!position || this.state.processing || position.group.saved) return true
     const jobId = position.file.jobId
     if (jobId) {
+      // The upload stops first, so it stores nothing after the deletion (T-08).
+      this.abortUpload(fileId)
       if (!(await this.deleteJob(jobId))) return false
       this.options.onJobsChanged?.()
     }
@@ -1152,6 +1154,7 @@ export class UploadQueue {
   async removeGroup(groupId: string): Promise<boolean> {
     const group = this.group(groupId)
     if (!group || this.state.processing || group.saved) return true
+    for (const file of group.files) if (file.jobId) this.abortUpload(file.id)
     const outcomes = await Promise.all(
       group.files.map((file) => (file.jobId ? this.deleteJob(file.jobId) : true))
     )
@@ -1180,12 +1183,17 @@ export class UploadQueue {
     }
   }
 
+  /** Stops a file's running upload; its row then shows the upload as cancelled. */
+  private abortUpload(fileId: string): void {
+    this.uploads.get(fileId)?.abort()
+    this.uploads.delete(fileId)
+  }
+
   /** Stops everything a file does. */
   private forget(fileId: string): void {
     this.flows.get(fileId)?.abort()
     this.flows.delete(fileId)
-    this.uploads.get(fileId)?.abort()
-    this.uploads.delete(fileId)
+    this.abortUpload(fileId)
     this.stopCreep(fileId)
   }
 

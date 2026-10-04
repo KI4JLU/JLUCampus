@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addToGroup,
+  fitIntoGroup,
   cleanupEmptyGroups,
   defaultGroupName,
   dropTargetIndex,
@@ -99,6 +100,29 @@ describe('adding files (T-03, T-05)', () => {
     ])
     // The same file in another group is no duplicate.
     expect(addToGroup(groups, 1, [queueFileFrom(file('a.wav'))]).added).toHaveLength(1)
+  })
+
+  it('leaves duplicates out before the limit counts, so distinct files still fit', () => {
+    const start = addToGroup([], 0, [queueFileFrom(file('a.wav'))]).groups
+    // One place left: the duplicate a.wav takes none, b.wav gets it.
+    const { groups, added, overflow } = addToGroup(
+      start,
+      0,
+      [queueFileFrom(file('a.wav')), queueFileFrom(file('b.wav'))],
+      1
+    )
+    expect(names(groups)).toEqual([['a.wav', 'b.wav']])
+    expect(added.map((row) => row.name)).toEqual(['b.wav'])
+    expect(overflow).toBe(false)
+    // Duplicates within one selection count once; a distinct file beyond the room overflows.
+    const fit = fitIntoGroup([], [file('c.wav'), file('c.wav'), file('d.wav'), file('e.wav')], 2)
+    expect(fit.fitting.map((entry) => entry.name)).toEqual(['c.wav', 'd.wav'])
+    expect(fit.overflow).toBe(true)
+    // Only duplicates: nothing added, and no alert, even in a full group.
+    expect(fitIntoGroup([file('c.wav')], [file('c.wav')], 0)).toEqual({
+      fitting: [],
+      overflow: false
+    })
   })
 
   it('sends dropped files to the first empty, else the first unsaved group', () => {

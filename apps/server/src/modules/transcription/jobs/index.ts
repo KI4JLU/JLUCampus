@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto'
 
 import {
-  TRANSCRIPTION_GROUP_FILES_MAX,
   TRANSCRIPTION_PROCESSING_STATUSES,
   transcriptionAnalyzeSchema,
   transcriptionDispatchSchema,
   transcriptionJobCreatedSchema,
   transcriptionJobCreateSchema,
   transcriptionJobListSchema,
+  transcriptionJobPeaksSchema,
   transcriptionMediaUrlSchema,
   type TranscriptionJobStatus
 } from '@justcampus/shared'
@@ -19,13 +19,17 @@ import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { capabilitiesOf, llmModel, type TranscriptionRuntime } from '../config.js'
 import { upstream } from '../http.js'
-import { objectKeys, transcriptionStorage, type TranscriptionStorage } from '../storage.js'
-import { jobExpiry, publicJob, type JobRow } from './rows.js'
+import {
+  missingObject,
+  objectKeys,
+  transcriptionStorage,
+  type TranscriptionStorage
+} from '../storage.js'
+import { jobExpiry, publicJob, uploadSettled, type JobRow } from './rows.js'
 import { jobActions, progressOf } from './state.js'
 import {
   claimHeld,
   countActiveJobs,
-  countGroupJobs,
   deleteJobRow,
   findJob,
   findJobForDeletion,
@@ -134,14 +138,9 @@ jobsRouter.post('/jobs', async (context) => {
   if ((await countActiveJobs(componentId, userId)) >= config.maxActiveJobsPerUser) {
     throw new ApiError(429, 'rate_limited', 'Too many active transcription jobs')
   }
-  // The admin's limit, else the one a saved transcript takes at most (capabilities say the same).
-  const groupLimit = config.maxFilesPerGroup ?? TRANSCRIPTION_GROUP_FILES_MAX
-  if (
-    input.groupId !== null &&
-    (await countGroupJobs(componentId, userId, input.groupId)) >= groupLimit
-  ) {
-    validation(['groupId'], 'The transcript has as many files as allowed')
-  }
+  // No count per group here: files move between groups in the browser after their upload, so the
+  // group named now says nothing about the transcript they end up in. The browser stops at the
+  // limit before uploading, and the save refuses a group above the admin's limit (T-04, T-07).
 
   const id = randomUUID()
   const contentType = uploadContentType(filename, input.mimeType)
@@ -183,7 +182,8 @@ jobsRouter.get('/jobs/:id', async (context) => {
  * Cancels the job and deletes everything it stored (T-08). Another user's job, an unknown id and
  * one already gone answer `404` like every other job route; the browser counts that as deleted.
  * If storage cannot delete (also only some objects), the answer is `502` and the job stays
- * hidden; the next DELETE or the sweep finishes the work.
+ * hidden; the next DELETE or the sweep finishes the work. A job whose signed upload could still
+ * arrive also stays hidden until the sweep's final cleanup (`uploadSettled`).
  */
 jobsRouter.delete('/jobs/:id', async (context) => {
   const id = context.req.param('id')
@@ -198,9 +198,12 @@ jobsRouter.delete('/jobs/:id', async (context) => {
       storage.deletePrefix(objectKeys.jobPrefix(componentId, job.id))
     )
   }
-  // A worker still running stops at its next write; the sweep removes the row after it let go,
-  // with anything it stored meanwhile.
-  if (!claimHeld(marked, CLAIM_LEASE_MS)) await deleteJobRow(job.id)
+  // A worker still running stops at its next write, and a signed upload stays valid after this
+  // deletion: its PUT may still store the audio again. Then the row stays, hidden, and the sweep
+  // deletes what was stored meanwhile and the row once the worker let go and the upload settled.
+  if (!claimHeld(marked, CLAIM_LEASE_MS) && uploadSettled(job.createdAt)) {
+    await deleteJobRow(job.id)
+  }
   return context.body(null, 204)
 })
 
@@ -357,6 +360,37 @@ jobsRouter.get('/jobs/:id/audio', async (context) => {
   )
   return context.json(transcriptionMediaUrlSchema.parse(media))
 })
+
+/**
+ * The waveform the analysis computed (T-12, T-19), for files too large for the browser to decode;
+ * `404` before the analysis or when it computed none.
+ */
+jobsRouter.get('/jobs/:id/peaks', async (context) => {
+  const storage = requireStorage()
+  const job = await ownJob(context)
+  const body = await upstream('The waveform could not be read', async () => {
+    try {
+      const stream = await storage.get(objectKeys.peaks(job.componentId, job.id))
+      const chunks: Buffer[] = []
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk as Uint8Array))
+      return Buffer.concat(chunks).toString('utf8')
+    } catch (error) {
+      if (missingObject(error)) return null
+      throw error
+    }
+  })
+  const peaks = body === null ? null : transcriptionJobPeaksSchema.safeParse(parseJson(body))
+  if (!peaks?.success) throw new ApiError(404, 'not_found', 'No waveform')
+  return context.json(peaks.data)
+})
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
 
 /** A fresh signed URL of one analysed voice sample (T-17, T-21). */
 jobsRouter.get('/jobs/:id/samples/:sampleId', async (context) => {

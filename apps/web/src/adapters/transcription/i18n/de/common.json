@@ -65,7 +65,7 @@
     "seek": "Position in {{name}}",
     "seekUnnamed": "Position in der Aufnahme",
     "time": "{{current}} von {{total}}",
-    "waveformUnavailable": "Für Dateien über 100 MB wird keine Wellenform gezeichnet."
+    "waveformUnavailable": "Die Wellenform von Dateien über 100 MB erscheint nach der Analyse."
   },
   "views": {
     "label": "Ansicht",

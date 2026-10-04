@@ -272,6 +272,12 @@ export class PartialDeleteError extends Error {
 
 let shared: TranscriptionStorage | null | undefined
 
+/** Whether a storage error says the object does not exist. */
+export function missingObject(error: unknown): boolean {
+  const named = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null
+  return named?.name === 'NoSuchKey' || named?.$metadata?.httpStatusCode === 404
+}
+
 /** The storage from the environment, created once; `null` while it is not configured. */
 export function transcriptionStorage(): TranscriptionStorage | null {
   if (shared === undefined) {
@@ -284,7 +290,7 @@ export function transcriptionStorage(): TranscriptionStorage | null {
 /**
  * Object keys, all below one prefix per job, so deleting a job removes everything it left:
  * `transcription/<component>/jobs/<job>/source`, `…/normalized.wav`, `…/chunks/<n>.wav`,
- * `…/samples/<sample>.wav`.
+ * `…/samples/<sample>.wav`, `…/peaks.json`.
  */
 export const objectKeys = {
   jobPrefix: (componentId: string, jobId: string): string =>
@@ -293,6 +299,9 @@ export const objectKeys = {
     `${objectKeys.jobPrefix(componentId, jobId)}source`,
   normalized: (componentId: string, jobId: string): string =>
     `${objectKeys.jobPrefix(componentId, jobId)}normalized.wav`,
+  /** The waveform the analysis computed (`transcriptionJobPeaksSchema`). */
+  peaks: (componentId: string, jobId: string): string =>
+    `${objectKeys.jobPrefix(componentId, jobId)}peaks.json`,
   chunk: (componentId: string, jobId: string, index: number): string =>
     `${objectKeys.jobPrefix(componentId, jobId)}chunks/${String(index).padStart(3, '0')}.wav`,
   sample: (componentId: string, jobId: string, sampleId: string): string =>

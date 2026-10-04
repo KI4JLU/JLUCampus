@@ -10,6 +10,7 @@ import {
   TRANSCRIPTION_DEFAULT_CONFIG,
   TRANSCRIPTION_SEGMENTS_MAX,
   TRANSCRIPTION_WORDS_MAX,
+  transcriptionJobPeaksSchema,
   type TranscriptionComponentConfig,
   type TranscriptionSnippet
 } from '@justcampus/shared'
@@ -292,12 +293,19 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
       [
         `${prefix}diarization.json`,
         `${prefix}normalized.wav`,
+        `${prefix}peaks.json`,
         ...speakers.flatMap((speaker) =>
           speaker.samples.map((sample) => `${prefix}samples/${sample.id}.wav`)
         ),
         `${prefix}source`
       ].sort()
     )
+    // The waveform of the 20-second talk, for players that cannot decode the file (T-12).
+    const waveform = transcriptionJobPeaksSchema.parse(
+      JSON.parse(storage.objects.get(`${prefix}peaks.json`)!.toString('utf8'))
+    )
+    expect(waveform.duration).toBeCloseTo(20, 1)
+    expect(Buffer.from(waveform.peaks, 'base64').length).toBe(400)
 
     // The user names both voices; Anna's window is her first sample.
     const window = (index: number): { start: number; end: number } => ({

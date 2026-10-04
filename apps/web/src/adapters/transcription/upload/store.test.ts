@@ -549,4 +549,88 @@ describe('UploadQueue: files per transcript (T-04, T-13)', () => {
     )
     queue.dispose()
   })
+
+  it('takes a distinct file when the selection repeats one already there (T-05)', async () => {
+    const { api } = server()
+    const queue = makeQueue(api)
+    queue.configure({ maxFilesPerGroup: 2 })
+    queue.addFiles([wav('a.wav')], 0)
+    expect(queue.addFiles([wav('a.wav'), wav('b.wav')], 0).map((file) => file.name)).toEqual([
+      'b.wav'
+    ])
+    expect(rows(queue).map((file) => file.name)).toEqual(['a.wav', 'b.wav'])
+    queue.dispose()
+  })
+
+  it('lets a file moved out free its place for a new upload (T-07)', async () => {
+    const { api, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    script('job-2', { status: 'analyzed', speakers: SPEAKERS })
+    script('job-3', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api)
+    queue.configure({ maxFilesPerGroup: 2 })
+    queue.addFiles([wav('a.wav'), wav('b.wav')], 0)
+    await until(() => rows(queue).every((file) => file.phase === 'ready'))
+    queue.addGroup()
+    expect(queue.moveFile({ groupIndex: 0, fileIndex: 1 }, 1)).toBe(true)
+    queue.addFiles([wav('c.wav')], 0)
+    await until(() => row(queue, 'c.wav').phase === 'ready')
+    expect(queue.getSnapshot().groups.map((group) => group.files.map((file) => file.name))).toEqual(
+      [['a.wav', 'c.wav'], ['b.wav']]
+    )
+    queue.dispose()
+  })
+
+  it('takes groups far beyond kiChat’s usual sizes without an admin limit (T-04)', () => {
+    const { api } = server()
+    const queue = makeQueue(api)
+    queue.configure({ maxFilesPerGroup: null })
+    const files = Array.from({ length: 150 }, (_, index) => wav(`${index}.wav`))
+    expect(queue.addFiles(files, 0)).toHaveLength(150)
+    queue.dispose()
+  })
+})
+
+describe('UploadQueue: removing during an upload (T-08)', () => {
+  it('stops the upload before the job is deleted', async () => {
+    const { api } = server()
+    let uploadSignal: AbortSignal | undefined
+    const upload: SignedUpload = (_target, _body, options) =>
+      new Promise((_resolve, reject) => {
+        uploadSignal = options.signal
+        options.signal?.addEventListener('abort', () =>
+          reject(new SignedUploadError('aborted', null))
+        )
+      })
+    const queue = makeQueue(api, upload)
+    let abortedAtDelete: boolean | undefined
+    api.deleteJob.mockImplementation(async () => {
+      abortedAtDelete = uploadSignal?.aborted
+    })
+    queue.addFiles([wav('a.wav')])
+    await until(() => uploadSignal !== undefined)
+    expect(await queue.removeFile(row(queue, 'a.wav').id)).toBe(true)
+    expect(abortedAtDelete).toBe(true)
+    expect(rows(queue)).toEqual([])
+    queue.dispose()
+  })
+
+  it('stops the uploads of a group before deleting its jobs', async () => {
+    const { api } = server()
+    const signals: AbortSignal[] = []
+    const upload: SignedUpload = (_target, _body, options) =>
+      new Promise(() => {
+        if (options.signal) signals.push(options.signal)
+      })
+    const queue = makeQueue(api, upload)
+    const abortedAtDelete: boolean[] = []
+    api.deleteJob.mockImplementation(async () => {
+      abortedAtDelete.push(signals.every((signal) => signal.aborted))
+    })
+    queue.addFiles([wav('a.wav'), wav('b.wav')])
+    await until(() => signals.length === 2)
+    expect(await queue.removeGroup(queue.getSnapshot().groups[0]!.id)).toBe(true)
+    expect(abortedAtDelete).toEqual([true, true])
+    queue.dispose()
+  })
 })
