@@ -627,7 +627,8 @@
       "label": "Adminbereich",
       "components": "Komponenten",
       "folders": "Ordner-Vorlagen",
-      "presets": "Layout-Vorlagen"
+      "presets": "Layout-Vorlagen",
+      "users": "Nutzende"
     },
     "table": {
       "caption": "Alle Komponenten in Katalogreihenfolge",
@@ -803,6 +804,59 @@
         "dashboardDescription": "Die Kacheln auf dem Dashboard neuer Nutzender. Wählen Sie „Bearbeiten“, um sie anzuordnen.",
         "dashboardEmptyTitle": "Dieses Dashboard ist leer",
         "dashboardEmptyDescription": "Fügen Sie JLU-Widgets, Ordner, Verknüpfungen und Feeds hinzu, die neue Nutzende auf ihrem Dashboard vorfinden sollen."
+      }
+    },
+    "users": {
+      "title": "Nutzende verwalten",
+      "description": "Alle, die sich schon einmal bei JLU Campus angemeldet haben. Hier vergeben und entziehen Sie die Admin-Rolle der App; Rollen und Gruppen in Keycloak ändern sie nicht.",
+      "loadFailed": "Die Nutzenden konnten nicht geladen werden.",
+      "search": "Nutzende suchen",
+      "searchPlaceholder": "Nach Name oder E-Mail suchen",
+      "resultCount_one": "{{count}} Person",
+      "resultCount_other": "{{count}} Personen",
+      "table": {
+        "caption": "Alle Nutzenden, Admins zuerst",
+        "email": "E-Mail",
+        "role": "Rolle",
+        "lastSignIn": "Letzte Anmeldung",
+        "empty": "Noch hat sich niemand angemeldet.",
+        "noMatch": "Niemand passt zu „{{query}}“."
+      },
+      "actions": {
+        "menu": "Aktionen für {{name}}",
+        "details": "Details anzeigen"
+      },
+      "role": {
+        "admin": "Admin",
+        "user": "Standard",
+        "grant": "Zum Admin ernennen",
+        "revoke": "Admin-Rechte entziehen",
+        "grantHint": "Admins verwalten Komponenten, Vorlagen und die Admin-Rechte anderer.",
+        "revokeHint": "Die Rolle gilt nur in JLU Campus, unabhängig von Keycloak.",
+        "selfHint": "Sie können sich die Admin-Rechte nicht selbst entziehen.",
+        "granted": "„{{name}}“ ist jetzt Admin.",
+        "revoked": "„{{name}}“ ist kein Admin mehr.",
+        "conflict": "Niemand kann sich die Admin-Rechte selbst entziehen, und es muss mindestens ein Admin bleiben.",
+        "failed": "Die Rolle konnte nicht geändert werden."
+      },
+      "confirm": {
+        "grantTitle": "Zum Admin ernennen?",
+        "grantDescription": "„{{name}}“ erhält Zugriff auf den Adminbereich und kann dort Komponenten, Vorlagen und die Admin-Rechte anderer verwalten.",
+        "grantAction": "Zum Admin ernennen",
+        "revokeTitle": "Admin-Rechte entziehen?",
+        "revokeDescription": "„{{name}}“ verliert den Zugriff auf den Adminbereich. Rollen und Gruppen in Keycloak bleiben unverändert.",
+        "revokeAction": "Entziehen"
+      },
+      "details": {
+        "role": "Rolle in JLU Campus",
+        "keycloakRoles": "Keycloak-Rollen",
+        "keycloakGroups": "Keycloak-Gruppen",
+        "keycloakHint": "Rollen und Gruppen stammen von der letzten Anmeldung.",
+        "none": "Keine",
+        "account": "Konto",
+        "createdAt": "Angelegt",
+        "lastSignIn": "Letzte Anmeldung",
+        "never": "Nicht erfasst"
       }
     }
   },

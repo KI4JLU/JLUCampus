@@ -99,6 +99,13 @@
       "when": 1790835443825,
       "tag": "0013_translator_glossary_rights",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791069713534,
+      "tag": "0014_amusing_proteus",
+      "breakpoints": true
     }
   ]
 }

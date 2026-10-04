@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   assembleFolderTemplates,
   assembleTiles,
-  deriveRole,
   filterLayout,
   freshDashboardIds,
   groupsFromIdToken,
@@ -13,14 +12,6 @@ import {
   tooSmall,
   widgetRefsFromDashboard
 } from './logic.js'
-
-describe('deriveRole', () => {
-  it('grants admin only when the configured role is present', () => {
-    expect(deriveRole(['user', 'campus-admin'], 'campus-admin')).toBe('admin')
-    expect(deriveRole(['user'], 'campus-admin')).toBe('user')
-    expect(deriveRole('campus-admin', 'campus-admin')).toBe('user')
-  })
-})
 
 describe('isCompleteOrder', () => {
   it('accepts a permutation of every current id', () => {

@@ -10,7 +10,6 @@ import { db } from './db/index.js'
 import * as schema from './db/schema.js'
 import { env } from './env.js'
 import {
-  deriveRole,
   filterLayout,
   freshDashboardIds,
   groupsFromIdToken,
@@ -45,13 +44,8 @@ const keycloakConfig: GenericOAuthConfig = {
   overrideUserInfo: true
 }
 
-/**
- * The role comes from Keycloak, never from a client. Better-Auth strips
- * `input: false` fields from the provider profile, so the mapping above cannot
- * carry it; instead the account row, whose ID token is refreshed on every
- * sign-in, is the trigger: read the verified token's roles and sync the user.
- */
-async function syncRoleFromAccount(account: {
+/** Syncs Keycloak audiences and sign-in time without changing the app role. */
+async function syncKeycloakAccount(account: {
   providerId: string
   userId: string
   idToken?: string | null
@@ -59,10 +53,14 @@ async function syncRoleFromAccount(account: {
   if (account.providerId !== 'keycloak' || !account.idToken) return
   const roles = rolesFromIdToken(account.idToken)
   const groups = groupsFromIdToken(account.idToken)
-  const role = deriveRole(roles, env.KEYCLOAK_ADMIN_ROLE)
   await db
     .update(schema.user)
-    .set({ role, keycloakRoles: roles, keycloakGroups: groups, updatedAt: new Date() })
+    .set({
+      keycloakRoles: roles,
+      keycloakGroups: groups,
+      lastSignInAt: new Date(),
+      updatedAt: new Date()
+    })
     .where(eq(schema.user.id, account.userId))
 
   try {
@@ -167,6 +165,7 @@ export const auth = betterAuth({
   baseURL: env.BETTER_AUTH_URL,
   secret: env.BETTER_AUTH_SECRET,
   trustedOrigins: env.CORS_ORIGINS,
+  session: { cookieCache: { enabled: false } },
   user: {
     additionalFields: {
       role: { type: 'string', defaultValue: 'user', input: false },
@@ -175,8 +174,8 @@ export const auth = betterAuth({
   },
   databaseHooks: {
     account: {
-      create: { after: (account) => syncRoleFromAccount(account) },
-      update: { after: (account) => syncRoleFromAccount(account) }
+      create: { after: (account) => syncKeycloakAccount(account) },
+      update: { after: (account) => syncKeycloakAccount(account) }
     }
   },
   advanced: {
@@ -187,7 +186,10 @@ export const auth = betterAuth({
 })
 
 export function getSession(context: Context): ReturnType<typeof auth.api.getSession> {
-  return auth.api.getSession({ headers: context.req.raw.headers })
+  return auth.api.getSession({
+    headers: context.req.raw.headers,
+    query: { disableCookieCache: true }
+  })
 }
 
 export type AuthSession = NonNullable<Awaited<ReturnType<typeof getSession>>>

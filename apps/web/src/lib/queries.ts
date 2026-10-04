@@ -27,6 +27,8 @@ import {
   translatorSuggestResponseSchema,
   type AdminComponent,
   type AdminComponentList,
+  type AdminUser,
+  type AdminUserList,
   type Component,
   type ComponentInput,
   type ComponentList,
@@ -64,6 +66,7 @@ import {
   type TranslatorPythonResponse,
   type TranslatorSuggestRequest,
   type UserFeed,
+  type UserRole,
   type WidgetList
 } from '@justcampus/shared'
 import { ApiRequestError, apiFetch, isUnauthorized } from './api'
@@ -105,6 +108,7 @@ export const queryKeys = {
   adminPresets: ['admin', 'presets'] as const,
   adminPreset: (id: string) => ['admin', 'preset', id] as const,
   adminPresetAudiences: ['admin', 'preset-audiences'] as const,
+  adminUsers: ['admin', 'users'] as const,
   feed: (url: string) => ['feed', url] as const,
   translatorEngines: ['translator', 'engines'] as const,
   translatorDocuments: ['translator', 'documents'] as const,
@@ -320,6 +324,13 @@ export const adminPresetAudiencesQuery = queryOptions({
   queryKey: queryKeys.adminPresetAudiences,
   queryFn: () => apiFetch<PresetAudienceSuggestions>(API.adminPresetAudiences),
   staleTime: 5 * 60_000
+})
+
+/** Every user who ever signed in, admins first, then by name. */
+export const adminUsersQuery = queryOptions({
+  queryKey: queryKeys.adminUsers,
+  queryFn: () => apiFetch<AdminUserList>(API.adminUsers),
+  select: (data) => data.users
 })
 
 export function useUpdateMe(): UseMutationResult<Me, Error, MePatch> {
@@ -836,6 +847,28 @@ export function useReorderLayoutPresets(): UseMutationResult<
       if (context?.previous) client.setQueryData(queryKeys.adminPresets, context.previous)
     },
     onSettled: () => client.invalidateQueries({ queryKey: queryKeys.adminPresets })
+  })
+}
+
+/**
+ * Grants or revokes a user's admin role. The list shows the answer at once and is then refetched
+ * for the server's order, admins first.
+ */
+export function useSetUserRole(): UseMutationResult<
+  AdminUser,
+  Error,
+  { id: string; role: UserRole }
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, role }: { id: string; role: UserRole }) =>
+      apiFetch<AdminUser>(API.adminUser(id), { method: 'PATCH', json: { role } }),
+    onSuccess: (user) => {
+      client.setQueryData<AdminUserList>(queryKeys.adminUsers, (list) =>
+        list ? { users: list.users.map((item) => (item.id === user.id ? user : item)) } : list
+      )
+      return client.invalidateQueries({ queryKey: queryKeys.adminUsers })
+    }
   })
 }
 

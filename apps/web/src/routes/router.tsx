@@ -10,11 +10,13 @@ import {
 import { isUnauthorized } from '@/lib/api'
 import { i18n, currentLanguage } from '@/i18n'
 import { parseLoginSearch, safeRedirect, type LoginSearch } from '@/lib/redirect'
+import { parseAdminUsersSearch, type AdminUsersSearch } from '@/lib/admin-users'
 import { meQuery, queryClient, queryKeys, setUnauthorizedHandler } from '@/lib/queries'
 import { AdminComponentsPage } from './admin-components-page'
 import { AdminFoldersPage } from './admin-folders-page'
 import { AdminPresetEditorPage } from './admin-preset-editor-page'
 import { AdminPresetsPage } from './admin-presets-page'
+import { AdminUsersPage } from './admin-users-page'
 import { AppErrorPage, NotFoundPage } from './error-pages'
 import { AppLayout } from './app-layout'
 import { ComponentPage } from './component-page'
@@ -93,6 +95,14 @@ const adminPresetRoute = createRoute({
   component: AdminPresetEditorPage
 })
 
+const adminUsersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/users',
+  validateSearch: (search: Record<string, unknown>): AdminUsersSearch =>
+    parseAdminUsersSearch(search),
+  component: AdminUsersPage
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   appRoute.addChildren([
@@ -101,7 +111,8 @@ const routeTree = rootRoute.addChildren([
     adminComponentsRoute,
     adminFoldersRoute,
     adminPresetsRoute,
-    adminPresetRoute
+    adminPresetRoute,
+    adminUsersRoute
   ])
 ])
 

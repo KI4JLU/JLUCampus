@@ -1,9 +1,5 @@
 import { widgetRefKey, type Dashboard, type Sidebar, type WidgetRef } from '@justcampus/shared'
 
-export function deriveRole(roles: unknown, adminRole: string): 'admin' | 'user' {
-  return Array.isArray(roles) && roles.some((role) => role === adminRole) ? 'admin' : 'user'
-}
-
 export function isCompleteOrder(
   currentIds: readonly string[],
   requestedIds: readonly string[]

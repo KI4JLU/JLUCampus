@@ -37,7 +37,8 @@ export const user = pgTable('user', {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
-  layoutInitializedAt: timestamp('layout_initialized_at')
+  layoutInitializedAt: timestamp('layout_initialized_at'),
+  lastSignInAt: timestamp('last_sign_in_at')
 })
 
 export const session = pgTable(
