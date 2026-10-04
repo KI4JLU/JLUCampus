@@ -81,7 +81,6 @@ import {
   writePreviewCache,
   type PreviewCache
 } from './preview-cache'
-import { clearPreviewsOnSignOut } from './sign-out'
 import { templateActions } from './store'
 import {
   blockKey,
@@ -159,9 +158,8 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
   const [generating, setGenerating] = useState<ReadonlySet<string>>(new Set())
   const [sectionErrors, setSectionErrors] = useState<Readonly<Record<string, string>>>({})
 
-  // Other people's previews go; sign-out takes the user's too.
+  // Other people's previews go; sign-out takes the user's too (`sign-out.ts`).
   useEffect(() => {
-    clearPreviewsOnSignOut()
     if (me) clearPreviewCaches(window.localStorage, userCachePrefix(me.id))
   }, [me])
 

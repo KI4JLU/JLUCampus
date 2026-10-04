@@ -32,8 +32,11 @@ export interface LocalHistoryRecord extends HistoryEntry {
   transcript: TranscriptionTranscript | null
 }
 
+/** kiChat's key; Campus adds `:<module>:<user>`. */
+const LOCAL_HISTORY_KEY = 'transcriptionHistory'
+
 export function localHistoryKey(componentId: string, userId: string): string {
-  return `transcriptionHistory:${componentId}:${userId}`
+  return `${LOCAL_HISTORY_KEY}:${componentId}:${userId}`
 }
 
 /** Segments as kiChat stored them: an array, or the array as a JSON string; anything else none. */
@@ -200,6 +203,24 @@ export function writeLocalHistory(key: string, records: readonly LocalHistoryRec
   listeners.forEach((listener) => listener())
 }
 
+/** Removes every user's local history of every module, on sign-out, and tells every reader. */
+export function clearLocalHistories(): void {
+  const stored = storage()
+  if (!stored) return
+  try {
+    const keys: string[] = []
+    for (let index = 0; index < stored.length; index++) {
+      const key = stored.key(index)
+      if (key?.startsWith(`${LOCAL_HISTORY_KEY}:`)) keys.push(key)
+    }
+    for (const key of keys) stored.removeItem(key)
+  } catch {
+    // Blocked storage holds nothing to clear.
+  }
+  cache.clear()
+  listeners.forEach((listener) => listener())
+}
+
 /** Changes the records stored under a key. */
 export function changeLocalHistory(
   key: string,
@@ -211,7 +232,7 @@ export function changeLocalHistory(
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   const onStorage = (event: StorageEvent): void => {
-    if (event.key === null || event.key.startsWith('transcriptionHistory:')) listener()
+    if (event.key === null || event.key.startsWith(`${LOCAL_HISTORY_KEY}:`)) listener()
   }
   window.addEventListener('storage', onStorage)
   return () => {

@@ -1,12 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TranscriptionTranscriptSummary } from '@justcampus/shared'
 import {
+  clearLocalHistories,
   isLocalTranscriptId,
+  localHistoryKey,
   normalizeSegments,
   parseLocalHistory,
+  readLocalHistory,
   syncLocalHistory,
   updateRecord,
   withoutRecord,
+  writeLocalHistory,
   type LocalHistoryRecord
 } from './local-store'
 import {
@@ -165,5 +169,42 @@ describe('local history records', () => {
     ).toBe('Neu')
     expect(isLocalTranscriptId('local-1')).toBe(true)
     expect(isLocalTranscriptId('0b7c')).toBe(false)
+  })
+})
+
+describe('clearLocalHistories', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("removes every user's history on sign-out and leaves other keys", () => {
+    const map = new Map<string, string>()
+    const localStorage = {
+      get length() {
+        return map.size
+      },
+      key: (index: number) => [...map.keys()][index] ?? null,
+      getItem: (key: string) => map.get(key) ?? null,
+      setItem: (key: string, value: string) => void map.set(key, value),
+      removeItem: (key: string) => void map.delete(key)
+    }
+    vi.stubGlobal('window', { localStorage })
+    const record: LocalHistoryRecord = {
+      id: 's-1',
+      title: 'Server',
+      createdAt: null,
+      updatedAt: null,
+      local: false,
+      transcript: null
+    }
+    writeLocalHistory(localHistoryKey('module', 'alice'), [record])
+    writeLocalHistory(localHistoryKey('module', 'bob'), [record])
+    map.set('theme', 'dark')
+    expect(readLocalHistory(localHistoryKey('module', 'alice'))).toHaveLength(1)
+
+    clearLocalHistories()
+
+    expect([...map.keys()]).toEqual(['theme'])
+    expect(readLocalHistory(localHistoryKey('module', 'alice'))).toEqual([])
   })
 })

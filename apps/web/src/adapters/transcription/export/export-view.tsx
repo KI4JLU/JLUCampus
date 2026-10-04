@@ -34,7 +34,6 @@ import { useTranscriptionTemplates } from '../api'
 import { SummaryPanel } from '../summary'
 import { useSummary, type SummaryState } from '../summary/use-summary'
 import { TemplateEditor, TemplateLibraryDialog } from '../templates'
-import { clearPreviewsOnSignOut } from '../templates/sign-out'
 import { activeTemplate, templateActions, useTemplateState } from '../templates/store'
 import { templateSubtext } from '../templates/structure'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -58,10 +57,6 @@ import { exportActions, useExportState, type ExportState } from './store'
 import { TranscriptPreview } from './transcript-preview'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
-
-// Once the export is part of the app, sign-out clears the template previews, also of a visit that
-// never opened the export.
-clearPreviewsOnSignOut()
 
 /**
  * The Export tab's work area (T-41 to T-49): the preview of what is chosen in the side column,

@@ -2,7 +2,10 @@ import { TRANSCRIPTION_DEFAULT_CONFIG } from '@justcampus/shared'
 import type { ComponentAdapter } from '../types'
 import { TranscriptionConfigFields } from './config-fields'
 import { TranscriptionPage } from './page'
+import { clearOnSignOut } from './sign-out'
 import { QuickTile, RecentTile } from './widgets'
+
+clearOnSignOut()
 
 /** A module (see `SINGLETON_COMPONENT_TYPES`): built into the app, so it has no address. */
 export const transcriptionAdapter: ComponentAdapter<'transcription'> = {
