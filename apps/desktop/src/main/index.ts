@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol, session, shell, systemPreferences } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { is } from '@electron-toolkit/utils'
@@ -9,6 +9,7 @@ import {
   type DesktopModuleId
 } from '@justcampus/shared'
 import { initializeLanguage, onLanguageChange, setLanguage, t } from './i18n'
+import { allowPermissionCheck, allowPermissionRequest } from './media-permissions'
 import { modules } from './modules'
 import type { DesktopMainModule } from './modules/types'
 import { resolveStaticFile } from './static'
@@ -97,11 +98,51 @@ function isAllowedNavigation(url: string): boolean {
   }
 }
 
+/**
+ * macOS asks once per app before any process may record; Chromium's own prompt does not cover it.
+ * Resolves with whether the microphone may be used.
+ */
+async function systemMicrophoneAccess(): Promise<boolean> {
+  if (process.platform !== 'darwin') return true
+  const status = systemPreferences.getMediaAccessStatus('microphone')
+  if (status === 'granted') return true
+  if (status !== 'not-determined') return false
+  return systemPreferences.askForMediaAccess('microphone')
+}
+
 function configureSession(): void {
-  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) =>
-    callback(false)
+  // The renderer may record audio (transcription) and show the live transcript in fullscreen;
+  // everything else, and anything an embedded site asks for, stays refused.
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const allowed =
+      contents === mainWindow?.webContents &&
+      allowPermissionRequest(
+        {
+          permission,
+          url: details.requestingUrl,
+          isMainFrame: details.isMainFrame,
+          mediaTypes: 'mediaTypes' in details ? details.mediaTypes : undefined
+        },
+        isRendererUrl
+      )
+    if (!allowed || permission !== 'media') return callback(allowed)
+    systemMicrophoneAccess().then(callback, () => callback(false))
+  })
+  session.defaultSession.setPermissionCheckHandler((contents, permission, origin, details) =>
+    Boolean(
+      contents &&
+      contents === mainWindow?.webContents &&
+      allowPermissionCheck(
+        {
+          permission,
+          url: details.requestingUrl ?? origin,
+          isMainFrame: details.isMainFrame,
+          mediaType: details.mediaType
+        },
+        isRendererUrl
+      )
+    )
   )
-  session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     if (new URL(details.url).protocol !== 'app:')
       return callback({ responseHeaders: details.responseHeaders })

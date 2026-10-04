@@ -5,11 +5,7 @@
  */
 
 /** The Export tab of the result workspace: what to export and its preview. */
-export function ExportView(): React.JSX.Element | null {
-  return null
-}
+export { ExportView } from './export-view'
 
-/** The side column while the Export tab is shown: formatting, presets, speakers. */
-export function ExportSettings(): React.JSX.Element | null {
-  return null
-}
+/** The side column while the Export tab is shown: what to export, formatting, presets, speakers. */
+export { ExportSettings } from './export-settings'

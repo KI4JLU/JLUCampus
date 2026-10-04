@@ -317,6 +317,10 @@ holds the state the areas share (`useTranscriptionWorkspace`), `api.ts` a typed 
 and TanStack Query hook per endpoint plus the signed upload with progress, `audio/` the
 waveform player. Texts live in `i18n/{de,en}/<area>.json`, merged into the app's resources
 under `transcription`; kiChat's catalogue is kept verbatim. Widgets: `quick` and `recent`.
+The shell renders a page in another tree below and above `lg` and drops it behind the narrow
+layout's navigation tab, so the page keeps what must outlive a remount (view, upload queue,
+recording and live session, takes) in `page-memory.ts`, one memory per component, disposed
+once the address is no longer the page's.
 
 Desktop components (`DESKTOP_COMPONENT_TYPES`, so far `files`) are built-in
 rows too (`singleton = true`, same rules), created **enabled** with the name
@@ -378,7 +382,8 @@ strings).
 - Adapter registry: `src/adapters/registry.ts` maps `ComponentType` →
   `{ Page, ConfigFields, defaultConfig, sourceUrl?, externalUrl?, feedUrl?, widgets }`,
   where `widgets` holds a `Tile` for every key the type has in
-  `COMPONENT_WIDGETS`. Adapters with `externalUrl` (`link`) open outside the
+  `COMPONENT_WIDGETS`, and a `name` where a type offers several widgets (the add-widget
+  dialog shows it after the component's name). Adapters with `externalUrl` (`link`) open outside the
   app from tiles, folders and the sidebar instead of navigating to
   `/c/$componentId`. Adapters with `feedUrl` (`rss`) get a dot in the sidebar
   while their feed has unread entries.
@@ -449,5 +454,9 @@ import.meta.env.VITE_API_URL ?? ''` as base and `credentials: 'include'`.
   `https://api.openai.com` (transcription storage and OpenAI Realtime; `media-src` also
   `blob:` and `data:`), `frame-src https: http://localhost:*`,
   `img-src 'self' https: data:`, fonts and styles self/inline.
+- Permissions (`src/main/media-permissions.ts`): the app's own main frame may use the
+  microphone (audio only) and element fullscreen, for the transcription module's recording,
+  live transcription and maximised live text; everything else, and every embedded site, is
+  refused. macOS builds declare the microphone use (`build/entitlements.mac.plist`).
 - Everything else (window state, external links → `shell.openExternal`,
   no Node in the renderer, context isolation) follows electron-vite defaults.

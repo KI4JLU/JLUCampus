@@ -4,6 +4,7 @@
   "aiSectionGenerated": "KI-Abschnitt (Generiert)",
   "allSpeakersHidden": "[Alle Sprecher ausgeblendet]",
   "anonymised": "Anonymisiert",
+  "anonymousSpeaker": "Speaker {{n}}",
   "blobFailed": "Blob konnte nicht erstellt werden",
   "bubbles": "Blasen",
   "bySpeakerShort": "nach Sprecher",
@@ -18,6 +19,8 @@
   "confirmDeleteTemplate": "Möchtest du diese Vorlage wirklich löschen?",
   "connectionError": "Verbindungsfehler.",
   "copied": "Kopiert!",
+  "copyFailed": "Kopieren fehlgeschlagen.",
+  "copyName": "{{name}} (Kopie)",
   "copySection": "Abschnitt kopieren",
   "createSummary": "Zusammenfassung erstellen",
   "createdAt": "Erstellt am: {{timestamp}}",
@@ -25,7 +28,17 @@
   "customise": "Anpassen",
   "defaultTemplateName": "Mein Interview-Format",
   "deleteFailed": "Fehler beim Löschen: ",
+  "deleteFormat": "Format „{{name}}“ löschen",
+  "deleteTemplate": "Vorlage „{{name}}“ löschen",
+  "deleteTemplateTitle": "Vorlage löschen",
   "divider": "Trennlinie",
+  "dnd": {
+    "instructions": "Drücke die Leertaste, um einen Block aufzunehmen. Verschiebe ihn mit den Pfeiltasten, lege ihn mit der Leertaste ab oder brich mit Escape ab.",
+    "pickedUp": "{{name}} aufgenommen, Position {{position}} von {{total}}.",
+    "over": "{{name}} an Position {{position}} von {{total}}.",
+    "dropped": "{{name}} an Position {{position}} von {{total}} abgelegt.",
+    "cancelled": "Verschieben abgebrochen, {{name}} bleibt an der bisherigen Position."
+  },
   "docxFailed": "Export fehlgeschlagen.",
   "downloadAs": "Herunterladen als",
   "downloadAsDocx": "Als DOCX herunterladen",
@@ -37,18 +50,21 @@
   "enterTextPlaceholder": "Text eingeben",
   "formatDeleteConnectionError": "Verbindungsfehler beim Löschen.",
   "formatSaveConnectionError": "Verbindungsfehler beim Speichern.",
+  "formatsLoadFailed": "Deine Formate konnten nicht geladen werden.",
   "formatting": "Formatierung",
   "fullTranscript": "Volltext-Transkript",
   "fullTranscriptDesc": "Wort für Wort, mit Sprechern",
   "generateNow": "Jetzt generieren",
   "generateSummaryDesc": "Erstelle eine KI-gestützte Zusammenfassung des aktuellen Transkripts. Dieser Vorgang dauert etwa 10-20 Sekunden.",
   "generateSummaryTitle": "Ergebnisprotokoll generieren",
+  "generatingPreview": "Generiere...",
   "generatingReport": "Ergebnisprotokoll wird generiert...",
   "generatingSummary": "Zusammenfassung wird erstellt",
   "generatingSummaryHint": "Je nach Länge des Transkripts dauert das einen Moment.",
   "generationFailed": "Generierung fehlgeschlagen",
   "generationFailedPrefix": "Generierung fehlgeschlagen: ",
   "heading": "Überschrift",
+  "headingLevel": "Überschriftenebene",
   "headingTextPlaceholder": "Überschriftstext",
   "httpGenerationError": "HTTP-Fehler beim Generieren",
   "insertDate": "+ Datum",
@@ -85,8 +101,10 @@
   "newTemplateName": "Meine neue Vorlage",
   "newText": "Neuer Text",
   "noAiContentYet": "Noch kein KI-Inhalt generiert. Klicke oben auf „Vorschau testen“.",
+  "noSegments": "Das Transkript enthält noch keinen Text.",
   "noSpeakers": "Keine Sprecher",
   "noSummaryYet": "Noch keine Zusammenfassung",
+  "noTemplatesFound": "Keine passende Vorlage gefunden.",
   "noTranscriptLoaded": "Kein Transkript geladen.",
   "order": "Reihenfolge",
   "orderBySpeaker": "Nach Sprecher",
@@ -117,6 +135,7 @@
   "rawData": "Rohdaten (JSON)",
   "rawDataDesc": "Für eigene Tools & KI",
   "refresh": "Aktualisieren",
+  "refreshSection": "Abschnitt „{{heading}}“ aktualisieren",
   "regenerateView": "Ansicht neu generieren",
   "resultLooksLike": "So sieht das Ergebnis aus",
   "saveAsOwnTemplate": "Als eigene Vorlage speichern",
@@ -124,8 +143,43 @@
   "saveTemplate": "Vorlage speichern",
   "searchTemplate": "Vorlage suchen",
   "section": "Abschnitt",
+  "sectionConnectionError": "Verbindungsfehler beim Generieren.",
   "sectionNamePlaceholder": "Abschnittsname (z.B. Zusammenfassung)",
   "serverError": "Unbekannter Serverfehler",
+  "shortcuts": {
+    "summary": {
+      "heading": "Zusammenfassung",
+      "instruction": "Fasse das Gespräch in 3-4 Sätzen zusammen"
+    },
+    "todos": {
+      "heading": "To-dos",
+      "instruction": "Erstelle eine To-do-Liste mit Aufgaben, Zuständigkeiten und Fristen."
+    },
+    "decisions": {
+      "heading": "Entscheidungen",
+      "instruction": "Liste alle getroffenen Entscheidungen als Stichpunkte."
+    },
+    "results": {
+      "heading": "Ergebnisse",
+      "instruction": "Fasse die wichtigsten Ergebnisse des Gesprächs zusammen."
+    },
+    "keyPoints": {
+      "heading": "Kernaussagen",
+      "instruction": "Fasse die wichtigsten Kernaussagen als Stichpunkte zusammen."
+    },
+    "quotes": {
+      "heading": "Zitate",
+      "instruction": "Extrahiere besonders prägnante und repräsentative Zitate aus dem Gespräch."
+    },
+    "topics": {
+      "heading": "Themen",
+      "instruction": "Gliedere das Gespräch in die behandelten Themenschwerpunkte."
+    },
+    "free": {
+      "heading": "Abschnitt",
+      "instruction": ""
+    }
+  },
   "showSpeakers": "Sprecher anzeigen",
   "skeletonDecisions": "Entscheidungen",
   "skeletonTasks": "Aufgaben",
@@ -142,6 +196,7 @@
   "templateNameInputPlaceholder": "Vorlagenname eingeben...",
   "templateNamePlaceholder": "Vorlagenname",
   "templateSaveFailed": "Fehler beim Speichern der Vorlage: ",
+  "templatesLoadFailed": "Die Vorlagen konnten nicht geladen werden.",
   "testPreview": "Vorschau testen",
   "testPreviewNotice": "Test-Vorschau auf Basis eines Transkript-Ausschnitts. Der finale Export nutzt das komplette Gespräch und ist ausführlicher.",
   "textSection": "Textabschnitt",

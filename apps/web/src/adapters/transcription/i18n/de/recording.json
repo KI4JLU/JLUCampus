@@ -36,5 +36,233 @@
   "startYourRecording": "Starten Sie Ihre Aufnahme",
   "stopRecording": "Aufnahme stoppen",
   "stopRecordingFailed": "Fehler beim Beenden der Aufnahme",
-  "uploadForTranscription": "Zur Transkription hochladen"
+  "uploadForTranscription": "Zur Transkription hochladen",
+  "modeOpenai": "OpenAI",
+  "microphoneN": "Mikrofon {{n}}",
+  "tabsLabel": "Aufnahmeart",
+  "elapsed": "Laufzeit {{time}}",
+  "takesTitle": "Aufnahmen",
+  "takesHint": "Die Aufnahmen bleiben nur in diesem Browserfenster, bis du sie hochlädst.",
+  "downloadRecordingName": "Aufnahme {{name}} herunterladen",
+  "deleteRecordingName": "Aufnahme {{name}} löschen",
+  "confirmDeleteRecording": "Löschen von {{name}} bestätigen",
+  "cancelDeleteRecording": "Löschen von {{name}} abbrechen",
+  "uploadUnavailable": "Hochladen ist erst möglich, wenn die Spracherkennung eingerichtet ist.",
+  "connecting": "Verbindung wird aufgebaut",
+  "connectingHint": "Die Live-Transkription wird mit dem Dienst verbunden.",
+  "liveRunning": "Live-Transkription läuft",
+  "liveRunningHint": "Das Mikrofon wird live transkribiert und zugleich lokal im Browser aufgenommen.",
+  "liveUnavailable": "Für die Live-Transkription ist noch kein Dienst eingerichtet.",
+  "liveTranscript": "Live-Transkript",
+  "liveServiceError": "Fehler der Live-Transkription: {{message}}",
+  "appearance": "Darstellung",
+  "fontSizeValue": "{{size}}px",
+  "resetAppearance": "Darstellung zurücksetzen",
+  "clearText": "Text leeren",
+  "errors": {
+    "connectionFailed": "Audio connection failed.",
+    "connectionClosed": "Audio connection closed.",
+    "connectionTimeout": "Audio connection not established within 15s.",
+    "sessionFailed": "Failed to create realtime session.",
+    "bridgeError": "Realtime bridge error.",
+    "openaiError": "OpenAI Realtime API Error: {{detail}}",
+    "aborted": "Audio connection closed."
+  },
+  "widgets": {
+    "quickName": "Neue Transkription",
+    "recentName": "In Bearbeitung und zuletzt gespeichert",
+    "upload": "Datei hochladen",
+    "record": "Audio aufnehmen",
+    "activeJobs_one": "{{count}} Auftrag in Bearbeitung",
+    "activeJobs_other": "{{count}} Aufträge in Bearbeitung",
+    "jobsTitle": "In Bearbeitung",
+    "transcriptsTitle": "Zuletzt gespeichert",
+    "recentEmpty": "Noch keine gespeicherten Transkriptionen.",
+    "jobStatus": {
+      "uploading": "Upload",
+      "analyzing": "Sprecheranalyse",
+      "analyzed": "Sprecher benennen",
+      "processing": "Transkription läuft",
+      "completed": "Nicht gespeichert",
+      "failed": "Fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    }
+  },
+  "admin": {
+    "sections": {
+      "asr": "Spracherkennung",
+      "diarization": "Sprechererkennung",
+      "llm": "KI-Endpunkt",
+      "defaults": "Voreinstellungen für Uploads",
+      "limits": "Grenzen",
+      "retention": "Aufbewahrung",
+      "live": "Live-Transkription",
+      "storage": "Speicher"
+    },
+    "asrBaseUrl": {
+      "label": "Adresse der Spracherkennung",
+      "hint": "OpenAI-kompatibler Endpunkt bis /v1, etwa Speaches. Transkribiert wird mit POST /audio/transcriptions (verbose_json mit Segmenten)."
+    },
+    "providerName": {
+      "label": "Anbietername",
+      "hint": "Wird mit jeder Transkription gespeichert, etwa KI@JLU."
+    },
+    "asrModels": {
+      "label": "Sprachmodelle",
+      "hint": "Höchstens {{max}}. Die Liste lässt sich vom Endpunkt abrufen; vergebene Anzeigenamen bleiben."
+    },
+    "defaultAsrModel": {
+      "label": "Sprachmodell der Aufträge",
+      "hint": "Ohne Auswahl das erste der Liste."
+    },
+    "diarizationEnabled": {
+      "label": "Sprecher erkennen",
+      "hint": "Analysiert die Stimmen vor der Transkription, damit sie benannt werden können. Ohne bleibt jeder Text ohne Sprecher."
+    },
+    "diarizationUrl": {
+      "label": "Adresse der Sprechererkennung",
+      "hint": "HTTP-Endpunkt, der die Audiodatei annimmt und die Abschnitte der Sprecher liefert."
+    },
+    "diarizationModel": {
+      "label": "Modell der Sprechererkennung",
+      "hint": "Nur nötig, wenn der Endpunkt eines erwartet."
+    },
+    "llmBaseUrl": {
+      "label": "Adresse des KI-Endpunkts",
+      "hint": "OpenAI-kompatibler Chat-Endpunkt bis /v1 für Korrektur, Zusammenfassungen, Unterzeilen und Sprecheroptimierung."
+    },
+    "llmModels": {
+      "label": "KI-Modelle",
+      "hint": "Höchstens {{max}}. Die Liste lässt sich vom Endpunkt abrufen; vergebene Anzeigenamen bleiben. Nur gelistete Modelle werden verwendet."
+    },
+    "defaultCorrectionModel": {
+      "label": "Modell der Korrektur",
+      "hint": "Ohne Auswahl das erste der Liste."
+    },
+    "defaultSummaryModel": {
+      "label": "Modell der Zusammenfassungen",
+      "hint": "Ohne Auswahl das erste der Liste."
+    },
+    "firstModel": "Erstes Modell der Liste",
+    "modelId": "Modell-ID",
+    "modelLabel": "Anzeigename",
+    "modelActions": "Aktionen",
+    "addModel": "Modell hinzufügen",
+    "removeModel": "Modell {{name}} entfernen",
+    "fetchModels": "Modelle abrufen",
+    "fetchingModels": "Modelle werden abgerufen …",
+    "fetchedModels_one": "{{count}} Modell übernommen.",
+    "fetchedModels_other": "{{count}} Modelle übernommen.",
+    "fetchedModelsOmitted_one": "{{count}} weiteres über dem Höchstwert von {{max}} ausgelassen.",
+    "fetchedModelsOmitted_other": "{{count}} weitere über dem Höchstwert von {{max}} ausgelassen.",
+    "fetchModelsErrors": {
+      "empty": "Der Endpunkt nennt keine Modelle.",
+      "invalidUrl": "Die Adresse ist ungültig.",
+      "failed": "Die Modelle konnten nicht abgerufen werden. Prüfen Sie Adresse und API-Schlüssel."
+    },
+    "defaultLanguage": {
+      "label": "Sprache",
+      "hint": "Womit neue Uploads beginnen; die Person kann es ändern."
+    },
+    "languages": {
+      "auto": "Automatisch erkennen",
+      "de": "Deutsch",
+      "en": "Englisch"
+    },
+    "defaultSpeakerCount": {
+      "label": "Anzahl der Sprecher",
+      "hint": "Womit neue Uploads beginnen; die Person kann es ändern."
+    },
+    "speakerCounts": {
+      "auto": "Automatisch",
+      "single": "Einzelne Person",
+      "multi": "Mehrere Personen"
+    },
+    "defaultLlmCorrection": {
+      "label": "KI-Korrektur voreinstellen",
+      "hint": "Nur wirksam, wenn ein KI-Endpunkt mit Modellen eingerichtet ist."
+    },
+    "maxFileMegabytes": {
+      "label": "Größte Datei (MB)",
+      "hint": "Von 1 bis 10240 MB."
+    },
+    "maxDurationMinutes": {
+      "label": "Längste Aufnahme (Minuten)",
+      "hint": "Leer: keine Grenze außer der Dateigröße."
+    },
+    "maxFilesPerGroup": {
+      "label": "Dateien je Transkript",
+      "hint": "Leer: bis zu {{max}}."
+    },
+    "maxActiveJobsPerUser": {
+      "label": "Laufende Aufträge je Person",
+      "hint": "Aufträge, die zugleich hochgeladen, analysiert oder transkribiert werden."
+    },
+    "workerConcurrency": {
+      "label": "Gleichzeitige Aufträge des Servers",
+      "hint": "Je Serverprozess, von 1 bis 16."
+    },
+    "chunkSeconds": {
+      "label": "Abschnittslänge (Sekunden)",
+      "hint": "Lange Aufnahmen werden vor der Erkennung in Abschnitte dieser Länge geteilt."
+    },
+    "upstreamTimeoutSeconds": {
+      "label": "Zeitlimit je Anfrage (Sekunden)",
+      "hint": "So lange darf eine Anfrage an Spracherkennung, Sprechererkennung oder KI-Endpunkt dauern."
+    },
+    "transcriptRetentionHours": {
+      "label": "Gespeicherte Transkripte löschen nach (Stunden)",
+      "hint": "Gezählt ab der letzten Änderung. Leer: Sie bleiben, bis die Person sie löscht."
+    },
+    "unsavedJobRetentionHours": {
+      "label": "Ungespeicherte Aufträge löschen nach (Stunden)",
+      "hint": "Auch fehlgeschlagene und abgebrochene, jeweils mit ihrem Audio."
+    },
+    "realtimeModes": {
+      "label": "Angebotene Modi",
+      "hint": "Lokal braucht die Signaling-Adresse der Bridge, OpenAI den API-Schlüssel für OpenAI Realtime."
+    },
+    "modes": {
+      "onprem": "Lokal (Bridge)",
+      "openai": "OpenAI Realtime"
+    },
+    "defaultRealtimeMode": {
+      "label": "Voreingestellter Modus",
+      "hint": "Ohne Auswahl der erste angebotene.",
+      "auto": "Erster angebotener Modus"
+    },
+    "onpremSignalingUrl": {
+      "label": "Signaling-Adresse der Bridge",
+      "hint": "Nimmt das SDP-Angebot des Browsers an und antwortet mit dem SDP der Bridge; der Server leitet beides weiter."
+    },
+    "iceServers": {
+      "label": "ICE-Server",
+      "hint": "Je Zeile ein Server, mehrere Adressen durch Leerzeichen getrennt, etwa turn:turn.uni-giessen.de:3478. Höchstens 5, nur für den lokalen Modus."
+    },
+    "openaiRealtimeUrl": {
+      "label": "Adresse der OpenAI-API",
+      "hint": "Bis /v1. Der Server holt dort kurzlebige Schlüssel; Browser senden ihr SDP-Angebot an /realtime/calls."
+    },
+    "openaiRealtimeModel": {
+      "label": "Transkriptionsmodell von OpenAI",
+      "hint": "Wird beim Start jeder Sitzung gesetzt."
+    },
+    "storageHint": "Der Speicher wird über die Umgebungsvariablen TRANSCRIPTION_S3_* des Servers eingerichtet. Ohne Speicher sind keine Uploads möglich.",
+    "test": {
+      "running": "Wird getestet …",
+      "ok": "Verbindung erfolgreich.",
+      "failed": "Verbindung fehlgeschlagen.",
+      "status": "HTTP {{status}}",
+      "latency": "{{ms}} ms",
+      "error": "Der Test konnte nicht ausgeführt werden."
+    },
+    "testTargets": {
+      "asr": "Spracherkennung testen",
+      "diarization": "Sprechererkennung testen",
+      "llm": "KI-Endpunkt testen",
+      "realtimeOnprem": "Bridge testen",
+      "realtimeOpenai": "OpenAI Realtime testen",
+      "storage": "Speicher testen"
+    }
+  }
 }

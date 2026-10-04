@@ -10,5 +10,8 @@ export const transcriptionAdapter: ComponentAdapter<'transcription'> = {
   Page: TranscriptionPage,
   ConfigFields: TranscriptionConfigFields,
   defaultConfig: TRANSCRIPTION_DEFAULT_CONFIG,
-  widgets: { quick: { Tile: QuickTile }, recent: { Tile: RecentTile } }
+  widgets: {
+    quick: { Tile: QuickTile, name: (t) => t('transcription.recording.widgets.quickName') },
+    recent: { Tile: RecentTile, name: (t) => t('transcription.recording.widgets.recentName') }
+  }
 }

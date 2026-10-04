@@ -26,6 +26,19 @@ const modules = [
 
 export async function route(request, response) {
   const { pathname } = new URL(request.url ?? '/', 'http://mock')
+  // Browsers call OpenAI Realtime's `/calls` themselves, as they would api.openai.com, which
+  // allows any origin.
+  response.setHeader('Access-Control-Allow-Origin', '*')
+  response.setHeader('Access-Control-Expose-Headers', 'Location')
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204, {
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Max-Age': '600'
+    })
+    response.end()
+    return
+  }
   if (request.method === 'GET' && pathname === '/health') {
     sendJson(response, 200, { ok: true })
     return

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { TFunction } from 'i18next'
 import { FolderPlusIcon, LinkIcon, RssIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -10,7 +11,7 @@ import {
   DialogTitle
 } from '@ki4jlu/design-system'
 import { widgetRefKey, type FolderTemplate } from '@justcampus/shared'
-import { externalUrlOf } from '@/adapters/registry'
+import { externalUrlOf, widgetViewOf } from '@/adapters/registry'
 import type { ComponentWidget } from '@/lib/widgets'
 import { ComponentIcon } from './component-icon'
 import { FolderTitleIcon } from './folder-title-icon'
@@ -102,7 +103,7 @@ export function AddWidgetDialog({
                   }
                   onClick={() => onAdd(widget)}
                 >
-                  {widget.component.name}
+                  {widgetName(widget, t)}
                 </AddButton>
               ))}
             </ul>
@@ -149,4 +150,10 @@ function AddButton({
       </Button>
     </li>
   )
+}
+
+/** The component's name, with the widget's own where its type offers several. */
+function widgetName(widget: ComponentWidget, t: TFunction): string {
+  const name = widgetViewOf(widget.component, widget.widgetKey)?.name?.(t)
+  return name ? `${widget.component.name}: ${name}` : widget.component.name
 }

@@ -36,5 +36,233 @@
   "startYourRecording": "Start your recording",
   "stopRecording": "Stop recording",
   "stopRecordingFailed": "Could not stop the recording",
-  "uploadForTranscription": "Upload for transcription"
+  "uploadForTranscription": "Upload for transcription",
+  "modeOpenai": "OpenAI",
+  "microphoneN": "Microphone {{n}}",
+  "tabsLabel": "Recording mode",
+  "elapsed": "Elapsed {{time}}",
+  "takesTitle": "Recordings",
+  "takesHint": "Recordings stay only in this browser window until you upload them.",
+  "downloadRecordingName": "Download recording {{name}}",
+  "deleteRecordingName": "Delete recording {{name}}",
+  "confirmDeleteRecording": "Confirm deleting {{name}}",
+  "cancelDeleteRecording": "Cancel deleting {{name}}",
+  "uploadUnavailable": "Uploading becomes possible once speech recognition is set up.",
+  "connecting": "Connecting",
+  "connectingHint": "The live transcription is connecting to the service.",
+  "liveRunning": "Live transcription running",
+  "liveRunningHint": "The microphone is transcribed live and recorded locally in your browser at the same time.",
+  "liveUnavailable": "No service is set up for live transcription yet.",
+  "liveTranscript": "Live transcript",
+  "liveServiceError": "Live transcription error: {{message}}",
+  "appearance": "Appearance",
+  "fontSizeValue": "{{size}}px",
+  "resetAppearance": "Reset appearance",
+  "clearText": "Clear text",
+  "errors": {
+    "connectionFailed": "Audio connection failed.",
+    "connectionClosed": "Audio connection closed.",
+    "connectionTimeout": "Audio connection not established within 15s.",
+    "sessionFailed": "Failed to create realtime session.",
+    "bridgeError": "Realtime bridge error.",
+    "openaiError": "OpenAI Realtime API Error: {{detail}}",
+    "aborted": "Audio connection closed."
+  },
+  "widgets": {
+    "quickName": "New transcription",
+    "recentName": "In progress and recently saved",
+    "upload": "Upload file",
+    "record": "Record audio",
+    "activeJobs_one": "{{count}} job in progress",
+    "activeJobs_other": "{{count}} jobs in progress",
+    "jobsTitle": "In progress",
+    "transcriptsTitle": "Recently saved",
+    "recentEmpty": "No saved transcriptions yet.",
+    "jobStatus": {
+      "uploading": "Uploading",
+      "analyzing": "Speaker analysis",
+      "analyzed": "Name speakers",
+      "processing": "Transcribing",
+      "completed": "Not saved",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "admin": {
+    "sections": {
+      "asr": "Speech recognition",
+      "diarization": "Speaker recognition",
+      "llm": "AI endpoint",
+      "defaults": "Defaults for uploads",
+      "limits": "Limits",
+      "retention": "Retention",
+      "live": "Live transcription",
+      "storage": "Storage"
+    },
+    "asrBaseUrl": {
+      "label": "Speech recognition address",
+      "hint": "OpenAI-compatible endpoint up to /v1, such as Speaches. Transcription uses POST /audio/transcriptions (verbose_json with segments)."
+    },
+    "providerName": {
+      "label": "Provider name",
+      "hint": "Saved with every transcription, such as KI@JLU."
+    },
+    "asrModels": {
+      "label": "Speech models",
+      "hint": "At most {{max}}. The list can be fetched from the endpoint; display names you gave stay."
+    },
+    "defaultAsrModel": {
+      "label": "Speech model of jobs",
+      "hint": "Without a choice, the first of the list."
+    },
+    "diarizationEnabled": {
+      "label": "Recognise speakers",
+      "hint": "Analyses the voices before transcribing, so they can be named. Without it, no text has a speaker."
+    },
+    "diarizationUrl": {
+      "label": "Speaker recognition address",
+      "hint": "HTTP endpoint that takes the audio file and returns the speakers' turns."
+    },
+    "diarizationModel": {
+      "label": "Speaker recognition model",
+      "hint": "Only needed if the endpoint expects one."
+    },
+    "llmBaseUrl": {
+      "label": "AI endpoint address",
+      "hint": "OpenAI-compatible chat endpoint up to /v1 for correction, summaries, subtitles and speaker optimisation."
+    },
+    "llmModels": {
+      "label": "AI models",
+      "hint": "At most {{max}}. The list can be fetched from the endpoint; display names you gave stay. Only listed models are used."
+    },
+    "defaultCorrectionModel": {
+      "label": "Correction model",
+      "hint": "Without a choice, the first of the list."
+    },
+    "defaultSummaryModel": {
+      "label": "Summary model",
+      "hint": "Without a choice, the first of the list."
+    },
+    "firstModel": "First model of the list",
+    "modelId": "Model ID",
+    "modelLabel": "Display name",
+    "modelActions": "Actions",
+    "addModel": "Add model",
+    "removeModel": "Remove model {{name}}",
+    "fetchModels": "Fetch models",
+    "fetchingModels": "Fetching models …",
+    "fetchedModels_one": "{{count}} model taken over.",
+    "fetchedModels_other": "{{count}} models taken over.",
+    "fetchedModelsOmitted_one": "{{count}} more above the maximum of {{max}} left out.",
+    "fetchedModelsOmitted_other": "{{count}} more above the maximum of {{max}} left out.",
+    "fetchModelsErrors": {
+      "empty": "The endpoint names no models.",
+      "invalidUrl": "The address is not valid.",
+      "failed": "The models could not be fetched. Check the address and the API key."
+    },
+    "defaultLanguage": {
+      "label": "Language",
+      "hint": "What new uploads start with; people can change it."
+    },
+    "languages": {
+      "auto": "Detect automatically",
+      "de": "German",
+      "en": "English"
+    },
+    "defaultSpeakerCount": {
+      "label": "Number of speakers",
+      "hint": "What new uploads start with; people can change it."
+    },
+    "speakerCounts": {
+      "auto": "Auto",
+      "single": "Single person",
+      "multi": "Multiple people"
+    },
+    "defaultLlmCorrection": {
+      "label": "AI correction on by default",
+      "hint": "Only takes effect when an AI endpoint with models is set up."
+    },
+    "maxFileMegabytes": {
+      "label": "Largest file (MB)",
+      "hint": "From 1 to 10240 MB."
+    },
+    "maxDurationMinutes": {
+      "label": "Longest recording (minutes)",
+      "hint": "Empty: no limit besides the file size."
+    },
+    "maxFilesPerGroup": {
+      "label": "Files per transcript",
+      "hint": "Empty: up to {{max}}."
+    },
+    "maxActiveJobsPerUser": {
+      "label": "Running jobs per person",
+      "hint": "Jobs uploading, being analysed or transcribed at the same time."
+    },
+    "workerConcurrency": {
+      "label": "Simultaneous jobs of the server",
+      "hint": "Per server process, from 1 to 16."
+    },
+    "chunkSeconds": {
+      "label": "Chunk length (seconds)",
+      "hint": "Long recordings are cut into chunks of this length before recognition."
+    },
+    "upstreamTimeoutSeconds": {
+      "label": "Time limit per request (seconds)",
+      "hint": "How long a request to speech recognition, speaker recognition or the AI endpoint may take."
+    },
+    "transcriptRetentionHours": {
+      "label": "Delete saved transcripts after (hours)",
+      "hint": "Counted from the last change. Empty: they stay until the person deletes them."
+    },
+    "unsavedJobRetentionHours": {
+      "label": "Delete unsaved jobs after (hours)",
+      "hint": "Failed and cancelled ones too, each with its audio."
+    },
+    "realtimeModes": {
+      "label": "Offered modes",
+      "hint": "Local needs the bridge's signaling address, OpenAI the API key for OpenAI Realtime."
+    },
+    "modes": {
+      "onprem": "Local (bridge)",
+      "openai": "OpenAI Realtime"
+    },
+    "defaultRealtimeMode": {
+      "label": "Default mode",
+      "hint": "Without a choice, the first one offered.",
+      "auto": "First mode offered"
+    },
+    "onpremSignalingUrl": {
+      "label": "Bridge signaling address",
+      "hint": "Takes the browser's SDP offer and answers with the bridge's SDP; the server passes both on."
+    },
+    "iceServers": {
+      "label": "ICE servers",
+      "hint": "One server per line, several addresses separated by spaces, such as turn:turn.uni-giessen.de:3478. At most 5, for the local mode only."
+    },
+    "openaiRealtimeUrl": {
+      "label": "OpenAI API address",
+      "hint": "Up to /v1. The server gets short-lived keys there; browsers send their SDP offer to /realtime/calls."
+    },
+    "openaiRealtimeModel": {
+      "label": "OpenAI transcription model",
+      "hint": "Set at the start of every session."
+    },
+    "storageHint": "Storage is set up with the server's TRANSCRIPTION_S3_* environment variables. Without storage, no uploads are possible.",
+    "test": {
+      "running": "Testing …",
+      "ok": "Connection successful.",
+      "failed": "Connection failed.",
+      "status": "HTTP {{status}}",
+      "latency": "{{ms}} ms",
+      "error": "The test could not be run."
+    },
+    "testTargets": {
+      "asr": "Test speech recognition",
+      "diarization": "Test speaker recognition",
+      "llm": "Test AI endpoint",
+      "realtimeOnprem": "Test bridge",
+      "realtimeOpenai": "Test OpenAI Realtime",
+      "storage": "Test storage"
+    }
+  }
 }

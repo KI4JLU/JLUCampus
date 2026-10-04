@@ -6,11 +6,7 @@
  */
 
 /** The work area of the `result` view, for the workspace's `transcriptId`. */
-export function ResultView(): React.JSX.Element | null {
-  return null
-}
+export { ResultView } from './result-view'
 
 /** The side column of the Preview and Corrections tabs: speakers, redactions, tools. */
-export function ResultTools(): React.JSX.Element | null {
-  return null
-}
+export { ResultToolsPanel as ResultTools } from './tools'

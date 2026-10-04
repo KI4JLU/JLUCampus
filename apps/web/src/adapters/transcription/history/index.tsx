@@ -4,6 +4,4 @@
  */
 
 /** The history list in the side column, below the view's settings. */
-export function HistorySection(): React.JSX.Element | null {
-  return null
-}
+export { HistorySection } from './history-section'

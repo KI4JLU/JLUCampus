@@ -8,6 +8,7 @@ import type {
 } from '@justcampus/shared'
 import type { ComponentOf } from '../types'
 import { useTranscriptionCapabilities } from './api'
+import { useMemoryCell, usePageMemory, type PageMemory } from './page-memory'
 import { WorkspaceContext } from './use-workspace'
 
 /**
@@ -56,6 +57,8 @@ export type BeforeLeave = () => boolean | Promise<boolean>
 
 export interface TranscriptionWorkspace {
   component: ComponentOf<'transcription'>
+  /** What the page keeps across a remount of itself (see `page-memory.ts`). */
+  memory: PageMemory
   /** `undefined` while loading or when the module does not answer. */
   capabilities: TranscriptionCapabilities | undefined
   view: TranscriptionView
@@ -101,14 +104,25 @@ export function TranscriptionWorkspaceProvider({
   children
 }: WorkspaceProviderProps): React.JSX.Element {
   const capabilities = useTranscriptionCapabilities().data
-  const [view, setView] = useState<TranscriptionView>('choice')
-  const [transcriptId, setTranscriptId] = useState<string | null>(null)
-  const [resultTab, setResultTab] = useState<ResultTab>('preview')
-  const [settingsChange, setSettingsChange] = useState<Partial<UploadSettings>>({})
-  const [historySearch, setHistorySearch] = useState('')
+  const memory = usePageMemory(component.id)
+  const [view, setView] = useMemoryCell(
+    memory.cell<TranscriptionView>('workspace.view', () => 'choice')
+  )
+  const [transcriptId, setTranscriptId] = useMemoryCell(
+    memory.cell<string | null>('workspace.transcriptId', () => null)
+  )
+  const [resultTab, setResultTab] = useMemoryCell(
+    memory.cell<ResultTab>('workspace.resultTab', () => 'preview')
+  )
+  const [settingsChange, setSettingsChange] = useMemoryCell(
+    memory.cell<Partial<UploadSettings>>('workspace.uploadSettings', () => ({}))
+  )
+  const [historySearch, setHistorySearch] = useMemoryCell(
+    memory.cell('workspace.historySearch', () => '')
+  )
   const [currentDocument, setCurrentDocument] = useState<TranscriptDocument | null>(null)
-  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([])
-  const pendingRef = useRef<PendingUpload[]>([])
+  const pendingCell = memory.cell<PendingUpload[]>('workspace.pendingUploads', () => [])
+  const [pendingUploads, setPendingUploads] = useMemoryCell(pendingCell)
   const beforeLeave = useRef<BeforeLeave | null>(null)
 
   const mayLeave = useCallback(async (): Promise<boolean> => {
@@ -125,7 +139,7 @@ export function TranscriptionWorkspaceProvider({
       setResultTab('preview')
       setView('result')
     },
-    [mayLeave, transcriptId, view]
+    [mayLeave, setResultTab, setTranscriptId, setView, transcriptId, view]
   )
 
   const newTranscription = useCallback(async (): Promise<void> => {
@@ -135,27 +149,29 @@ export function TranscriptionWorkspaceProvider({
     setResultTab('preview')
     setHistorySearch('')
     setView('choice')
-  }, [mayLeave])
+  }, [mayLeave, setHistorySearch, setResultTab, setTranscriptId, setView])
 
-  const enqueueUpload = useCallback((files: File[], title: string | null = null) => {
-    if (files.length === 0) return
-    const next = [...pendingRef.current, { id: crypto.randomUUID(), files, title }]
-    pendingRef.current = next
-    setPendingUploads(next)
-    setView('upload')
-  }, [])
+  const enqueueUpload = useCallback(
+    (files: File[], title: string | null = null) => {
+      if (files.length === 0) return
+      setPendingUploads((current) => [...current, { id: crypto.randomUUID(), files, title }])
+      setView('upload')
+    },
+    [setPendingUploads, setView]
+  )
 
   const takePendingUploads = useCallback((): PendingUpload[] => {
-    const taken = pendingRef.current
-    if (taken.length === 0) return []
-    pendingRef.current = []
-    setPendingUploads([])
+    const taken = pendingCell.value
+    if (taken.length > 0) setPendingUploads([])
     return taken
-  }, [])
+  }, [pendingCell, setPendingUploads])
 
-  const setUploadSettings = useCallback((change: Partial<UploadSettings>) => {
-    setSettingsChange((current) => ({ ...current, ...change }))
-  }, [])
+  const setUploadSettings = useCallback(
+    (change: Partial<UploadSettings>) => {
+      setSettingsChange((current) => ({ ...current, ...change }))
+    },
+    [setSettingsChange]
+  )
 
   const setBeforeLeave = useCallback((check: BeforeLeave | null) => {
     beforeLeave.current = check
@@ -173,6 +189,7 @@ export function TranscriptionWorkspaceProvider({
   const workspace = useMemo<TranscriptionWorkspace>(
     () => ({
       component,
+      memory,
       capabilities,
       view,
       setView,
@@ -194,15 +211,19 @@ export function TranscriptionWorkspaceProvider({
     }),
     [
       component,
+      memory,
       capabilities,
       view,
+      setView,
       transcriptId,
       openTranscript,
       newTranscription,
       resultTab,
+      setResultTab,
       uploadSettings,
       setUploadSettings,
       historySearch,
+      setHistorySearch,
       currentDocument,
       setBeforeLeave,
       pendingUploads,

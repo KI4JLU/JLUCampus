@@ -44,7 +44,9 @@ function TranscriptionLayout(): React.JSX.Element {
   const notSetUp = capabilities && !capabilities.batch && capabilities.realtimeModes.length === 0
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    // `relative`: absolutely placed screen-reader texts stay inside the scrolling area instead of
+    // stretching the document.
+    <div className="relative min-h-0 flex-1 overflow-y-auto">
       <Container size="page" className="flex flex-col gap-stack-lg py-gutter md:py-margin-page">
         <PageHeader
           title={
