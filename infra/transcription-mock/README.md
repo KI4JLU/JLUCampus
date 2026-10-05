@@ -44,9 +44,11 @@ the HRZ gateway serves Voxtral (`session.update {model}`, appends, `input_audio_
 {final: false}` to start decoding, `{final: true}` to end the stream with `transcription.done`)
 and OpenAI's transcription sessions (items as `input_audio_buffer.committed`, deltas and
 `…completed`; a commit without audio since the last item answers
-`input_audio_buffer_commit_empty`). Nothing is recognised: every three seconds of audio bring the
-next sentence of a fixed German script, word by word as deltas. Both live modes can so be tried
-end to end in the browser.
+`input_audio_buffer_commit_empty` with the commit's `event_id`). With `turn_detection:
+server_vad` the mock ends an item every three seconds of audio itself; without, as
+`gpt-realtime-whisper` wants it (which refuses voice detection with an `error`), only the
+server's commits do. Nothing is recognised: every three seconds of audio, or every such commit,
+bring the next sentence of a fixed German script, word by word as deltas. Both live modes can so be tried end to end in the browser.
 
 Any bearer works, unless `TRANSCRIPTION_MOCK_REALTIME_KEY` is set: then another one gets `401` at
 the handshake and at the model list. A model whose id contains `denied` is refused with `403` at

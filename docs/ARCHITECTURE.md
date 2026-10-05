@@ -432,13 +432,21 @@ protocol and lifecycle in the server itself.
   samples, at most one second; 16 kHz mono for on-prem as vLLM wants it, 24 kHz for OpenAI) and
   `input_audio_buffer.commit` (`keep_open: true` goes on with a new item); `session.update` is
   ignored, anything else, binary frames, or a message over 96 KiB end the session
-  (`invalid_event`, 1008; 1009 from `ws`). Audio beyond real time (a 10 s burst, then 1.5×) ends it
-  as well (`audio_rate_exceeded`).
+  (`invalid_event`, 1008; 1009 from `ws`). Every message counts before it is parsed, ignored ones
+  and commits too: more than 200 at once or 50 a second on average, or more bytes on the wire than
+  the audio budget's base64 plus 256 bytes a message, end it (`message_rate_exceeded`). Audio
+  beyond real time (a 10 s burst, then 1.5×) ends it as well (`audio_rate_exceeded`). Audio held
+  while a gateway stream opens is decoded into one buffer per second, 30 s at most.
 - **Server → gateway.** vLLM (`onprem`): `session.update {model}` (model at the top level),
   appends, `input_audio_buffer.commit {final: false}` after 300 ms of audio to start decoding,
   `{final: true}` to end the stream; it answers `transcription.delta`/`…done`/`error`. OpenAI
-  (`openai`): a transcription session (`?intent=transcription`, `audio/pcm` at 24 kHz, server
-  VAD), whose events already carry the browser's names.
+  (`openai`): a transcription session (`?intent=transcription`, `audio/pcm` at 24 kHz), whose
+  events already carry the browser's names. Its turns per model: `gpt-realtime-whisper` (the
+  default) has no voice detection (`turn_detection: null`), so the server commits the audio
+  itself, at a quiet frame after a second and after three seconds at the latest, and counts the
+  answers to its commits (`input_audio_buffer.committed` or `input_audio_buffer_commit_empty`);
+  other models keep `server_vad`. A gateway's messages count against a budget too (1000 at once,
+  200 a second; 8 MiB, then 1 MiB a second).
 - **Server → browser.** `session.created` once the gateway took the session (audio starts then),
   `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.delta`,
   `…completed`, `…failed` and `error`, each with only the fields the web app reads, errors only with
@@ -447,11 +455,18 @@ protocol and lifecycle in the server itself.
   counts, never the gateway's text or a key.
 - **Lifecycle** (as kiChat's bridge, with the rules of its reviews): a slot of
   `TRANSCRIPTION_LIVE_MAX_SESSIONS` (20) and `…_PER_USER` (2) is taken before the gateway is asked
-  and freed on every way out; the gateway handshake (connection, upgrade answer, `session.update`)
-  has 10 s. A refused handshake with 401/403 asks the gateway's model list with the same key:
+  and freed on every way out once the session's sockets are gone (closed, dropped after 5 s, the
+  slot freed after 10 s at the latest); a rotation keeps one closing stream at most. The gateway
+  handshake (connection, CONNECT through the proxy, upgrade answer, `session.update`) has 10 s,
+  and a session that ends meanwhile, or before, creates or keeps nothing of it. A refused handshake with 401/403 asks the gateway's model list with the same key:
   without the model it is `model_not_allowed` (the HRZ key's `403` for `voxtral-mini-realtime`),
   a failing list `gateway_key_rejected`. Stop (a commit) seals the open item, waits up to 15 s for
-  its transcript and closes the socket with 1000; the browser waits for that at most 20 s. A
+  its transcript and closes the socket with 1000; the browser waits for that at most 20 s. An item
+  whose stream closes before its transcript, or without it in time, comes as `…failed`. For OpenAI
+  stop commits what is left and waits for the answer to that commit itself: with voice detection,
+  where a commit of the gateway's may cross it, it commits again until one is answered with an
+  empty buffer. OpenAI items awaiting their transcript are 32 at most (beyond, the session ends
+  with `upstream_error`) and fail after 30 s. A
   `keep_open` commit seals the item and opens the next stream at once, holding the audio
   meanwhile; commits during a rotation fold into one more, at most one per second. A session
   without audio for 60 s or longer than 4 h is finalized like a stop (`session_idle`,
@@ -463,7 +478,8 @@ protocol and lifecycle in the server itself.
   while it refuses; the admin form's _Verbindung testen_ does the same with the typed values and
   reports the handshake's status.
 - **Browser.** `live/session.ts` opens the socket, waits for `session.created` (15 s), then
-  `live/audio.ts` takes the microphone stream (`getUserMedia` with echo cancellation, noise
+  `live/audio.ts` (a socket that closes meanwhile fails the start and frees microphone and audio
+  context) takes the microphone stream (`getUserMedia` with echo cancellation, noise
   suppression and gain control) into an AudioWorklet (`live/pcm-worklet.ts`) that low-pass filters
   and resamples to the mode's rate and posts 100 ms PCM16 frames (`live/pcm.ts`). Vite builds the
   worklet as an asset of its own (`?worker&url`), so it loads under `script-src 'self'` in the
