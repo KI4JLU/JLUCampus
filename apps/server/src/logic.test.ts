@@ -8,6 +8,7 @@ import {
   groupsFromIdToken,
   isCompleteOrder,
   pickPreset,
+  profileFromIdToken,
   rolesFromIdToken,
   tooSmall,
   widgetRefsFromDashboard
@@ -267,6 +268,32 @@ describe('rolesFromIdToken', () => {
   it('returns nothing for malformed tokens', () => {
     expect(rolesFromIdToken('not-a-jwt')).toEqual([])
     expect(rolesFromIdToken('a.!!!.c')).toEqual([])
+  })
+})
+
+describe('profileFromIdToken', () => {
+  const token = (claims: object): string =>
+    ['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.')
+
+  it('reads username and names', () => {
+    expect(
+      profileFromIdToken(
+        token({ preferred_username: 'gc1234', given_name: 'Grace', family_name: 'Hopper' })
+      )
+    ).toEqual({ username: 'gc1234', givenName: 'Grace', familyName: 'Hopper' })
+  })
+
+  it('turns missing, empty and non-string claims into null', () => {
+    expect(profileFromIdToken(token({ given_name: ' ', family_name: 7 }))).toEqual({
+      username: null,
+      givenName: null,
+      familyName: null
+    })
+    expect(profileFromIdToken('not-a-jwt')).toEqual({
+      username: null,
+      givenName: null,
+      familyName: null
+    })
   })
 })
 

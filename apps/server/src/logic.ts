@@ -305,6 +305,26 @@ export function groupsFromIdToken(idToken: string): string[] {
     : []
 }
 
+export interface IdTokenProfile {
+  username: string | null
+  givenName: string | null
+  familyName: string | null
+}
+
+/** Reads the profile claims shown in the settings; missing or empty ones become `null`. */
+export function profileFromIdToken(idToken: string): IdTokenProfile {
+  const claims = claimsFromIdToken(idToken)
+  const text = (claim: string): string | null => {
+    const value = claims?.[claim]
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+  }
+  return {
+    username: text('preferred_username'),
+    givenName: text('given_name'),
+    familyName: text('family_name')
+  }
+}
+
 /** Which of a tile's axes fall below the widget's minimum: `[]` when it fits. */
 export function tooSmall(
   tile: { w: number; h: number },

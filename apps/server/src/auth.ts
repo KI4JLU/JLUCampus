@@ -14,6 +14,7 @@ import {
   freshDashboardIds,
   groupsFromIdToken,
   pickPreset,
+  profileFromIdToken,
   rolesFromIdToken
 } from './logic.js'
 
@@ -44,7 +45,10 @@ const keycloakConfig: GenericOAuthConfig = {
   overrideUserInfo: true
 }
 
-/** Syncs Keycloak audiences and sign-in time without changing the app role. */
+/**
+ * Syncs Keycloak audiences, profile claims and sign-in time without changing
+ * the app role.
+ */
 async function syncKeycloakAccount(account: {
   providerId: string
   userId: string
@@ -56,6 +60,7 @@ async function syncKeycloakAccount(account: {
   await db
     .update(schema.user)
     .set({
+      ...profileFromIdToken(account.idToken),
       keycloakRoles: roles,
       keycloakGroups: groups,
       lastSignInAt: new Date(),

@@ -29,6 +29,10 @@ export const user = pgTable('user', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   role: text('role').notNull().default('user'),
   language: text('language'),
+  /** Keycloak's `preferred_username`, `given_name` and `family_name`, refreshed on every sign-in. */
+  username: text('username'),
+  givenName: text('given_name'),
+  familyName: text('family_name'),
   keycloakRoles: text('keycloak_roles')
     .array()
     .notNull()
