@@ -16,8 +16,11 @@ import { sendJson } from './http.mjs'
  *   {final: false}`, then `transcription.delta` per word; `{final: true}` ends the stream with
  *   `transcription.done` and the whole text.
  * - OpenAI: a transcription session; every item comes as `input_audio_buffer.committed`, deltas
- *   and `conversation.item.input_audio_transcription.completed`; a commit ends the current item,
- *   or answers `input_audio_buffer_commit_empty` without audio since the last.
+ *   and `conversation.item.input_audio_transcription.completed`. With `turn_detection: server_vad`
+ *   the mock ends an item on its own every `ITEM_SECONDS`; without (`null` or left out), only a
+ *   commit does, as for `gpt-realtime-whisper`, which refuses voice detection with an `error`.
+ *   A commit ends the current item, or answers `input_audio_buffer_commit_empty` (with the
+ *   commit's `event_id`) with less than 100 ms of audio since the last.
  *
  * Any bearer works, unless `TRANSCRIPTION_MOCK_REALTIME_KEY` is set: then another one gets 401 at
  * the handshake and at the model list. A model whose id contains `denied` is refused with 403 at
@@ -131,6 +134,7 @@ class MockStream {
     this.mode = mode
     this.key = key
     this.model = null
+    this.vad = false
     this.audio = 0
     this.sentence = 0
     this.item = 0
@@ -172,7 +176,7 @@ class MockStream {
         return
       case 'input_audio_buffer.commit':
         if (this.mode === 'onprem') this.vllmCommit(event.final === true)
-        else this.openaiCommit()
+        else this.openaiCommit(typeof event.event_id === 'string' ? event.event_id : null)
         return
       default:
         return
@@ -188,6 +192,21 @@ class MockStream {
       this.ws.close(1008, 'model not served')
       return
     }
+    if (this.mode === 'openai') {
+      const turnDetection = event.session?.audio?.input?.turn_detection ?? null
+      if (turnDetection !== null && this.model.startsWith('gpt-realtime-whisper')) {
+        this.send({
+          type: 'error',
+          error: {
+            type: 'invalid_request_error',
+            code: 'invalid_value',
+            message: 'turn_detection is not supported for this model'
+          }
+        })
+        return
+      }
+      this.vad = turnDetection?.type === 'server_vad'
+    }
     if (this.model.includes('leak')) {
       this.send({
         type: 'error',
@@ -201,6 +220,7 @@ class MockStream {
   append(bytes) {
     this.audio += bytes
     if (this.mode === 'onprem' && !this.decoding) return
+    if (this.mode === 'openai' && !this.vad) return
     while (this.audio >= this.itemBytes) {
       this.audio -= this.itemBytes
       this.queueSentence()
@@ -220,11 +240,15 @@ class MockStream {
     )
   }
 
-  openaiCommit() {
+  openaiCommit(eventId) {
     if (this.audio < RATES.openai * 2 * 0.1) {
       this.send({
         type: 'error',
-        error: { type: 'invalid_request_error', code: 'input_audio_buffer_commit_empty' }
+        error: {
+          type: 'invalid_request_error',
+          code: 'input_audio_buffer_commit_empty',
+          event_id: eventId
+        }
       })
       return
     }

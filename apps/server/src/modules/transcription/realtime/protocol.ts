@@ -21,8 +21,9 @@ import {
  * level, `input_audio_buffer.append`, `input_audio_buffer.commit {final: false}` to start
  * decoding and `{final: true}` to end the stream; it answers `transcription.delta`,
  * `transcription.done` and `error`. OpenAI Realtime (`openai`): a transcription session with
- * `audio/pcm` at 24 kHz and server-side voice detection, whose events already carry the names the
- * browser reads.
+ * `audio/pcm` at 24 kHz, whose events already carry the names the browser reads. Its turns come
+ * from server-side voice detection where the model has it; `gpt-realtime-whisper` has none
+ * (`turn_detection: null`), the server commits its audio itself (`openaiTurnDetection`).
  */
 
 /** Bytes of one second of the mode's audio (PCM16 mono). */
@@ -37,11 +38,20 @@ export type ClientEvent =
   | { type: 'ignored' }
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
-/** The bytes a base64 text decodes to, or `null` for one that is not canonical base64. */
+/**
+ * The bytes a base64 text decodes to, or `null` for one that is not canonical base64: its length
+ * a multiple of four, padding only at the end, and the bits the padding leaves unused zero
+ * (`AAA=`, not `AAB=`), so that the text is exactly what encoding its bytes gives.
+ */
 export function base64Bytes(text: string): number | null {
   if (text.length % 4 !== 0 || !BASE64.test(text)) return null
   const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0
+  if (padding > 0) {
+    const last = BASE64_ALPHABET.indexOf(text.charAt(text.length - padding - 1))
+    if (last & (padding === 1 ? 0b11 : 0b1111)) return null
+  }
   return (text.length / 4) * 3 - padding
 }
 
@@ -97,12 +107,22 @@ export function realtimeSocketUrl(
     : `${base}/realtime?intent=transcription`
 }
 
+/**
+ * How an OpenAI transcription model finds its turns: `server_vad` where the model has voice
+ * detection, `null` for `gpt-realtime-whisper` (and its snapshots), whose turn detection must be
+ * left out or `null`; the server commits its audio itself then (`relay.ts`).
+ */
+export function openaiTurnDetection(model: string): 'server_vad' | null {
+  return /^gpt-realtime-whisper(?:$|-)/i.test(model.trim()) ? null : 'server_vad'
+}
+
 /** The `session.update` that sets the gateway's session up for transcription with `model`. */
 export function sessionUpdate(mode: TranscriptionRealtimeMode, model: string): unknown {
   if (mode === 'onprem') {
     // vLLM refuses audio until it has validated the model; `model` sits at the top level.
     return { type: 'session.update', model }
   }
+  const turnDetection = openaiTurnDetection(model)
   return {
     type: 'session.update',
     session: {
@@ -111,7 +131,7 @@ export function sessionUpdate(mode: TranscriptionRealtimeMode, model: string): u
         input: {
           format: { type: 'audio/pcm', rate: TRANSCRIPTION_REALTIME_SAMPLE_RATES.openai },
           transcription: { model },
-          turn_detection: { type: 'server_vad' }
+          turn_detection: turnDetection ? { type: turnDetection } : null
         }
       }
     }
@@ -123,11 +143,14 @@ export function appendEvent(audio: string): unknown {
   return { type: 'input_audio_buffer.append', audio }
 }
 
-/** vLLM: start decoding (`final: false`) or end the stream (`final: true`); OpenAI: commit. */
-export function commitEvent(mode: TranscriptionRealtimeMode, final: boolean): unknown {
-  return mode === 'onprem'
-    ? { type: 'input_audio_buffer.commit', final }
-    : { type: 'input_audio_buffer.commit' }
+/** vLLM: start decoding (`final: false`) or end the stream (`final: true`). */
+export function commitEvent(final: boolean): unknown {
+  return { type: 'input_audio_buffer.commit', final }
+}
+
+/** OpenAI: commit the buffer; `eventId` comes back in an `error` the commit causes. */
+export function openaiCommitEvent(eventId: string): unknown {
+  return { type: 'input_audio_buffer.commit', event_id: eventId }
 }
 
 /** What one message of the gateway means for the session. */
@@ -137,8 +160,11 @@ export type UpstreamEvent =
   | { type: 'failed'; itemId: string | null }
   | { type: 'committed'; itemId: string }
   | { type: 'sessionUpdated' }
-  /** `code` is the gateway's own error code, for the server to decide by; it is never passed on. */
-  | { type: 'error'; code: string | null }
+  /**
+   * `code` is the gateway's own error code, for the server to decide by; it is never passed on.
+   * `eventId` is the id of the server's event that caused it, where the gateway names it.
+   */
+  | { type: 'error'; code: string | null; eventId: string | null }
 
 /** The longest delta and transcript passed on; a gateway sends far less. */
 export const DELTA_MAX = 4000
@@ -173,7 +199,9 @@ export function readUpstreamEvent(
   if (event.type === 'error') {
     const error = isFields(event.error) ? event.error : {}
     const code = typeof error.code === 'string' ? error.code.slice(0, 100) : null
-    return { type: 'error', code }
+    const eventId =
+      typeof error.event_id === 'string' && ITEM_ID.test(error.event_id) ? error.event_id : null
+    return { type: 'error', code, eventId }
   }
   if (event.type === 'session.updated') return { type: 'sessionUpdated' }
   if (mode === 'onprem') {
@@ -221,7 +249,8 @@ const ERROR_MESSAGES: Record<TranscriptionLiveErrorCode, string> = {
   session_idle: 'No audio arrived for too long',
   session_expired: 'The session reached its maximum length',
   invalid_event: 'The server does not take this message',
-  audio_rate_exceeded: 'More audio arrived than plays in real time'
+  audio_rate_exceeded: 'More audio arrived than plays in real time',
+  message_rate_exceeded: 'More messages arrived than the server takes'
 }
 
 /** Events for the browser, with only the fields it reads. */

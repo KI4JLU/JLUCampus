@@ -66,7 +66,7 @@ interface Setup {
   capture: () => FakeCapture | null
 }
 
-function setup(options: { captureFails?: boolean } = {}): Setup {
+function setup(options: { captureFails?: boolean; captureGate?: Promise<void> } = {}): Setup {
   const socket = new FakeSocket()
   const tracks = [{ stop: vi.fn() }]
   const stream = { getTracks: () => tracks } as unknown as MediaStream
@@ -77,10 +77,11 @@ function setup(options: { captureFails?: boolean } = {}): Setup {
       modes.push(mode)
       return socket as unknown as WebSocket
     },
-    capture: (_stream, sampleRate, onFrame) => {
-      if (options.captureFails) return Promise.reject(new Error('NotSupportedError'))
+    capture: async (_stream, sampleRate, onFrame) => {
+      await options.captureGate
+      if (options.captureFails) throw new Error('NotSupportedError')
       capture = new FakeCapture(sampleRate, onFrame)
-      return Promise.resolve(capture)
+      return capture
     }
   }
   const handlers = {
@@ -256,6 +257,45 @@ describe('live sessions over the server’s WebSocket', () => {
     capture()!.onFrame(new Uint8Array(4))
     expect(socket.sent).toEqual([])
     expect(session.droppedFrames).toBe(1)
+  })
+
+  it('fails a start whose socket closes while the audio is prepared, and frees it all (W-7)', async () => {
+    let captured!: () => void
+    const captureGate = new Promise<void>((resolve) => {
+      captured = resolve
+    })
+    const { socket, session, stream, tracks, handlers, capture } = setup({ captureGate })
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await settle()
+    // The server goes while the worklet loads.
+    socket.finish()
+    captured()
+    await expect(started).rejects.toMatchObject({ code: 'connectionClosed' })
+    expect(session.isRecording).toBe(false)
+    expect(capture()?.closed).toBe(true)
+    expect(tracks[0]!.stop).toHaveBeenCalled()
+    // A start that fails is no lost connection.
+    expect(handlers.onConnectionLost).not.toHaveBeenCalled()
+  })
+
+  it('closes a capture that comes after the page tore the start down (W-7)', async () => {
+    let captured!: () => void
+    const captureGate = new Promise<void>((resolve) => {
+      captured = resolve
+    })
+    const { socket, session, stream, tracks, capture } = setup({ captureGate })
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await settle()
+    session.teardown()
+    captured()
+    await expect(started).rejects.toMatchObject({ code: 'aborted' })
+    expect(capture()?.closed).toBe(true)
+    expect(session.isRecording).toBe(false)
+    expect(tracks[0]!.stop).toHaveBeenCalled()
   })
 
   it('ends a start the page overtook', async () => {

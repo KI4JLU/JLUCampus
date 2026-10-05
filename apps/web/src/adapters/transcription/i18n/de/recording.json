@@ -73,7 +73,8 @@
     "session_idle": "Die Live-Transkription wurde beendet, weil zu lange kein Ton ankam.",
     "session_expired": "Die Live-Transkription hat ihre Höchstdauer erreicht und wurde beendet.",
     "invalid_event": "Der Server hat eine Nachricht der Live-Transkription abgelehnt.",
-    "audio_rate_exceeded": "Es kam mehr Ton an, als in Echtzeit läuft; die Live-Transkription wurde beendet."
+    "audio_rate_exceeded": "Es kam mehr Ton an, als in Echtzeit läuft; die Live-Transkription wurde beendet.",
+    "message_rate_exceeded": "Der Browser hat mehr Nachrichten geschickt, als der Server annimmt; die Live-Transkription wurde beendet."
   },
   "appearance": "Darstellung",
   "fontSizeValue": "{{size}}px",

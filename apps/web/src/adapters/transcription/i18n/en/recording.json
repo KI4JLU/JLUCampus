@@ -72,7 +72,8 @@
     "session_idle": "Live transcription ended because no audio arrived for too long.",
     "session_expired": "Live transcription reached its maximum length and ended.",
     "invalid_event": "The server refused a message of the live transcription.",
-    "audio_rate_exceeded": "More audio arrived than plays in real time; live transcription ended."
+    "audio_rate_exceeded": "More audio arrived than plays in real time; live transcription ended.",
+    "message_rate_exceeded": "The browser sent more messages than the server takes; live transcription ended."
   },
   "liveServiceError": "Live transcription error: {{message}}",
   "appearance": "Appearance",

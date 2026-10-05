@@ -1159,8 +1159,9 @@ export type TranscriptionRealtimeUnavailableReason =
  * `gateway_refused`, `gateway_unreachable`). While it runs: the gateway reported an error or
  * closed its stream (`upstream_error`, `upstream_closed`), no audio came for too long
  * (`session_idle`), the session reached its maximum length (`session_expired`), the browser sent
- * something the server does not take (`invalid_event`) or more audio than real time
- * (`audio_rate_exceeded`).
+ * something the server does not take (`invalid_event`), more audio than real time
+ * (`audio_rate_exceeded`) or more messages or bytes than the server takes
+ * (`message_rate_exceeded`).
  */
 export const TRANSCRIPTION_LIVE_ERROR_CODES = [
   'not_set_up',
@@ -1174,7 +1175,8 @@ export const TRANSCRIPTION_LIVE_ERROR_CODES = [
   'session_idle',
   'session_expired',
   'invalid_event',
-  'audio_rate_exceeded'
+  'audio_rate_exceeded',
+  'message_rate_exceeded'
 ] as const
 export type TranscriptionLiveErrorCode = (typeof TRANSCRIPTION_LIVE_ERROR_CODES)[number]
 

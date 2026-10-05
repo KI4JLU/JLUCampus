@@ -109,7 +109,8 @@ realtimeRouter.get(
           client.close(CLOSE.policy, 'not_set_up')
           return
         }
-        // The slot is taken before the gateway is asked, and the session frees it on every way out.
+        // The slot is taken before the gateway is asked; the session frees it on every way out, once
+        // its sockets are gone.
         const release = liveSlots.reserve(userId)
         if (!release) {
           client.send(JSON.stringify(clientEvents.error('busy')))
@@ -121,7 +122,7 @@ realtimeRouter.get(
       },
       onMessage: (event) => session?.receive(event.data as string | ArrayBuffer),
       onClose: (event) => session?.clientClosed(event.code),
-      onError: () => session?.clientClosed(1006)
+      onError: () => session?.clientFailed()
     }
   })
 )

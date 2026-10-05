@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  TRANSCRIPTION_LIVE_APPEND_MAX_MS,
   TRANSCRIPTION_LIVE_UNAVAILABLE_CODES,
   type TranscriptionLiveErrorCode
 } from '@justcampus/shared'
@@ -21,6 +22,8 @@ import {
   clientEvents,
   commitEvent,
   OPENAI_COMMIT_EMPTY,
+  openaiCommitEvent,
+  openaiTurnDetection,
   parseClientEvent,
   readUpstreamEvent,
   type UpstreamEvent
@@ -30,16 +33,25 @@ import {
  * One live session (T-59, T-60): the browser's WebSocket on this server and the gateway's realtime
  * WebSocket, with the key on this side only. kiChat's realtime bridge did the same for WebRTC; its
  * protocol and lifecycle carry over (see `protocol.ts`), and so do the rules of the reviews of the
- * Campus bridge: a slot is taken before the gateway is asked and freed on every way out, every
- * step before the session runs has a deadline, a session without audio or beyond its lifetime is
- * finalized with its transcript, `keep_open` commits fold into one rotation at a time, and nothing
- * the gateway says reaches a log or the browser.
+ * Campus bridge: a slot is taken before the gateway is asked and held until every socket of the
+ * session is gone, every step before the session runs has a deadline, a session without audio or
+ * beyond its lifetime is finalized with its transcript, `keep_open` commits fold into one rotation
+ * at a time, every message either side sends counts against a budget before it is parsed, and
+ * nothing the gateway says reaches a log or the browser.
  *
  * vLLM (`onprem`) streams one item per gateway stream: decoding starts after 300 ms of audio
  * (`input_audio_buffer.committed` tells the browser what it may wait for), a final commit ends the
  * stream with `transcription.done`. A `keep_open` commit seals the item and opens the next stream
- * at once; audio meanwhile is held and goes to the next item. OpenAI (`openai`) finds the items
- * itself in one stream; a commit there ends the current one.
+ * at once; audio meanwhile is held and goes to the next item. A stream that closes before its
+ * transcript came reports its item as failed.
+ *
+ * OpenAI (`openai`) runs one stream. A model with voice detection finds the items itself; for one
+ * without (`gpt-realtime-whisper`) the server commits the audio itself, at a quiet frame after
+ * `openaiCommitMinMs` and at the latest after `openaiCommitMaxMs`, and counts the answers to its
+ * commits. Stopping commits what is left and waits for the answer to that commit itself, not for
+ * any: with voice detection until the gateway answers a commit of the server's with an empty
+ * buffer. Items awaiting their transcript are bounded in number (`pendingMax`) and age
+ * (`itemTimeoutMs`).
  *
  * Stopping (a commit without `keep_open`) seals what is open, waits up to `doneTimeoutMs` for its
  * transcript and closes the browser's socket normally (1000). Errors go to the browser as `error`
@@ -73,6 +85,24 @@ export interface LiveLimits {
   audioBurstMs: number
   /** …and this many times real time on average. */
   audioRateFactor: number
+  /** The browser may send this many messages at once… */
+  messageBurst: number
+  /** …and this many a second on average (100 ms frames are ten). */
+  messageRate: number
+  /** Messages the gateway may send at once, and a second on average. */
+  upstreamMessageBurst: number
+  upstreamMessageRate: number
+  /** Bytes the gateway may send at once, and a second on average. */
+  upstreamByteBurst: number
+  upstreamByteRate: number
+  /** OpenAI: items awaiting their transcript beyond which the session ends… */
+  pendingMax: number
+  /** …and how long one may wait for it before it is reported as failed. */
+  itemTimeoutMs: number
+  /** OpenAI without voice detection: the server commits after this much audio at a quiet frame… */
+  openaiCommitMinMs: number
+  /** …and after this much at the latest. */
+  openaiCommitMaxMs: number
   /** Audio held while a gateway stream opens; beyond, frames are dropped. */
   holdMaxMs: number
   /** Bytes queued for the browser beyond which the session ends (a client that does not read). */
@@ -92,6 +122,16 @@ export const DEFAULT_LIVE_LIMITS: LiveLimits = {
   rotateMinIntervalMs: 1000,
   audioBurstMs: 10_000,
   audioRateFactor: 1.5,
+  messageBurst: 200,
+  messageRate: 50,
+  upstreamMessageBurst: 1000,
+  upstreamMessageRate: 200,
+  upstreamByteBurst: 8 * 1024 * 1024,
+  upstreamByteRate: 1024 * 1024,
+  pendingMax: 32,
+  itemTimeoutMs: 30_000,
+  openaiCommitMinMs: 1000,
+  openaiCommitMaxMs: 3000,
   holdMaxMs: 30_000,
   clientBufferMax: 1024 * 1024,
   upstreamBufferMax: 2 * 1024 * 1024,
@@ -104,6 +144,13 @@ const START_DECODING_MS = 300
 const CLASSIFY_TIMEOUT_MS = 4000
 /** OpenAI takes a commit only with this much audio since the last item. */
 const OPENAI_COMMIT_MIN_MS = 100
+/** A frame whose last 100 ms stay below this level (RMS of PCM16, about -40 dBFS) is quiet. */
+const QUIET_RMS = 330
+const QUIET_TAIL_MS = 100
+/** OpenAI with voice detection: final commits until the gateway answers one with an empty buffer. */
+const FINAL_COMMIT_ROUNDS = 4
+/** What a message costs on the wire beyond its base64 audio, for the browser's byte budget. */
+const WIRE_OVERHEAD = 256
 
 /** WebSocket close codes towards the browser. */
 export const CLOSE = { normal: 1000, policy: 1008, error: 1011, tryAgain: 1013 } as const
@@ -123,7 +170,10 @@ export function consoleLog(id: string): LiveLog {
 export interface LiveSessionOptions {
   target: RealtimeTarget
   client: ClientSocket
-  /** Called once when the session has ended, on every way out: frees its slot. */
+  /**
+   * Called once when the session has ended and its sockets are gone (closed, or dropped after
+   * `closeMs`; at the latest twice that after the end): frees its slot.
+   */
   onEnd: () => void
   limits?: Partial<LiveLimits>
   log?: LiveLog
@@ -138,13 +188,22 @@ interface Item {
   bytes: number
   decoding: boolean
   sealing: boolean
-  /** Resolves once its transcript came, it failed, or its stream closed. */
+  /** Its transcript or the gateway's error for it came (the browser got completed or failed). */
+  terminal: boolean
+  /** Resolves once it is terminal or its stream closed. */
   done: Promise<void>
   resolve: () => void
 }
 
-interface Held {
+/** Audio on its way: base64 PCM16 and how many bytes it decodes to. */
+interface Frame {
   audio: string
+  bytes: number
+}
+
+/** Held audio, coalesced into chunks of up to `TRANSCRIPTION_LIVE_APPEND_MAX_MS`. */
+interface HeldChunk {
+  buffer: Buffer
   bytes: number
 }
 
@@ -154,6 +213,47 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
     resolve = done
   })
   return { promise, resolve }
+}
+
+/** A token bucket: `capacity` at once, refilled by `perSecond`. */
+class Budget {
+  private tokens: number
+  private at = Date.now()
+
+  constructor(
+    private readonly capacity: number,
+    private readonly perSecond: number
+  ) {
+    this.tokens = capacity
+  }
+
+  take(amount: number): boolean {
+    const now = Date.now()
+    this.tokens = Math.min(this.capacity, this.tokens + ((now - this.at) / 1000) * this.perSecond)
+    this.at = now
+    if (amount > this.tokens) return false
+    this.tokens -= amount
+    return true
+  }
+}
+
+/** The bytes of a message as `ws` hands it over. */
+function rawLength(data: RawData): number {
+  if (Array.isArray(data)) return data.reduce((sum, part) => sum + part.byteLength, 0)
+  return data.byteLength
+}
+
+/** Whether the last `QUIET_TAIL_MS` of base64 PCM16 at `rate` bytes a second are quiet. */
+export function quietTail(audio: string, rate: number): boolean {
+  const pcm = Buffer.from(audio, 'base64')
+  const tail = Math.min(pcm.length, Math.round((rate * QUIET_TAIL_MS) / 1000) & ~1)
+  if (tail === 0) return false
+  let sum = 0
+  for (let offset = pcm.length - tail; offset < pcm.length; offset += 2) {
+    const sample = pcm.readInt16LE(offset)
+    sum += sample * sample
+  }
+  return Math.sqrt(sum / (tail / 2)) < QUIET_RMS
 }
 
 export class LiveSession {
@@ -166,19 +266,30 @@ export class LiveSession {
   private readonly timers = new Set<NodeJS.Timeout>()
   /** Waits (`within`, `sleep`) that `close` ends at once. */
   private readonly waits = new Set<() => void>()
-  /** Every gateway socket of the session, open or opening. */
+  /** Every gateway socket of the session, open, opening or closing. */
   private readonly upstreams = new Set<WebSocket>()
+  /** Gateway handshakes under way, whose sockets `upstreams` does not know yet. */
+  private opening = 0
 
   private phase: 'opening' | 'running' | 'finalizing' | 'closed' = 'opening'
   private readonly startedAt = Date.now()
   private lastAudioAt = Date.now()
-  /** The audio budget (`audioBurstMs`, `audioRateFactor`), in bytes. */
-  private tokens: number
-  private tokensAt = Date.now()
+  /** The browser's budgets: audio (`audioBurstMs`, `audioRateFactor`), messages, wire bytes. */
+  private readonly audioBudget: Budget
+  private readonly messageBudget: Budget
+  private readonly wireBudget: Budget
+  /** The gateway's budgets, for all its streams together. */
+  private readonly upstreamMessages: Budget
+  private readonly upstreamBytes: Budget
   private bytesIn = 0
-  private hold: Held[] = []
+  private hold: HeldChunk[] = []
   private holdBytes = 0
   private holdDropped = false
+
+  /** The browser's socket closed (`clientClosed`); with no gateway socket left, the slot is free. */
+  private clientGone = false
+  private released = false
+  private readonly cleanup = new Set<NodeJS.Timeout>()
 
   /** vLLM: the item audio goes to; `null` while a rotation opens the next. */
   private item: Item | null = null
@@ -190,19 +301,42 @@ export class LiveSession {
   private lastRotationAt = Number.NEGATIVE_INFINITY
   private finalizeRequested = false
 
-  /** OpenAI: its one stream, items awaiting their transcript, audio since the last item. */
+  /** OpenAI: its one stream, and whether the gateway finds the turns itself. */
   private stream: WebSocket | null = null
-  private readonly pending = new Set<string>()
+  private streamGone = false
+  private readonly vad: boolean
+  /** Items awaiting their transcript, with when they were committed. */
+  private readonly pending = new Map<string, number>()
+  /** Audio sent since the server's last commit. */
   private uncommitted = 0
-  private commitAnswered: (() => void) | null = null
-  private settled: (() => void) | null = null
+  private commitSeq = 0
+  /** Without voice detection: the server's commits the gateway has not answered yet. */
+  private commitsInFlight = 0
+  /** `input_audio_buffer.committed` events so far. */
+  private committedCount = 0
+  /** With voice detection: the final commits, and whether one was answered with an empty buffer. */
+  private readonly finalCommits = new Set<string>()
+  private finalEmpty = false
+  /** Wakes `until` when something of the OpenAI stream changed. */
+  private changed: (() => void) | null = null
 
   constructor(private readonly options: LiveSessionOptions) {
     this.limits = { ...DEFAULT_LIVE_LIMITS, ...options.limits }
     this.log = options.log ?? consoleLog(this.id)
     this.mode = options.target.mode
     this.rate = bytesPerSecond(this.mode)
-    this.tokens = (this.rate * this.limits.audioBurstMs) / 1000
+    this.vad = this.mode === 'openai' && openaiTurnDetection(options.target.model) !== null
+    const limits = this.limits
+    const audioBurst = (this.rate * limits.audioBurstMs) / 1000
+    const audioRate = this.rate * limits.audioRateFactor
+    this.audioBudget = new Budget(audioBurst, audioRate)
+    this.messageBudget = new Budget(limits.messageBurst, limits.messageRate)
+    this.wireBudget = new Budget(
+      Math.ceil((audioBurst * 4) / 3) + limits.messageBurst * WIRE_OVERHEAD,
+      (audioRate * 4) / 3 + limits.messageRate * WIRE_OVERHEAD
+    )
+    this.upstreamMessages = new Budget(limits.upstreamMessageBurst, limits.upstreamMessageRate)
+    this.upstreamBytes = new Budget(limits.upstreamByteBurst, limits.upstreamByteRate)
   }
 
   get closed(): boolean {
@@ -211,6 +345,9 @@ export class LiveSession {
 
   /** Opens the gateway; the browser gets `session.created` once audio may flow. */
   async start(): Promise<void> {
+    if (this.closed) return
+    // The watchdog comes first: whatever closes the session from here on also clears it.
+    this.addTimer(setInterval(() => this.watch(), this.limits.watchIntervalMs))
     this.log('opening', { mode: this.mode })
     let opened: { socket: WebSocket; item: Item | null }
     try {
@@ -227,20 +364,25 @@ export class LiveSession {
     this.lastAudioAt = Date.now()
     if (this.options.target.mode === 'onprem') rememberAvailability(this.options.target, null)
     this.send(clientEvents.created(this.mode))
+    if (this.closed) return
     this.log('running')
     this.flushHold()
-    const watch = setInterval(() => this.watch(), this.limits.watchIntervalMs)
-    watch.unref()
-    this.timers.add(watch)
+    if (this.closed) return
     if (this.finalizeRequested) void this.finalize()
   }
 
-  /** One message of the browser. */
+  /** One message of the browser; its budgets are charged before it is parsed. */
   receive(data: string | ArrayBuffer | Buffer, binary = typeof data !== 'string'): void {
     if (this.closed || this.phase === 'finalizing') return
+    const bytes = typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength
+    if (!this.messageBudget.take(1) || !this.wireBudget.take(bytes)) {
+      this.log('messages beyond the budget', { bytes })
+      this.end(CLOSE.policy, 'message_rate_exceeded')
+      return
+    }
     const event = binary ? null : parseClientEvent(String(data), this.mode)
     if (!event) {
-      this.log('refused a message', { bytes: typeof data === 'string' ? data.length : 0 })
+      this.log('refused a message', { bytes })
       this.end(CLOSE.policy, 'invalid_event')
       return
     }
@@ -250,7 +392,7 @@ export class LiveSession {
       else this.requestFinalize()
       return
     }
-    if (!this.takeTokens(event.bytes)) {
+    if (!this.audioBudget.take(event.bytes)) {
       this.log('audio beyond real time', { bytes: this.bytesIn })
       this.end(CLOSE.policy, 'audio_rate_exceeded')
       return
@@ -262,27 +404,26 @@ export class LiveSession {
 
   /** The browser's socket closed: nobody is left to get a transcript, so everything ends. */
   clientClosed(code: number): void {
+    if (this.clientGone) return
+    this.clientGone = true
+    if (!this.closed) {
+      this.log('browser closed', { code })
+      this.close()
+    }
+    this.releaseWhenGone()
+  }
+
+  /** The browser's socket failed; its close follows. */
+  clientFailed(): void {
     if (this.closed) return
-    this.log('browser closed', { code })
+    this.log('browser socket failed')
     this.close()
+    this.options.client.terminate()
   }
 
   // ------------------------------------------------------------------ audio
 
-  private takeTokens(bytes: number): boolean {
-    const now = Date.now()
-    const capacity = (this.rate * this.limits.audioBurstMs) / 1000
-    this.tokens = Math.min(
-      capacity,
-      this.tokens + ((now - this.tokensAt) / 1000) * this.rate * this.limits.audioRateFactor
-    )
-    this.tokensAt = now
-    if (bytes > this.tokens) return false
-    this.tokens -= bytes
-    return true
-  }
-
-  private append(frame: Held): void {
+  private append(frame: Frame): void {
     const target = this.mode === 'onprem' ? this.item : this.stream
     if (this.phase !== 'running' || !target || this.hold.length > 0) {
       this.holdFrame(frame)
@@ -291,31 +432,50 @@ export class LiveSession {
     this.forward(frame)
   }
 
-  private holdFrame(frame: Held): void {
+  /** Holds a frame, decoded into the last chunk while it has room: one buffer per second. */
+  private holdFrame(frame: Frame): void {
     if (this.holdBytes + frame.bytes > (this.rate * this.limits.holdMaxMs) / 1000) {
       if (!this.holdDropped) this.log('held audio full, dropping frames')
       this.holdDropped = true
       return
     }
-    this.hold.push(frame)
+    const size = (this.rate * TRANSCRIPTION_LIVE_APPEND_MAX_MS) / 1000
+    let chunk = this.hold.at(-1)
+    if (!chunk || chunk.bytes + frame.bytes > size) {
+      chunk = { buffer: Buffer.allocUnsafe(size), bytes: 0 }
+      this.hold.push(chunk)
+    }
+    chunk.bytes += chunk.buffer.write(frame.audio, chunk.bytes, 'base64')
     this.holdBytes += frame.bytes
+  }
+
+  /** The held audio as frames, in order; the hold is empty afterwards. */
+  private takeHold(): Frame[] {
+    const frames = this.hold.map((chunk) => ({
+      audio: chunk.buffer.toString('base64', 0, chunk.bytes),
+      bytes: chunk.bytes
+    }))
+    this.hold = []
+    this.holdBytes = 0
+    this.holdDropped = false
+    return frames
   }
 
   /** Hands the held audio on, in order, where it can go now. */
   private flushHold(): void {
     const ready = this.mode === 'onprem' ? this.item : this.stream
     if (this.phase === 'closed' || !ready) return
-    const frames = this.hold
-    this.hold = []
-    this.holdBytes = 0
-    this.holdDropped = false
-    for (const frame of frames) this.forward(frame)
+    for (const frame of this.takeHold()) {
+      if (this.closed) return
+      this.forward(frame)
+    }
   }
 
-  private forward(frame: Held): void {
+  private forward(frame: Frame): void {
     if (this.mode === 'openai') {
       if (!this.stream || !this.upstreamSend(this.stream, appendEvent(frame.audio))) return
       this.uncommitted += frame.bytes
+      if (!this.vad && this.phase === 'running') this.commitWhenDue(frame)
       return
     }
     const item = this.item
@@ -329,8 +489,34 @@ export class LiveSession {
   /** vLLM decodes only after a first commit; the browser learns which item to wait for. */
   private startDecoding(item: Item): void {
     item.decoding = true
-    this.upstreamSend(item.socket, commitEvent('onprem', false))
+    this.upstreamSend(item.socket, commitEvent(false))
     this.send(clientEvents.committed(item.id))
+  }
+
+  /** OpenAI without voice detection: a turn ends at a quiet frame, or after the longest turn. */
+  private commitWhenDue(frame: Frame): void {
+    if (this.uncommitted < (this.rate * this.limits.openaiCommitMinMs) / 1000) return
+    const longest = this.uncommitted >= (this.rate * this.limits.openaiCommitMaxMs) / 1000
+    if (longest || quietTail(frame.audio, this.rate)) this.openaiCommit('turn')
+  }
+
+  /** Commits OpenAI's buffer under an id of the server's; `null` if it could not be sent. */
+  private openaiCommit(kind: 'turn' | 'rotate' | 'final'): string | null {
+    const stream = this.stream
+    if (!stream) return null
+    this.commitSeq += 1
+    const eventId = `${kind}_${this.commitSeq}`
+    if (!this.upstreamSend(stream, openaiCommitEvent(eventId))) return null
+    this.uncommitted = 0
+    if (!this.vad) {
+      this.commitsInFlight += 1
+      if (this.commitsInFlight > this.limits.pendingMax) {
+        this.log('gateway does not answer commits', { commits: this.commitsInFlight })
+        this.end(CLOSE.error, 'upstream_error')
+        return null
+      }
+    }
+    return eventId
   }
 
   // ---------------------------------------------------------------- gateway
@@ -340,18 +526,39 @@ export class LiveSession {
     itemId = `item_${this.id}`
   ): Promise<{ socket: WebSocket; item: Item | null }> {
     const open = this.options.open ?? openGateway
-    const socket = await open(this.options.target, this.abort.signal, this.limits.handshakeMs)
-    this.upstreams.add(socket)
-    socket.once('close', () => this.upstreams.delete(socket))
+    let socket: WebSocket
+    this.opening += 1
+    try {
+      socket = await open(this.options.target, this.abort.signal, this.limits.handshakeMs)
+    } catch (error) {
+      this.opening -= 1
+      this.releaseWhenGone()
+      throw error
+    }
+    // Counted as an upstream before it stops counting as opening, so the slot stays taken.
+    if (socket.readyState !== WebSocket.CLOSED) {
+      this.upstreams.add(socket)
+      socket.once('close', () => {
+        this.upstreams.delete(socket)
+        this.releaseWhenGone()
+      })
+    }
+    this.opening -= 1
     if (this.closed) {
       closeGateway(socket, this.limits.closeMs)
       throw new Error('Session closed')
     }
     if (this.mode === 'openai') {
       socket.on('message', (data: RawData, binary: boolean) => {
-        if (!binary) this.openaiEvent(readUpstreamEvent('openai', data.toString()))
+        if (this.upstreamBudget(data) && !binary) {
+          this.openaiEvent(readUpstreamEvent('openai', data.toString()))
+        }
       })
-      socket.once('close', (code: number) => this.streamClosed(code))
+      socket.once('close', (code: number) => {
+        this.streamGone = true
+        this.notify()
+        this.streamClosed(code)
+      })
       return { socket, item: null }
     }
     const { promise, resolve } = deferred()
@@ -361,18 +568,32 @@ export class LiveSession {
       bytes: 0,
       decoding: false,
       sealing: false,
+      terminal: false,
       done: promise,
       resolve
     }
     socket.on('message', (data: RawData, binary: boolean) => {
-      if (!binary) this.vllmEvent(item, readUpstreamEvent('onprem', data.toString()))
+      if (this.upstreamBudget(data) && !binary) {
+        this.vllmEvent(item, readUpstreamEvent('onprem', data.toString()))
+      }
     })
     socket.once('close', (code: number) => {
+      // Not terminal: `seal` reports an item whose stream closed before its transcript.
       resolve()
       // A stream that ends while its item still takes audio ends the session.
       if (!item.sealing && this.item === item) this.streamClosed(code)
     })
     return { socket, item }
+  }
+
+  /** Charges a gateway message to the gateway's budgets; beyond them the session ends. */
+  private upstreamBudget(data: RawData): boolean {
+    if (this.closed) return false
+    if (this.upstreamMessages.take(1) && this.upstreamBytes.take(rawLength(data))) return true
+    this.log('gateway sends beyond the budget')
+    this.failPending()
+    this.end(CLOSE.error, 'upstream_error')
+    return false
   }
 
   /** Why the gateway refused, to the browser as a code and to the live tab's config. */
@@ -395,7 +616,7 @@ export class LiveSession {
 
   /** Sends to the gateway unless it does not keep up; then the session ends. */
   private upstreamSend(socket: WebSocket, event: unknown): boolean {
-    if (socket.readyState !== WebSocket.OPEN) return false
+    if (this.closed || socket.readyState !== WebSocket.OPEN) return false
     if (socket.bufferedAmount > this.limits.upstreamBufferMax) {
       this.log('gateway does not keep up', { queued: socket.bufferedAmount })
       this.end(CLOSE.error, 'upstream_error')
@@ -409,16 +630,20 @@ export class LiveSession {
     if (!event || this.closed) return
     switch (event.type) {
       case 'delta':
-        if (event.delta) this.send(clientEvents.delta(item.id, event.delta))
+        if (event.delta && !item.terminal) this.send(clientEvents.delta(item.id, event.delta))
         return
       case 'completed':
+        if (item.terminal) return
+        item.terminal = true
         this.send(clientEvents.completed(item.id, event.transcript))
         item.resolve()
         return
       case 'error':
+        if (item.terminal) return
         // Of the gateway's error only that there was one; the item is resolved for the browser,
         // so a stop does not wait for a transcript that will not come.
         this.log('gateway error event', { item: item.id })
+        item.terminal = true
         this.send(clientEvents.failed(item.id))
         item.resolve()
         return
@@ -431,10 +656,19 @@ export class LiveSession {
     if (!event || this.closed) return
     switch (event.type) {
       case 'committed':
-        this.pending.add(event.itemId)
-        this.uncommitted = 0
-        this.commitAnswered?.()
-        this.send(clientEvents.committed(event.itemId))
+        this.committedCount += 1
+        if (!this.vad && this.commitsInFlight > 0) this.commitsInFlight -= 1
+        if (!this.pending.has(event.itemId)) {
+          if (this.pending.size >= this.limits.pendingMax) {
+            this.log('gateway leaves too many items open', { items: this.pending.size })
+            this.failPending()
+            this.end(CLOSE.error, 'upstream_error')
+            return
+          }
+          this.pending.set(event.itemId, Date.now())
+          this.send(clientEvents.committed(event.itemId))
+        }
+        this.notify()
         return
       case 'delta':
         if (event.itemId && event.delta) this.send(clientEvents.delta(event.itemId, event.delta))
@@ -443,17 +677,22 @@ export class LiveSession {
         if (!event.itemId) return
         this.pending.delete(event.itemId)
         this.send(clientEvents.completed(event.itemId, event.transcript))
-        this.checkSettled()
+        this.notify()
         return
       case 'failed':
         if (!event.itemId) return
         this.pending.delete(event.itemId)
         this.send(clientEvents.failed(event.itemId))
-        this.checkSettled()
+        this.notify()
         return
       case 'error':
         if (event.code === OPENAI_COMMIT_EMPTY) {
-          this.commitAnswered?.()
+          // The answer to a commit of the server's without audio left; nothing went wrong.
+          if (!this.vad && this.commitsInFlight > 0) this.commitsInFlight -= 1
+          if (event.eventId === null || this.finalCommits.has(event.eventId)) {
+            this.finalEmpty = this.finalCommits.size > 0
+          }
+          this.notify()
           return
         }
         this.log('gateway error event')
@@ -464,14 +703,46 @@ export class LiveSession {
     }
   }
 
-  private checkSettled(): void {
-    if (this.pending.size === 0) this.settled?.()
+  /** Reports every OpenAI item still awaiting its transcript as failed. */
+  private failPending(): void {
+    for (const itemId of this.pending.keys()) this.send(clientEvents.failed(itemId))
+    this.pending.clear()
+  }
+
+  /** OpenAI items that waited longer than `itemTimeoutMs` for their transcript fail. */
+  private expireItems(now: number): void {
+    for (const [itemId, committedAt] of this.pending) {
+      if (now - committedAt < this.limits.itemTimeoutMs) continue
+      this.log('no transcript in time', { item: itemId })
+      this.pending.delete(itemId)
+      this.send(clientEvents.failed(itemId))
+    }
+  }
+
+  private notify(): void {
+    const changed = this.changed
+    this.changed = null
+    changed?.()
+  }
+
+  /** Waits until `condition` holds, the session closes or `deadline` passes. */
+  private async until(condition: () => boolean, deadline: number): Promise<boolean> {
+    while (!condition()) {
+      const left = deadline - Date.now()
+      if (this.closed || left <= 0) return false
+      const changed = new Promise<void>((resolve) => {
+        this.changed = resolve
+      })
+      await this.within(changed, left)
+    }
+    return true
   }
 
   /** The stream audio goes to closed by itself: the session cannot go on. */
   private streamClosed(code: number): void {
     if (this.closed || this.phase === 'finalizing') return
     this.log('gateway closed the stream', { code })
+    this.failPending()
     this.end(CLOSE.error, 'upstream_closed')
   }
 
@@ -481,10 +752,11 @@ export class LiveSession {
     if (this.closed || this.finalizeRequested) return
     if (this.mode === 'openai') {
       // One commit per interval at most; OpenAI ends the current item with it.
-      if (!this.stream || Date.now() - this.lastRotationAt < this.limits.rotateMinIntervalMs) return
+      if (!this.stream || this.phase !== 'running') return
+      if (Date.now() - this.lastRotationAt < this.limits.rotateMinIntervalMs) return
       if (this.uncommitted < (this.rate * OPENAI_COMMIT_MIN_MS) / 1000) return
       this.lastRotationAt = Date.now()
-      this.upstreamSend(this.stream, commitEvent('openai', false))
+      this.openaiCommit('rotate')
       return
     }
     if (this.rotationPending) {
@@ -552,19 +824,37 @@ export class LiveSession {
     this.flushHold()
   }
 
-  /** Ends an item: its last audio, the final commit, its transcript within `doneTimeoutMs`. */
+  /**
+   * Ends an item: its last audio, the final commit, its transcript within `doneTimeoutMs`. An item
+   * whose stream closed, or that got nothing in time, is reported as failed, once.
+   */
   private async seal(item: Item): Promise<void> {
     item.sealing = true
     if (item.socket.readyState === WebSocket.OPEN) {
       if (!item.decoding) this.startDecoding(item)
-      this.upstreamSend(item.socket, commitEvent('onprem', true))
+      this.upstreamSend(item.socket, commitEvent(true))
     }
     const finished = await this.within(item.done, this.limits.doneTimeoutMs)
-    if (!finished && !this.closed) {
-      this.log('no transcript in time', { item: item.id })
+    if (!item.terminal && item.decoding && !this.closed) {
+      this.log(finished ? 'stream closed before its transcript' : 'no transcript in time', {
+        item: item.id
+      })
+      item.terminal = true
       this.send(clientEvents.failed(item.id))
     }
-    closeGateway(item.socket, this.limits.closeMs)
+    this.retire(item.socket)
+  }
+
+  /**
+   * Closes a sealed item's stream. While another one still closes, it is dropped at once: a
+   * session holds the stream it sends to, the next one opening and one closing at most.
+   */
+  private retire(socket: WebSocket): void {
+    const closing = [...this.upstreams].some(
+      (other) => other !== socket && other.readyState === WebSocket.CLOSING
+    )
+    if (closing) socket.terminate()
+    else closeGateway(socket, this.limits.closeMs)
   }
 
   private requestFinalize(): void {
@@ -583,12 +873,11 @@ export class LiveSession {
       if (this.mode === 'onprem') {
         // Held audio of a rotation goes to the item it waited for.
         const item = this.item
+        const held = this.takeHold()
         if (item) {
-          for (const frame of this.hold) {
-            this.upstreamSend(item.socket, appendEvent(frame.audio))
-            item.bytes += frame.bytes
+          for (const frame of held) {
+            if (this.upstreamSend(item.socket, appendEvent(frame.audio))) item.bytes += frame.bytes
           }
-          this.hold = []
           await this.seal(item)
         }
       } else {
@@ -600,41 +889,50 @@ export class LiveSession {
     await run
   }
 
-  /** OpenAI: commits what has not become an item yet and waits for every transcript pending. */
+  /**
+   * OpenAI: commits what has not become an item yet and waits for the answer to that commit and
+   * every transcript pending. Without voice detection the server knows its commits and counts
+   * their answers; with it, a commit of the gateway's may cross the server's, so the server
+   * commits again until one is answered with an empty buffer: then all audio is in items.
+   */
   private async drainOpenai(): Promise<void> {
     const stream = this.stream
     if (!stream) return
-    for (const frame of this.hold) {
-      if (this.upstreamSend(stream, appendEvent(frame.audio))) this.uncommitted += frame.bytes
-    }
-    this.hold = []
+    for (const frame of this.takeHold()) this.forward(frame)
     const deadline = Date.now() + this.limits.doneTimeoutMs
-    if (this.uncommitted >= (this.rate * OPENAI_COMMIT_MIN_MS) / 1000) {
-      const answered = new Promise<void>((resolve) => {
-        this.commitAnswered = resolve
-      })
-      this.upstreamSend(stream, commitEvent('openai', false))
-      await this.within(answered, this.limits.doneTimeoutMs)
-      this.commitAnswered = null
-    }
-    if (this.pending.size > 0) {
-      const settled = new Promise<void>((resolve) => {
-        this.settled = resolve
-      })
-      const finished = await this.within(settled, Math.max(0, deadline - Date.now()))
-      this.settled = null
-      if (!finished && !this.closed) {
-        this.log('no transcript in time', { items: this.pending.size })
-        for (const itemId of this.pending) this.send(clientEvents.failed(itemId))
-        this.pending.clear()
+    if (!this.vad) {
+      if (this.uncommitted > 0) this.openaiCommit('final')
+      await this.until(
+        () => this.streamGone || (this.commitsInFlight === 0 && this.pending.size === 0),
+        deadline
+      )
+    } else {
+      for (let round = 0; round < FINAL_COMMIT_ROUNDS && !this.streamGone; round += 1) {
+        const before = this.committedCount
+        const eventId = this.openaiCommit('final')
+        if (!eventId) break
+        this.finalCommits.add(eventId)
+        const answered = await this.until(
+          () => this.streamGone || this.finalEmpty || this.committedCount > before,
+          deadline
+        )
+        if (!answered || this.finalEmpty) break
       }
+      await this.until(() => this.streamGone || this.pending.size === 0, deadline)
     }
+    if (this.closed || this.pending.size === 0) return
+    this.log(this.streamGone ? 'stream closed before its transcripts' : 'no transcript in time', {
+      items: this.pending.size
+    })
+    this.failPending()
   }
 
   /** The watchdog: sessions without audio or beyond their lifetime are finalized. */
   private watch(): void {
-    if (this.phase !== 'running' || this.finalizeRequested) return
+    if (this.phase !== 'running') return
     const now = Date.now()
+    this.expireItems(now)
+    if (this.closed || this.finalizeRequested) return
     let verdict: TranscriptionLiveErrorCode | null = null
     if (now - this.startedAt >= this.limits.maxSessionMs) verdict = 'session_expired'
     else if (now - this.lastAudioAt >= this.limits.idleMs) verdict = 'session_idle'
@@ -664,8 +962,9 @@ export class LiveSession {
   }
 
   /**
-   * Releases everything, once: timers, the gateway streams (open or opening), the browser's socket
-   * (dropped if it does not close in time) and the slot.
+   * Ends everything, once: timers, the gateway streams (open, opening or closing), the browser's
+   * socket. The slot stays taken until those sockets are gone: each is dropped if it has not
+   * closed after `closeMs`, and the slot is freed twice that after the end at the latest.
    */
   close(closeCode: number = CLOSE.normal, reason = 'done'): void {
     if (this.closed) return
@@ -677,18 +976,64 @@ export class LiveSession {
     this.abort.abort(new Error('Session closed'))
     for (const socket of this.upstreams) closeGateway(socket, this.limits.closeMs)
     this.item?.resolve()
-    this.commitAnswered?.()
-    this.settled?.()
+    this.notify()
     this.hold = []
+    this.holdBytes = 0
+    this.pending.clear()
     const client = this.options.client
     try {
       client.close(closeCode, reason)
     } catch {
       client.terminate()
     }
-    setTimeout(() => client.terminate(), this.limits.closeMs).unref()
+    this.afterClose(this.limits.closeMs, () => {
+      client.terminate()
+      for (const socket of this.upstreams) socket.terminate()
+      this.afterClose(this.limits.closeMs, () => {
+        if (this.released) return
+        this.log('sockets did not close', { upstreams: this.upstreams.size })
+        this.release()
+      })
+    })
     this.log('closed', { code: closeCode, reason, seconds: Math.round(this.bytesIn / this.rate) })
+    this.releaseWhenGone()
+  }
+
+  /** A timer of the cleanup after `close`, which `release` clears. */
+  private afterClose(ms: number, run: () => void): void {
+    if (this.released) return
+    const timer = setTimeout(() => {
+      this.cleanup.delete(timer)
+      run()
+    }, ms)
+    timer.unref()
+    this.cleanup.add(timer)
+  }
+
+  /** Frees the slot once the session has ended and none of its sockets is left. */
+  private releaseWhenGone(): void {
+    if (!this.closed || this.released) return
+    if (!this.clientGone || this.upstreams.size > 0 || this.opening > 0) return
+    this.release()
+  }
+
+  private release(): void {
+    if (this.released) return
+    this.released = true
+    for (const timer of this.cleanup) clearTimeout(timer)
+    this.cleanup.clear()
     this.options.onEnd()
+  }
+
+  /** A timer of the running session; none is taken once it has closed. */
+  private addTimer(timer: NodeJS.Timeout): boolean {
+    if (this.closed) {
+      clearTimeout(timer)
+      return false
+    }
+    timer.unref()
+    this.timers.add(timer)
+    return true
   }
 
   /** Waits `ms`, or until the session closes. */
@@ -698,6 +1043,7 @@ export class LiveSession {
 
   /** Whether `promise` settled within `ms`; `false` too when the session closes first. */
   private within(promise: Promise<void>, ms: number): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false)
     return new Promise<boolean>((resolve) => {
       const finish = (value: boolean): void => {
         clearTimeout(timer)
@@ -707,14 +1053,14 @@ export class LiveSession {
       }
       const wake = (): void => finish(false)
       const timer = setTimeout(wake, ms)
-      this.timers.add(timer)
+      this.addTimer(timer)
       this.waits.add(wake)
       void promise.then(() => finish(true))
     })
   }
 }
 
-/** Sessions at once, in all and per user; a session holds its slot from start to end. */
+/** Sessions at once, in all and per user; a session holds its slot until its sockets are gone. */
 export class SessionSlots {
   private total = 0
   private readonly perUser = new Map<string, number>()

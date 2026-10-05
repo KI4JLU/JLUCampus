@@ -124,6 +124,11 @@ function aborted(signal: AbortSignal): Error {
  */
 function proxyTunnel(proxy: URL, host: string, port: number, signal: AbortSignal): Promise<Socket> {
   return new Promise((resolve, reject) => {
+    // A signal that ended before fires no more `abort`: nothing is created for it.
+    if (signal.aborted) {
+      reject(aborted(signal))
+      return
+    }
     if (proxy.protocol !== 'http:') {
       reject(new GatewayUnreachable(false))
       return
@@ -150,12 +155,12 @@ function proxyTunnel(proxy: URL, host: string, port: number, signal: AbortSignal
     signal.addEventListener('abort', onAbort, { once: true })
     request.once('connect', (response, socket) => {
       signal.removeEventListener('abort', onAbort)
-      if (response.statusCode === 200) {
+      if (response.statusCode === 200 && !signal.aborted) {
         resolve(socket)
         return
       }
       socket.destroy()
-      reject(new GatewayUnreachable(false))
+      reject(signal.aborted ? aborted(signal) : new GatewayUnreachable(false))
     })
     request.once('error', () => {
       signal.removeEventListener('abort', onAbort)
@@ -192,7 +197,11 @@ export async function openGateway(
   timeoutMs = HANDSHAKE_TIMEOUT_MS
 ): Promise<WebSocket> {
   rememberKey(target.apiKey)
+  // A caller that gave up already gets nothing created; `AbortSignal.any` of an ended signal has
+  // ended too, and its timeout would never fire into it.
+  if (signal.aborted) throw aborted(signal)
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+  const ended = (): Error => (signal.aborted ? aborted(signal) : new GatewayUnreachable(true))
   const url = new URL(target.url)
   const secure = url.protocol === 'wss:'
   const proxy = proxyFor(target.url)
@@ -202,9 +211,12 @@ export async function openGateway(
     try {
       tunnel = await proxyTunnel(proxy, url.hostname.replace(/^\[|\]$/g, ''), port, deadline)
     } catch (error) {
-      if (signal.aborted) throw aborted(signal)
-      if (deadline.aborted) throw new GatewayUnreachable(true)
+      if (deadline.aborted) throw ended()
       throw error
+    }
+    if (deadline.aborted) {
+      tunnel.destroy()
+      throw ended()
     }
   }
   const socket = new WebSocket(target.url, {
@@ -244,8 +256,7 @@ export async function openGateway(
         if (error) reject(error)
         else resolve()
       }
-      const onDeadline = (): void =>
-        settle(signal.aborted ? aborted(signal) : new GatewayUnreachable(true))
+      const onDeadline = (): void => settle(ended())
       deadline.addEventListener('abort', onDeadline, { once: true })
       onHandshakeError = () => settle(new GatewayUnreachable(false))
       socket.once('unexpected-response', (request, response) => {
@@ -258,6 +269,8 @@ export async function openGateway(
           settle(error ? new GatewayUnreachable(false) : undefined)
         )
       })
+      // Ended while the socket was being created: settled now, not never.
+      if (deadline.aborted) onDeadline()
     })
   } catch (error) {
     socket.terminate()
@@ -296,7 +309,10 @@ function refusalOf(
   })
 }
 
-/** Closes a gateway socket: gracefully, dropped if that takes longer than `closeMs`. */
+/**
+ * Closes a gateway socket: gracefully, dropped if that takes longer than `closeMs`; the timer
+ * goes with the socket's close.
+ */
 export function closeGateway(socket: WebSocket, closeMs = 5000): void {
   if (socket.readyState === WebSocket.CLOSED) return
   if (socket.readyState !== WebSocket.OPEN) {
@@ -304,7 +320,9 @@ export function closeGateway(socket: WebSocket, closeMs = 5000): void {
     return
   }
   socket.close(1000)
-  setTimeout(() => socket.terminate(), closeMs).unref()
+  const timer = setTimeout(() => socket.terminate(), closeMs)
+  timer.unref()
+  socket.once('close', () => clearTimeout(timer))
 }
 
 /**

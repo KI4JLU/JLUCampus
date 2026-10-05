@@ -90,6 +90,8 @@ export class RealtimeSession {
   private onClosed: (() => void) | null = null
   private stopping: Promise<void> | null = null
   private closed = false
+  /** The socket closed; a start still preparing the audio fails then. */
+  private socketClosed = false
   private recording = false
   /** Frames dropped because the socket did not keep up. */
   private dropped = 0
@@ -111,7 +113,9 @@ export class RealtimeSession {
 
   /**
    * Connects and resolves once the server took the session and audio flows. A failure tears
-   * everything down, the microphone included, and rejects with a `RealtimeError`.
+   * everything down, the microphone included, and rejects with a `RealtimeError`; so does a
+   * socket that closes while the audio is being prepared (`connectionClosed`), and a teardown
+   * meanwhile (`aborted`). A capture that comes after either is closed at once.
    */
   async start(options: RealtimeStartOptions): Promise<void> {
     this.stream = options.stream
@@ -120,8 +124,9 @@ export class RealtimeSession {
       this.socket = socket
       await this.ready(socket)
       this.check()
+      let capture: AudioCapture
       try {
-        this.capture = await this.dependencies.capture(
+        capture = await this.dependencies.capture(
           options.stream,
           TRANSCRIPTION_REALTIME_SAMPLE_RATES[options.mode],
           (pcm) => this.sendFrame(pcm)
@@ -129,7 +134,11 @@ export class RealtimeSession {
       } catch {
         throw new RealtimeError('audioFailed')
       }
-      this.check()
+      if (this.closed || this.socketClosed) {
+        capture.close()
+        this.check()
+      }
+      this.capture = capture
       this.recording = true
     } catch (error) {
       this.teardown()
@@ -224,6 +233,7 @@ export class RealtimeSession {
       })
       socket.addEventListener('message', (event: MessageEvent) => this.receive(event.data))
       socket.addEventListener('close', () => {
+        this.socketClosed = true
         // Before the session ran: the server refused the upgrade or closed before it said why.
         this.onReady?.(new RealtimeError(opened ? 'connectionClosed' : 'connectionFailed'))
         this.onClosed?.()
@@ -276,9 +286,13 @@ export class RealtimeSession {
     this.handlers.onConnectionLost('connectionClosed')
   }
 
-  /** Ends a start that was overtaken by `teardown` (the page went away). */
+  /**
+   * Ends a start that was overtaken by `teardown` (the page went away) or whose socket closed
+   * meanwhile.
+   */
   private check(): void {
     if (this.closed) throw new RealtimeError('aborted')
+    if (this.socketClosed) throw new RealtimeError('connectionClosed')
   }
 }
 
