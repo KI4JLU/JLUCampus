@@ -50,7 +50,8 @@ export interface FileRowProps {
 /**
  * One file of the queue (kiChat's `multi-upload-item`): a handle to drag it, its player with name,
  * size and length (T-12), the voices to name (T-17), the keyboard way to move it (T-07), removal
- * (T-08), and its progress and status (T-11), with the reason when it failed (T-16).
+ * (T-08), and its progress and status (T-11), with the reason when it failed (T-16) or what it
+ * did without (one automatic voice, no AI correction).
  */
 export function FileRow(props: FileRowProps): React.JSX.Element {
   const { file, position, groups, locked, processing } = props
@@ -210,6 +211,11 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
       {file.error ? (
         <Badge appearance="text" tone="error">
           {errorText(t, file.error)}
+        </Badge>
+      ) : null}
+      {file.notice && !file.error ? (
+        <Badge appearance="text" tone="warning">
+          {t(`transcription.upload.notice.${file.notice}`)}
         </Badge>
       ) : null}
     </li>

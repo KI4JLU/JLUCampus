@@ -36,6 +36,7 @@ import {
   findFileByJob,
   moveFile as moveQueueFile,
   newGroup,
+  noticeOf,
   queueFileFrom,
   removeFile as removeQueueFile,
   removeGroup as removeQueueGroup,
@@ -314,7 +315,14 @@ export class UploadQueue {
 
   private fail(fileId: string, phase: 'analysisFailed' | 'failed', error: FileError): void {
     this.stopCreep(fileId)
-    this.patchFile(fileId, { phase, progress: 100, status: 'failed', tone: 'error', error })
+    this.patchFile(fileId, {
+      phase,
+      progress: 100,
+      status: 'failed',
+      tone: 'error',
+      error,
+      notice: null
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -491,7 +499,7 @@ export class UploadQueue {
     const controller = this.startFlow(fileId)
     const signal = controller.signal
     let errors = 0
-    this.patchFile(fileId, { phase: 'analyzing', tone: 'processing', error: null })
+    this.patchFile(fileId, { phase: 'analyzing', tone: 'processing', error: null, notice: null })
     try {
       for (;;) {
         await sleep(this.options.pollMs ?? TRANSCRIPTION_POLL_MS, signal)
@@ -522,6 +530,7 @@ export class UploadQueue {
             status: 'readyForTranscription',
             tone: 'ready',
             error: null,
+            notice: noticeOf(job),
             uploaded: true,
             duration: file.duration ?? job.duration,
             voices: voicesFromSpeakers(
@@ -675,6 +684,7 @@ export class UploadQueue {
       status: 'readyForTranscription',
       tone: 'ready',
       error: null,
+      notice: noticeOf(job),
       voices:
         job.speakers.length > 0 ? voicesFromSpeakers(job.speakers, this.options.labels) : null,
       voicesSaved: false,
@@ -963,7 +973,8 @@ export class UploadQueue {
             progress: PROGRESS.done,
             status: 'transcriptionComplete',
             tone: 'success',
-            error: null
+            error: null,
+            notice: noticeOf(job)
           }))
           return result
         }

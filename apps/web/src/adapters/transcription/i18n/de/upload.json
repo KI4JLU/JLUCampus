@@ -44,6 +44,10 @@
   "multipleSpeakers": "Mehrere Personen",
   "namePlaceholderShort": "Name...",
   "noProvidersAvailable": "Keine Provider verfügbar",
+  "notice": {
+    "diarizationUnavailable": "Sprechererkennung nicht verfügbar – eine automatische Stimme.",
+    "correctionSkipped": "KI-Korrektur übersprungen – der Text ist unkorrigiert."
+  },
   "openItem": "{{title}} öffnen",
   "optimizeSpeakersAI": "Sprecher per KI optimieren",
   "processingJobStartFailed": "Konnte Verarbeitungs-Job nicht starten.",

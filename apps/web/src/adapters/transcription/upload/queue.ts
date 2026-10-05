@@ -1,4 +1,8 @@
-import type { TranscriptionJobStatus, TranscriptionResult } from '@justcampus/shared'
+import type {
+  TranscriptionJob,
+  TranscriptionJobStatus,
+  TranscriptionResult
+} from '@justcampus/shared'
 import type { VoiceDraft } from '../mapping/speakers'
 
 /**
@@ -69,6 +73,20 @@ export interface FileError {
   message?: string | null
 }
 
+/**
+ * What an analysed or completed job notes without failing: the diariser was unavailable and the
+ * file has one automatic voice, or the AI correction was skipped and the text stayed uncorrected.
+ */
+export type FileNotice = 'diarizationUnavailable' | 'correctionSkipped'
+
+/** The notice of an analysed or completed job (its `error` there), `null` without one. */
+export function noticeOf(job: Pick<TranscriptionJob, 'status' | 'error'>): FileNotice | null {
+  if (job.status !== 'analyzed' && job.status !== 'completed') return null
+  if (job.error?.code === 'diarization_failed') return 'diarizationUnavailable'
+  if (job.error?.code === 'correction_failed') return 'correctionSkipped'
+  return null
+}
+
 export interface QueueFile {
   /** Local id of the row. */
   id: string
@@ -93,6 +111,8 @@ export interface QueueFile {
   tone: RowTone
   status: StatusKey
   error: FileError | null
+  /** A notice of the analysis or transcription that did not fail it. */
+  notice: FileNotice | null
   /** The analysed voices with the names given; `null` before the analysis. */
   voices: VoiceDraft[] | null
   /** Whether the mapping dialog saved them (kiChat's `speakersSaved`). */
@@ -219,6 +239,7 @@ export function queueFileFrom(file: File): QueueFile {
     tone: 'ready',
     status: 'ready',
     error: null,
+    notice: null,
     voices: null,
     voicesSaved: false,
     result: null

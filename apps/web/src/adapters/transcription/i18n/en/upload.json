@@ -44,6 +44,10 @@
   "multipleSpeakers": "Multiple people",
   "namePlaceholderShort": "Name...",
   "noProvidersAvailable": "No providers available",
+  "notice": {
+    "diarizationUnavailable": "Speaker recognition unavailable – one automatic voice.",
+    "correctionSkipped": "AI correction skipped – the text is uncorrected."
+  },
   "openItem": "Open {{title}}",
   "optimizeSpeakersAI": "Optimize speakers with AI",
   "processingJobStartFailed": "Could not start the processing job.",

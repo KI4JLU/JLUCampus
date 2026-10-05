@@ -539,7 +539,7 @@
         },
         "diarizationApiKey": {
           "label": "API-Schlüssel der Sprechererkennung",
-          "hint": "Nur nötig, wenn der Endpunkt einen verlangt. Er wird verschlüsselt gespeichert und nie wieder angezeigt."
+          "hint": "Der Speaches-Server der Sprechererkennung hat einen eigenen Schlüssel. Leer: der der Spracherkennung. Er wird verschlüsselt gespeichert und nie wieder angezeigt."
         },
         "llmApiKey": {
           "label": "API-Schlüssel des KI-Endpunkts",

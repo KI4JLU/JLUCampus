@@ -226,6 +226,32 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
     })
   })
 
+  it('notes an unavailable diariser and a skipped correction without failing', async () => {
+    const { api, script } = server()
+    script('job-1', {
+      status: 'analyzed',
+      speakers: SPEAKERS,
+      error: { code: 'diarization_failed', message: 'Sprechererkennung nicht verfügbar (403).' }
+    })
+    const queue = makeQueue(api)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    expect(row(queue, 'a.wav')).toMatchObject({
+      status: 'readyForTranscription',
+      tone: 'ready',
+      error: null,
+      notice: 'diarizationUnavailable'
+    })
+
+    script('job-1', {
+      status: 'completed',
+      result: result('A', 5),
+      error: { code: 'correction_failed', message: 'KI-Korrektur übersprungen (500).' }
+    })
+    await queue.start()
+    expect(row(queue, 'a.wav')).toMatchObject({ error: null, notice: 'correctionSkipped' })
+  })
+
   it('still shows the server waveform after the speaker analysis failed (T-12)', async () => {
     const { api, script } = server()
     script('job-1', {

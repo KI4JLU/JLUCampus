@@ -539,7 +539,7 @@
         },
         "diarizationApiKey": {
           "label": "Speaker detection API key",
-          "hint": "Only needed if the endpoint asks for one. It is stored encrypted and never shown again."
+          "hint": "The speaker detection's Speaches server has a key of its own. Empty: the speech recognition key. It is stored encrypted and never shown again."
         },
         "llmApiKey": {
           "label": "AI endpoint API key",
