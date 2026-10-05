@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { FolderIcon, LayoutGridIcon, UsersIcon } from 'lucide-react'
+import { FolderIcon, LayoutGridIcon, UserCogIcon, UsersIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 const ICON = { 'aria-hidden': true, width: '1em', height: '1em' } as const
@@ -8,7 +8,9 @@ const ICON = { 'aria-hidden': true, width: '1em', height: '1em' } as const
 const LINK_CLASS =
   '-mb-px flex shrink-0 items-center gap-2 border-b-2 border-transparent px-3 py-2 font-label-sm text-label-sm whitespace-nowrap text-on-surface-variant no-underline transition-colors hover:text-on-surface focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:outline-none focus-visible:ring-inset aria-[current=page]:border-primary aria-[current=page]:text-primary'
 
-/** Switches between the admin pages: the component catalogue, folder templates and presets. */
+/**
+ * Switches between the admin pages: the component catalogue, folder templates, presets and users.
+ */
 export function AdminNav(): React.JSX.Element {
   const { t } = useTranslation()
   return (
@@ -31,6 +33,12 @@ export function AdminNav(): React.JSX.Element {
           <Link to="/admin/presets" className={LINK_CLASS}>
             <UsersIcon {...ICON} />
             {t('admin.nav.presets')}
+          </Link>
+        </li>
+        <li>
+          <Link to="/admin/users" className={LINK_CLASS}>
+            <UserCogIcon {...ICON} />
+            {t('admin.nav.users')}
           </Link>
         </li>
       </ul>

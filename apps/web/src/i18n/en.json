@@ -648,7 +648,8 @@
       "label": "Administration",
       "components": "Components",
       "folders": "Folder templates",
-      "presets": "Layout presets"
+      "presets": "Layout presets",
+      "users": "Users"
     },
     "table": {
       "caption": "All components in catalogue order",
@@ -824,6 +825,59 @@
         "dashboardDescription": "The tiles on the new user's dashboard. Choose “Edit” to arrange them.",
         "dashboardEmptyTitle": "This dashboard is empty",
         "dashboardEmptyDescription": "Add JLU widgets, folders, shortcuts and feeds that new users should find on their dashboard."
+      }
+    },
+    "users": {
+      "title": "Manage users",
+      "description": "Everyone who has signed in to JLU Campus. Grant and revoke the app's admin role here; roles and groups in Keycloak do not change it.",
+      "loadFailed": "The users could not be loaded.",
+      "search": "Search users",
+      "searchPlaceholder": "Search by name or e-mail",
+      "resultCount_one": "{{count}} user",
+      "resultCount_other": "{{count}} users",
+      "table": {
+        "caption": "All users, admins first",
+        "email": "E-mail",
+        "role": "Role",
+        "lastSignIn": "Last sign-in",
+        "empty": "Nobody has signed in yet.",
+        "noMatch": "No user matches “{{query}}”."
+      },
+      "actions": {
+        "menu": "Actions for {{name}}",
+        "details": "Show details"
+      },
+      "role": {
+        "admin": "Admin",
+        "user": "Standard",
+        "grant": "Make admin",
+        "revoke": "Revoke admin rights",
+        "grantHint": "Admins manage components, templates and the admin rights of others.",
+        "revokeHint": "The role only applies in JLU Campus, independently of Keycloak.",
+        "selfHint": "You cannot revoke your own admin rights.",
+        "granted": "“{{name}}” is now an admin.",
+        "revoked": "“{{name}}” is no longer an admin.",
+        "conflict": "Nobody can revoke their own admin rights, and at least one admin must remain.",
+        "failed": "The role could not be changed."
+      },
+      "confirm": {
+        "grantTitle": "Make admin?",
+        "grantDescription": "“{{name}}” gets access to the administration area and can manage components, templates and the admin rights of others there.",
+        "grantAction": "Make admin",
+        "revokeTitle": "Revoke admin rights?",
+        "revokeDescription": "“{{name}}” loses access to the administration area. Roles and groups in Keycloak stay as they are.",
+        "revokeAction": "Revoke"
+      },
+      "details": {
+        "role": "Role in JLU Campus",
+        "keycloakRoles": "Keycloak roles",
+        "keycloakGroups": "Keycloak groups",
+        "keycloakHint": "Roles and groups are those of the last sign-in.",
+        "none": "None",
+        "account": "Account",
+        "createdAt": "Created",
+        "lastSignIn": "Last sign-in",
+        "never": "Never recorded"
       }
     }
   },

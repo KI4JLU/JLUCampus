@@ -62,14 +62,28 @@ secrets unreadable.
 
 Sign in with one of the seeded Keycloak users:
 
-| User    | Password | Role  |
-| ------- | -------- | ----- |
-| `alice` | `alice`  | admin |
-| `bob`   | `bob`    | user  |
+| User    | Password | Role |
+| ------- | -------- | ---- |
+| `alice` | `alice`  | user |
+| `bob`   | `bob`    | user |
 
 The Keycloak admin console is at http://localhost:8080 (`admin` / `admin`).
-Users with the realm role `admin` (configurable via `KEYCLOAK_ADMIN_ROLE`) see
-the admin panel at `/admin/components`.
+App admin roles are managed in Campus. After Alice signs in for the first time, appoint her:
+
+```bash
+bun run admin grant alice@example.uni-giessen.de
+```
+
+Admins can manage users in the "Nutzer" tab at `/admin/users`, alongside
+`/admin/components`, `/admin/folders` and `/admin/presets`. The Keycloak realm
+role `admin` still matches layout presets and translator glossaries, but grants
+no Campus admin access. The migration to app-managed roles resets every user
+to `user`; appoint the first admin with the CLI after migrating.
+
+The CLI accepts `grant <email|id>`, `revoke <email|id>` and `list`. Grant and
+revoke require a user who has signed in before. `list` prints admins' email,
+name and id. The CLI can revoke the last admin and warns when none remain;
+the user-management API prevents self-revocation and removing the last admin.
 
 ## Desktop app
 
@@ -124,6 +138,15 @@ cp .env.production.example .env.production   # fill in secrets and URLs
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 ```
 
+After the user has signed in, appoint an admin inside the running image:
+
+```bash
+docker compose -f docker-compose.prod.yml exec app node dist/admin.js grant <email>
+```
+
+The image's working directory is `/app/apps/server`. Use `revoke <email|id>`
+or `list` with the same command to remove or inspect admins.
+
 The app listens on `127.0.0.1:3000` by default (`APP_BIND`, `APP_PORT`). Pin
 a release with `JUSTCAMPUS_TAG=1.2.3`. If the GHCR package is private, run
 `docker login ghcr.io` on the host first.
@@ -145,4 +168,5 @@ pushes the production image (see [Docker](#docker)).
 | `bun run lint`        | ESLint, including the design-system rules    |
 | `bun run test`        | Vitest in every package                      |
 | `bun run db:generate` | Generate a Drizzle migration from the schema |
+| `bun run admin`       | Grant, revoke or list app admins             |
 | `bun run format`      | Prettier                                     |

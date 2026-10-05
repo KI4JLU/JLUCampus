@@ -49,7 +49,6 @@ const envSchema = z
     KEYCLOAK_ISSUER: z.url(),
     KEYCLOAK_CLIENT_ID: z.string().min(1),
     KEYCLOAK_CLIENT_SECRET: z.string().min(1),
-    KEYCLOAK_ADMIN_ROLE: z.string().min(1).default('admin'),
     FEED_ALLOW_PRIVATE_HOSTS: z
       .enum(['true', 'false'])
       .default('false')
