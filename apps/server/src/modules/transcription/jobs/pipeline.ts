@@ -82,16 +82,22 @@ function samplesPrefix(componentId: string, jobId: string): string {
 // Failures
 // ---------------------------------------------------------------------------
 
-/** How an upstream failed, as kiChat words it in the message (`antwortete mit Status 415`). */
-function upstreamReason(error: unknown, server: string): string {
-  if (error instanceof UpstreamError && error.status !== null) {
-    return `${server} antwortete mit Status ${error.status}`
+/**
+ * How an upstream failed, as kiChat words it in the message (`antwortete mit Status 415`), from
+ * the error's `kind` and `status`, which the raw answer decided: never the upstream's words.
+ */
+export function upstreamReason(error: unknown, server: string): string {
+  if (!(error instanceof UpstreamError)) return `${server} nicht erreichbar`
+  switch (error.kind) {
+    case 'invalidAnswer':
+      return `${server} lieferte eine unerwartete Antwort`
+    case 'status':
+      return `${server} antwortete mit Status ${error.status}`
+    case 'timeout':
+      return `${server} zu langsam`
+    case 'unreachable':
+      return `${server} nicht erreichbar`
   }
-  if (error instanceof UpstreamError && /unexpected shape|JSON/.test(error.message)) {
-    return `${server} lieferte eine unerwartete Antwort`
-  }
-  if (error instanceof UpstreamError && error.timedOut) return `${server} zu langsam`
-  return `${server} nicht erreichbar`
 }
 
 /** Rethrows aborts and failures the step already classified; turns the rest into `failure`. */
@@ -231,18 +237,15 @@ async function normalizedAudio(
 
 /**
  * Whether a diarisation failure means the diariser is not there for this module: unreachable,
- * too slow, no such endpoint (the HRZ gateway has none), no access, or a server error after the
- * retries. Other refusals (kiChat's `415` for an undecodable file) fail the analysis as in kiChat.
+ * too slow, no such endpoint (the HRZ gateway has none), no access, a server error after the
+ * retries, or an answer that is no diarisation. Other refusals (kiChat's `415` for an undecodable
+ * file) fail the analysis as in kiChat. Decided by the error's `kind` and `status`, which the raw
+ * answer decided, so masking a short key in its words cannot change it.
  */
 export function diarizationUnavailable(error: unknown): boolean {
   if (!(error instanceof UpstreamError)) return false
-  const status = error.status
-  return (
-    status === null ||
-    [401, 403, 404, 405, 408, 429].includes(status) ||
-    status >= 500 ||
-    /unexpected shape|JSON/.test(error.message)
-  )
+  if (error.kind !== 'status' || error.status === null) return true
+  return [401, 403, 404, 405, 408, 429].includes(error.status) || error.status >= 500
 }
 
 /** The notice an analysed or completed job carries when the diariser was unavailable. */

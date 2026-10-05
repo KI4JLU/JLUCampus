@@ -296,8 +296,12 @@ ten comma-separated speech workers, which take the chunks in parallel waves; one
 diarisation and VAD; transport errors and `5xx` are retried three times (`jobs/upstream.ts`),
 a speech chunk also after a timeout (kiChat's `ConnectionException`), diarisation and VAD not
 (kiChat's processing timeout; Node's fetch cannot tell when it connected, so the passed deadline
-stands in for it). Every upstream answer is masked before it reaches an error, a log or a
-client (`maskSecrets` in `http.ts`): the keys sent lately, `Bearer …`, `sk-…`, `api_key=…`.
+stands in for it). What an upstream answers reaches only an error's `detail`, for logs, masked
+before it is cut short (`maskSecrets` in `http.ts`): the request's own keys however short, keys
+other requests sent lately from eight characters on, `Bearer …`, `sk-…`, `api_key=…`. Browsers
+get the server's own words; only the admin connection test shows the start of a refusal, masked.
+Failures are classified by the error's `kind` and `status`, which the raw answer decided, never
+by its masked words. The realtime bridge passes on and logs nothing the gateway says.
 The analysis diarises the whole file and offers samples per voice; the transcription diarises
 again with the named voices as known speakers (`known_speaker_references`, WAV cut from the
 normalised audio) plus VAD, and maps words to speakers by time overlap (`jobs/mapping.ts`,

@@ -10,7 +10,8 @@ Ported from HAWKI's realtime bridge (kiChat, `_docker/realtime-bridge`), with th
 The changes are marked `Campus:` in `bridge.py`: JSON errors that carry the gateway's status,
 `POST /probe`, a timeout for peers that never connect, TURN credentials minted from coturn's
 shared secret, the outbound proxy for the WebSocket, a mandatory `BRIDGE_API_KEY`, a session
-limit with idle and lifetime limits, coalesced rotations, and masked upstream errors.
+limit with idle and lifetime limits, coalesced rotations, and nothing the gateway says in a log
+or an answer.
 
 ## How a session runs
 
@@ -38,7 +39,7 @@ limit with idle and lifetime limits, coalesced rotations, and masked upstream er
 | `POST /probe`    | –         | `200 {"ok": true}`: the gateway took key and model (no audio, no WebRTC) |
 | `GET /health`    | –         | `200 ok`                                                                 |
 
-Errors are JSON `{error, message, upstream_status?}`: `401 unauthorized` (bridge key),
+Errors are JSON `{error, message, upstream_status?, upstream_close_code?}` with fixed messages: `401 unauthorized` (bridge key),
 `400 bad_request`/`bad_offer`, `503 busy` (`MAX_SESSIONS` reached), `502 upstream_rejected` (the
 gateway refused the handshake, with its status: 403 for a model the key may not use),
 `upstream_error`/`upstream_closed` (refused after the handshake), `upstream_failed`
@@ -46,11 +47,14 @@ gateway refused the handshake, with its status: 403 for a model the key may not 
 `gatewayKeyRejected`, `gatewayRefused`, `gatewayUnreachable`, `bridgeUnreachable`,
 `bridgeKeyRejected` and `bridgeBusy`, which the admin connection test and the live tab show.
 
-What the gateway says never reaches a log or a client unmasked: the gateway key of the request
-and the bridge key (however short, before the text is cut short), `Bearer …`, `sk-…` and
-`api_key=…` are replaced by `***`. Browsers get fixed
-messages only (`…failed` with `{code: "upstream_error"}`), the Campus server a masked one. A 401/403 handshake is told apart by the gateway's model list with the same key: if it
-works and lacks the model, the key may not use the model.
+What the gateway says reaches neither a log nor a client, masked or not: a gateway may reflect
+the key it refused in any spelling (escaped, URL-encoded, quoted). The log gets a fixed event, the
+gateway's status or close code, and of its text only the length in bytes and a short hash keyed
+anew for every process (`trace`: equal texts have equal hashes, a guessed key cannot be checked);
+exceptions only their class name. Browsers get fixed messages (`…failed` with
+`{code: "upstream_error"}`), the Campus server fixed codes and messages. A 401/403 handshake is
+told apart by the gateway's model list with the same key: if it works and lacks the model, the
+key may not use the model.
 
 ## Settings
 
@@ -73,6 +77,7 @@ works and lacks the model, the key may not use the model.
 | `UPSTREAM_HANDSHAKE_TIMEOUT_S`   | `10`              | Opening one gateway stream: connection, upgrade answer, `session.update`.                    |
 | `NEGOTIATE_TIMEOUT_S`            | `14`              | Answering one offer in all (gateway stream and WebRTC), under the 15 s of the Campus server. |
 | `PROBE_TIMEOUT_S`                | `14`              | One `/probe` in all.                                                                         |
+| `CLEANUP_TIMEOUT_S`              | `10`              | Closing what a failed or overdue offer or probe opened, after its answer.                    |
 | `LOG_LEVEL`                      | `INFO`            |                                                                                              |
 
 Without `BRIDGE_API_KEY` the bridge refuses to start: anyone who reached the port could make it
@@ -85,7 +90,10 @@ way out. Before a session is connected, deadlines bound every step: a gateway (o
 takes the connection and never answers the WebSocket upgrade ends the offer or probe after
 `UPSTREAM_HANDSHAKE_TIMEOUT_S`, the whole answer to an offer after `NEGOTIATE_TIMEOUT_S`, a probe
 after `PROBE_TIMEOUT_S`, and a rotation whose next stream does not open ends the session, so a
-finalization never waits behind it. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
+finalization never waits behind it. The answer does not wait for the cleanup: the slot is free at
+once, and closing the streams and the peer connection (up to five seconds for a WebSocket) runs
+afterwards within `CLEANUP_TIMEOUT_S`, so the 504 arrives within the deadline, before the Campus
+server's 15 s run out. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
 finalized like a stop: the client gets an `error` event (`session_idle`, `session_expired`), the
 current item's transcript, then the close. `keep_open` commits asked for while a rotation runs
 fold into one next rotation, which starts `ROTATE_MIN_INTERVAL_S` after the last.

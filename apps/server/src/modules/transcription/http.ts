@@ -10,14 +10,24 @@ import { ApiError } from '../../api.js'
  *
  * Masking does not depend on a key's shape or length: every credential a request carried
  * (`upstreamFetch` notes them per response) is masked in what that request's answer says, the
- * whole text before it is cut short. Keys sent lately (`rememberKey`) and key-like strings are
- * masked besides, for texts that reach an error without their response.
+ * whole text before it is cut short. Keys sent lately (`rememberKey`) of `RECENT_KEY_MIN`
+ * characters or more and key-like strings are masked besides, for texts that reach an error
+ * without their response; a shorter one would garble unrelated text.
+ *
+ * What an upstream answered goes into an error's `detail` only, for logs; its `message` is the
+ * server's own words, and its `kind` and `status` say how the request failed, decided on the raw
+ * answer before anything is masked. Callers decide by those, never by the masked words.
  */
 
 /** Keys this server sent to upstreams lately, newest last; `maskSecrets` hides them. */
 const sentKeys = new Set<string>()
 /** Enough for every key of the module's settings and the admin form's tries. */
 const SENT_KEYS_MAX = 64
+/**
+ * Keys sent lately are masked in other requests' texts from this length on. A request's own keys
+ * are masked whatever their length (`secretsOfResponse`).
+ */
+export const RECENT_KEY_MIN = 8
 
 /** The credentials the request of each response carried (`upstreamFetch`). */
 const requestSecrets = new WeakMap<Response, readonly string[]>()
@@ -67,9 +77,10 @@ function spellings(key: string): string[] {
 }
 
 /**
- * `text` with every key masked, however short: those given (the request's own), every key sent
- * to an upstream lately (`bearer`), and anything that looks like one (`Bearer …`, `sk-…`,
- * `api_key=…`). Longer keys go first, so a key inside another leaves no rest of the longer one.
+ * `text` with every key masked: those given (the request's own) however short, the keys sent to
+ * an upstream lately (`bearer`) from `RECENT_KEY_MIN` characters on, and anything that looks like
+ * one (`Bearer …`, `sk-…`, `api_key=…`). Longer keys go first, so a key inside another leaves no
+ * rest of the longer one.
  * For upstream answers before they reach a log, an error detail or a client: a gateway may
  * reflect the key it refused. Mask the whole text first and cut it short afterwards: cut first,
  * the start of a key at the cut would stay.
@@ -79,7 +90,8 @@ export function maskSecrets(
   keys: readonly (string | null | undefined)[] = []
 ): string {
   const masked = new Set<string>()
-  for (const key of [...keys, ...sentKeys]) {
+  const recent = [...sentKeys].filter((key) => key.length >= RECENT_KEY_MIN)
+  for (const key of [...keys, ...recent]) {
     if (key) for (const spelling of spellings(key)) masked.add(spelling)
   }
   let safe = text
@@ -99,13 +111,33 @@ export function maskSecrets(
 export const DETAIL_MAX = 500
 
 /**
+ * How an upstream request failed, decided on the raw answer: not answered (`unreachable`), not in
+ * time (`timeout`), an error status (`status`), or a 2xx answer that is no JSON or of another
+ * shape (`invalidAnswer`).
+ */
+export type UpstreamFailure = 'unreachable' | 'timeout' | 'status' | 'invalidAnswer'
+
+/**
  * An upstream that did not answer, answered with an error status or with something unexpected.
  * Message and detail are masked (`maskSecrets`) with the request's `secrets`, the detail before
- * it is cut to `DETAIL_MAX`, so the error can be logged as it is.
+ * it is cut to `DETAIL_MAX`, so the error can be logged as it is. Decide by `kind`, `status` and
+ * `timedOut`, never by the masked message: a short key may have changed its words.
  */
 export class UpstreamError extends Error {
-  /** The start of its answer, masked, for logs and safe error detail. */
+  /** The start of its answer, masked, for logs only. */
   readonly detail: string | null
+  /** How the request failed, from the raw answer (`UpstreamFailure`). */
+  readonly kind: UpstreamFailure
+
+  /** A 2xx answer that is no JSON or not of the shape asked for. */
+  static invalidAnswer(
+    message: string,
+    status: number | null,
+    detail: string | null = null,
+    secrets: readonly (string | null | undefined)[] = []
+  ): UpstreamError {
+    return new UpstreamError(message, status, detail, false, secrets, 'invalidAnswer')
+  }
 
   constructor(
     message: string,
@@ -119,11 +151,14 @@ export class UpstreamError extends Error {
      */
     readonly timedOut = false,
     /** The credentials of the request, masked whatever their shape (`secretsOf`). */
-    secrets: readonly (string | null | undefined)[] = []
+    secrets: readonly (string | null | undefined)[] = [],
+    /** Left out: `timeout`, `unreachable` without a status, else `status`. */
+    kind?: UpstreamFailure
   ) {
     super(maskSecrets(message, secrets))
     this.name = 'UpstreamError'
     this.detail = detail ? maskSecrets(detail, secrets).slice(0, DETAIL_MAX) || null : null
+    this.kind = kind ?? (timedOut ? 'timeout' : status === null ? 'unreachable' : 'status')
   }
 }
 
@@ -209,15 +244,14 @@ export async function readJson<T>(
   try {
     body = await response.json()
   } catch {
-    throw new UpstreamError(`${label} did not answer with JSON`, response.status)
+    throw UpstreamError.invalidAnswer(`${label} did not answer with JSON`, response.status)
   }
   const parsed = schema.safeParse(body)
   if (!parsed.success) {
-    throw new UpstreamError(
+    throw UpstreamError.invalidAnswer(
       `${label} answered in an unexpected shape`,
       response.status,
       JSON.stringify(body),
-      false,
       secretsOfResponse(response)
     )
   }
@@ -289,6 +323,9 @@ export async function listModels(
   try {
     return parseModels(await response.json())
   } catch {
-    throw new UpstreamError('The model list answered in an unexpected shape', response.status)
+    throw UpstreamError.invalidAnswer(
+      'The model list answered in an unexpected shape',
+      response.status
+    )
   }
 }

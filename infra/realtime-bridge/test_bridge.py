@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import unittest
+from urllib.parse import quote
 
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 
@@ -21,15 +22,19 @@ from aiortc.mediastreams import AudioStreamTrack  # noqa: E402
 import bridge  # noqa: E402
 
 GATEWAY_KEY = "test-gateway-key-0123456789"
+# Campus (D-1): a key with both quote kinds and characters URL encoding changes.
+ODD_KEY = "gw\"odd'key/=+0123456789"
 MODEL = "voxtral-mini-realtime"
 
 
 class FakeGateway:
     """The gateway's `/v1/realtime`: 403 for a wrong key or a model the key may not use, an
-    `error` event for an unknown model (`reflect`: one that repeats the key, as a careless gateway
-    might), else deltas while audio arrives and `transcription.done` on the final commit."""
+    `error` event for an unknown model (`reflect…`: one that repeats the key, as a careless
+    gateway might, as it is, URL-encoded, as the error code, in a close reason or in a text that
+    is no JSON), else deltas while audio arrives and `transcription.done` on the final commit."""
 
     def __init__(self):
+        self.keys = {GATEWAY_KEY, ODD_KEY}
         self.connections = []
         self.closed = 0
         self.runner = None
@@ -57,7 +62,8 @@ class FakeGateway:
             await self.release.wait()
             return web.Response(status=503)
         model = request.query.get("model", "")
-        if request.headers.get("Authorization") != f"Bearer {GATEWAY_KEY}" or model == "denied":
+        key = request.headers.get("Authorization", "").removeprefix("Bearer ")
+        if key not in self.keys or model == "denied":
             return web.Response(status=403)
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -82,10 +88,27 @@ class FakeGateway:
                             "type": "error",
                             "error": {
                                 "code": "invalid_key",
-                                "message": f"Key {GATEWAY_KEY} (Bearer {GATEWAY_KEY}) is invalid",
+                                "message": f"Key {key} (Bearer {key}) is invalid",
                             },
                         }
                     )
+                if event.get("model") == "reflect-encoded":
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "error": {
+                                "code": "invalid_credential",
+                                "message": f"Rejected credential {quote(key, safe='')}",
+                            },
+                        }
+                    )
+                if event.get("model") == "reflect-code":
+                    await ws.send_json({"type": "error", "error": {"code": key}})
+                if event.get("model") == "reflect-close":
+                    await ws.close(code=4001, message=f"Rejected {key!r}".encode())
+                    break
+                if event.get("model") == "reflect-garbage":
+                    await ws.send_str(f"Rejected credential {key!r}")
             elif event["type"] == "input_audio_buffer.append":
                 connection["bytes"] += len(event["audio"]) * 3 // 4
                 # A word for every half second of decoded audio.
@@ -166,6 +189,8 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 10
         bridge.NEGOTIATE_TIMEOUT_S = 14
         bridge.PROBE_TIMEOUT_S = 14
+        bridge.PROBE_WAIT_S = 1.5
+        bridge.CLEANUP_TIMEOUT_S = 10
         bridge.ACTIVE_SESSIONS.clear()
         bridge.active_probes = 0
         self.gateway = FakeGateway()
@@ -191,7 +216,7 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         await peer.setLocalDescription(await peer.createOffer())
         return peer, channel, peer.localDescription.sdp
 
-    async def connect(self, model=MODEL, audio=True):
+    async def connect(self, model=MODEL, audio=True, key=GATEWAY_KEY):
         """A connected session: the peer, its channel and the events it receives."""
         peer, channel, sdp = await self.offer(audio)
         events = []
@@ -199,7 +224,7 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         async with self.http.post(
             f"{self.bridge.url}/realtime",
             data=sdp,
-            headers=gateway_headers(self.gateway.base, model=model),
+            headers=gateway_headers(self.gateway.base, model=model, key=key),
         ) as response:
             self.assertEqual(response.status, 200)
             answer = await response.text()
@@ -280,7 +305,8 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 502)
             body = await response.json()
             self.assertEqual(body["error"], "upstream_error")
-            self.assertEqual(body["message"], "Unknown model")
+            # Campus (D-1): fixed words, never the gateway's.
+            self.assertEqual(body["message"], "the gateway refused the realtime session")
         async with self.http.post(
             f"{self.bridge.url}/probe", headers=gateway_headers("http://127.0.0.1:9")
         ) as response:
@@ -300,26 +326,88 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         # Its upstream stream is closed at once.
         await wait_for(lambda: self.gateway.closed == 1)
 
+    def spellings(self, key):
+        """Every way a log or answer could carry `key` or give it away (D-1)."""
+        return [
+            key,
+            quote(key),
+            quote(key, safe=""),
+            json.dumps(key)[1:-1],
+            repr(key)[1:-1],
+            repr(f"x {key}")[1:-1],
+            key[:8],
+            key[-8:],
+        ]
+
+    def assert_no_trace_of(self, key, text):
+        for spelling in self.spellings(key):
+            self.assertNotIn(spelling, text)
+
     async def test_upstream_errors_never_carry_the_key(self):
-        with self.assertLogs(level="DEBUG") as logs:
-            peer, _channel, events = await self.connect(model="reflect")
-            await wait_for(lambda: any(e["type"].endswith(".failed") for e in events))
-            async with self.http.post(
-                f"{self.bridge.url}/probe", headers=gateway_headers(self.gateway.base, "reflect")
-            ) as response:
-                self.assertEqual(response.status, 502)
-                body = await response.json()
-            await peer.close()
-        failed = next(e for e in events if e["type"].endswith(".failed"))
-        # The client gets a fixed message, the log and the probe a masked one.
-        self.assertEqual(failed["error"], bridge.CLIENT_UPSTREAM_ERROR)
-        self.assertNotIn(GATEWAY_KEY, json.dumps(events))
-        self.assertEqual(body["error"], "upstream_error")
-        self.assertNotIn(GATEWAY_KEY, json.dumps(body))
-        self.assertIn("***", body["message"])
-        log = "\n".join(logs.output)
-        self.assertIn("invalid_key", log)
-        self.assertNotIn(GATEWAY_KEY, log)
+        """Campus (D-1): no word of the gateway reaches a log or an answer, in whatever spelling
+        it reflects the key; the log gets fixed events, lengths and hashes."""
+        for key in (GATEWAY_KEY, ODD_KEY):
+            for model in ("reflect", "reflect-encoded", "reflect-code", "reflect-garbage"):
+                with self.subTest(key=key, model=model):
+                    with self.assertLogs(level="DEBUG") as logs:
+                        peer, _channel, events = await self.connect(model=model, key=key)
+                        if model == "reflect-garbage":
+                            await wait_for(
+                                lambda: any("JSONDecodeError" in line for line in logs.output)
+                            )
+                        else:
+                            await wait_for(
+                                lambda: any(e["type"].endswith(".failed") for e in events)
+                            )
+                        async with self.http.post(
+                            f"{self.bridge.url}/probe",
+                            headers=gateway_headers(self.gateway.base, model, key),
+                        ) as response:
+                            body = await response.text()
+                        await peer.close()
+                        await wait_for(lambda: not bridge.ACTIVE_SESSIONS, timeout=15)
+                    log = "\n".join(logs.output)
+                    for text in (log, body, json.dumps(events)):
+                        self.assert_no_trace_of(key, text)
+                        for word in ("Rejected", "invalid_key", "invalid_credential", "is invalid"):
+                            self.assertNotIn(word, text)
+                    if model != "reflect-garbage":
+                        self.assertIn("bytes, hash", log)
+                        failed = next(e for e in events if e["type"].endswith(".failed"))
+                        self.assertEqual(failed["error"], bridge.CLIENT_UPSTREAM_ERROR)
+                        self.assertEqual(json.loads(body)["error"], "upstream_error")
+
+    async def test_a_close_reason_never_reaches_log_or_answer(self):
+        for key in (GATEWAY_KEY, ODD_KEY):
+            with self.assertLogs(level="DEBUG") as logs:
+                async with self.http.post(
+                    f"{self.bridge.url}/probe",
+                    headers=gateway_headers(self.gateway.base, "reflect-close", key),
+                ) as response:
+                    self.assertEqual(response.status, 502)
+                    body = await response.json()
+            self.assertEqual(body["error"], "upstream_closed")
+            self.assertEqual(body["message"], "the gateway closed the realtime connection")
+            self.assertEqual(body["upstream_close_code"], 4001)
+            log = "\n".join(logs.output)
+            self.assertIn("code 4001", log)
+            for text in (log, json.dumps(body)):
+                self.assert_no_trace_of(key, text)
+                self.assertNotIn("Rejected", text)
+
+    def test_trace_and_failure_text_carry_no_upstream_words(self):
+        message = f"Rejected credential {quote(ODD_KEY, safe='')} ({ODD_KEY!r})"
+        traced = bridge.trace(message)
+        self.assertRegex(traced, r"^\d+ bytes, hash [0-9a-f]{12}$")
+        self.assertEqual(traced, bridge.trace(message.encode()))
+        self.assertNotEqual(traced, bridge.trace(message + " "))
+        self.assert_no_trace_of(ODD_KEY, traced)
+        self.assertEqual(bridge.trace(None), bridge.trace(""))
+        self.assertEqual(bridge.failure_text(RuntimeError(message)), "RuntimeError")
+        self.assertEqual(
+            bridge.failure_text(bridge.UpstreamRejected(403)),
+            "the gateway refused the realtime connection with status 403",
+        )
 
     def test_mask(self):
         self.assertEqual(
@@ -395,6 +483,107 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 504)
             self.assertIn("probe", (await response.json())["message"])
         self.assertEqual(bridge.active_probes, 0)
+
+    def slow_streams(self, block_send=True, close_s=2.0):
+        """Campus (D-3): gateway streams whose session.update never goes out (`block_send`) and
+        whose close takes `close_s`, in place of connect_upstream_ws."""
+        streams = []
+
+        class SlowStream:
+            def __init__(self):
+                self.closed = False
+                self.close_started = False
+
+            async def send_json(self, _event):
+                if block_send:
+                    await asyncio.Event().wait()
+
+            async def receive(self, timeout=None):
+                await asyncio.sleep(timeout or 0)
+                raise asyncio.TimeoutError
+
+            async def close(self):
+                self.close_started = True
+                await asyncio.sleep(close_s)
+                self.closed = True
+
+        async def connect(_http, _url, _key):
+            stream = SlowStream()
+            streams.append(stream)
+            return stream
+
+        original = bridge.connect_upstream_ws
+        bridge.connect_upstream_ws = connect
+        self.addCleanup(setattr, bridge, "connect_upstream_ws", original)
+        return streams
+
+    async def timed_post(self, path, **kwargs):
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        async with self.http.post(f"{self.bridge.url}{path}", **kwargs) as response:
+            body = await response.json() if response.content_type.endswith("json") else None
+            return response.status, body, loop.time() - started
+
+    async def test_a_slow_cleanup_does_not_delay_the_answer(self):
+        """Campus (D-3): the deadline passes during session.update and closing the stream takes
+        two seconds; the 504 comes at the deadline, the slot is free at once, and the stream is
+        closed afterwards."""
+        bridge.MAX_SESSIONS = 1
+        bridge.NEGOTIATE_TIMEOUT_S = 0.3
+        bridge.PROBE_TIMEOUT_S = 0.3
+        streams = self.slow_streams()
+        peer, _channel, sdp = await self.offer()
+        status, body, elapsed = await self.timed_post(
+            "/realtime", data=sdp, headers=gateway_headers(self.gateway.base)
+        )
+        await peer.close()
+        self.assertEqual(status, 504)
+        self.assertIn("negotiation", body["message"])
+        self.assertLess(elapsed, 1.2)
+        self.assertFalse(bridge.ACTIVE_SESSIONS)
+        status, body, elapsed = await self.timed_post(
+            "/probe", headers=gateway_headers(self.gateway.base)
+        )
+        self.assertEqual(status, 504)
+        self.assertIn("probe", body["message"])
+        self.assertLess(elapsed, 1.2)
+        self.assertEqual(bridge.active_probes, 0)
+        # Both streams close after their answers.
+        self.assertEqual(len(streams), 2)
+        await wait_for(lambda: all(stream.closed for stream in streams), timeout=5)
+        await wait_for(lambda: not bridge.BACKGROUND_TASKS, timeout=5)
+
+    async def test_a_slow_cleanup_after_a_stalled_handshake_does_not_delay_the_answer(self):
+        bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 0.3
+        streams = self.slow_streams()
+        peer, _channel, sdp = await self.offer()
+        status, body, elapsed = await self.timed_post(
+            "/realtime", data=sdp, headers=gateway_headers(self.gateway.base)
+        )
+        await peer.close()
+        self.assertEqual(status, 504)
+        self.assertIn("handshake", body["message"])
+        self.assertLess(elapsed, 1.2)
+        self.assertFalse(bridge.ACTIVE_SESSIONS)
+        await wait_for(lambda: streams[0].closed, timeout=5)
+
+    async def test_a_slow_close_does_not_delay_a_probe_that_passed(self):
+        bridge.PROBE_WAIT_S = 0.1
+        streams = self.slow_streams(block_send=False)
+        status, body, elapsed = await self.timed_post(
+            "/probe", headers=gateway_headers(self.gateway.base)
+        )
+        self.assertEqual((status, body), (200, {"ok": True, "model": MODEL}))
+        self.assertLess(elapsed, 1.2)
+        self.assertTrue(streams[0].close_started)
+        await wait_for(lambda: streams[0].closed, timeout=5)
+
+    async def test_cleanup_has_a_deadline_of_its_own(self):
+        bridge.CLEANUP_TIMEOUT_S = 0.2
+        with self.assertLogs(level="WARNING") as logs:
+            task = bridge.in_background(asyncio.Event().wait(), "closing a test stream")
+            await task
+        self.assertIn("closing a test stream did not finish within 0.2s", "\n".join(logs.output))
 
     async def test_rotation_behind_a_stalled_open_ends_the_session(self):
         bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 0.5

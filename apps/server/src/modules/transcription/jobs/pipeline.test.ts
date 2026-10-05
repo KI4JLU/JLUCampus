@@ -16,6 +16,7 @@ import {
 } from '@justcampus/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { bearer, forgetKeys } from '../http.js'
 import type { TranscriptionStorage } from '../storage.js'
 import { cutAudio, MediaToolError, normalizeAudio, probeMedia } from './media.js'
 import {
@@ -184,6 +185,11 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
       request.on('end', () => {
         if (request.url?.startsWith('/d415/')) {
           response.writeHead(415).end()
+          return
+        }
+        if (request.url?.startsWith('/dshape/')) {
+          response.writeHead(200, { 'Content-Type': 'application/json' })
+          response.end('{"segments":"not a list"}')
           return
         }
         if (request.url?.startsWith('/none/')) {
@@ -494,6 +500,29 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     )
     expect(done.result!.words.every((word) => word.speaker === 'Anna')).toBe(true)
     expect(done.error).toMatchObject({ code: 'diarization_failed' })
+  }, 60_000)
+
+  it('keeps the fallback for a malformed diarisation after short keys elsewhere (D-2)', async () => {
+    const id = '00000000-0000-4000-8000-0000000000a9'
+    const storage = await storageWith(id, 'talk.wav')
+    // Short keys another request sent before, e.g. an admin connection test; the diariser's own
+    // key here is the one-letter speech key.
+    bearer('a')
+    bearer('JSON')
+    try {
+      const analyzed = await runAnalysis(
+        run(jobRow(id), storage, config({ diarizationUrl: `${helperUrl}/dshape/v1` }))
+      )
+      expect(analyzed.status).toBe('analyzed')
+      expect(analyzed.speakers).toEqual([expect.objectContaining({ id: 'SPEAKER_00' })])
+      expect(analyzed.error).toEqual({
+        code: 'diarization_failed',
+        message:
+          'Sprechererkennung nicht verfügbar (Diarization-Server lieferte eine unerwartete Antwort). Die Datei hat eine automatische Stimme.'
+      })
+    } finally {
+      forgetKeys()
+    }
   }, 60_000)
 
   it('fails a recognition longer than a transcript holds instead of cutting it', async () => {

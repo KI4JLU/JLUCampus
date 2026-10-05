@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { forgetKeys, UpstreamError } from '../http.js'
+import { bearer, forgetKeys, UpstreamError } from '../http.js'
 import {
   normalizeLanguage,
   parseVerboseJson,
@@ -21,6 +21,7 @@ import {
   vadTimeoutMs
 } from './diarization.js'
 import { ConcurrencyLimiter } from './limiter.js'
+import { diarizationUnavailable, upstreamReason } from './pipeline.js'
 import { isRetryable, isRetryableInTime, postToServer, withRetry } from './upstream.js'
 
 let directory: string
@@ -475,6 +476,65 @@ describe('diarisation adapter (Speaches contract)', () => {
       ).catch((caught: unknown) => caught)) as UpstreamError
       expect(error.status).toBe(403)
       expect(error.detail).not.toContain(key.slice(0, 3))
+    }
+  })
+
+  it('classifies failures on the raw answer, whatever the keys (D-2)', async () => {
+    // What the diariser answers, and what the analysis makes of it (`runAnalysis`): `true` keeps
+    // one automatic voice with the notice, `false` fails the analysis as kiChat does.
+    const answers: Array<[string, () => Response, boolean, string]> = [
+      [
+        'malformed',
+        () => Response.json({ segments: 'x' }),
+        true,
+        'lieferte eine unerwartete Antwort'
+      ],
+      [
+        'no JSON',
+        () => new Response('<html>', { status: 200 }),
+        true,
+        'lieferte eine unerwartete Antwort'
+      ],
+      ['kiChat 415', () => new Response('', { status: 415 }), false, 'antwortete mit Status 415'],
+      [
+        'no endpoint',
+        () => new Response('{"detail":"Not Found"}', { status: 404 }),
+        true,
+        'antwortete mit Status 404'
+      ],
+      [
+        'down',
+        () => new Response('Service a JSON', { status: 503 }),
+        true,
+        'antwortete mit Status 503'
+      ]
+    ]
+    const classify = async (
+      respond: () => Response,
+      apiKey: string | null
+    ): Promise<[boolean, string]> => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => respond())
+      )
+      const error = await diarizeFile(
+        wav,
+        10,
+        { model: 'p', speakerCount: 'auto' },
+        { baseUrl: 'https://diar.test/v1', apiKey, backoffMs: () => 0 }
+      ).catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(UpstreamError)
+      return [diarizationUnavailable(error), upstreamReason(error, 'Diarization-Server')]
+    }
+    for (const [, respond, unavailable, reason] of answers) {
+      forgetKeys()
+      expect(await classify(respond, null)).toEqual([unavailable, `Diarization-Server ${reason}`])
+      for (const key of ['a', 'e', 'JSON', 'shape', 'Status', '"', '%', 'diarization-key-long']) {
+        // The diariser's own key, and a short key of another request before (the admin test).
+        expect(await classify(respond, key)).toEqual([unavailable, `Diarization-Server ${reason}`])
+        bearer(key)
+        expect(await classify(respond, 'k')).toEqual([unavailable, `Diarization-Server ${reason}`])
+      }
     }
   })
 

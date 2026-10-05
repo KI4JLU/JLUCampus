@@ -193,10 +193,22 @@ export async function diarizeFile(
       secrets
     )
   }
+  // Decided on the raw answer; the error's words are masked afterwards and decide nothing.
+  let body: unknown
   try {
-    return parseDiarization(JSON.parse(answer.body))
+    body = JSON.parse(answer.body)
   } catch {
-    throw new UpstreamError(`${label} answered in an unexpected shape`, answer.status)
+    throw UpstreamError.invalidAnswer(`${label} did not answer with JSON`, answer.status)
+  }
+  try {
+    return parseDiarization(body)
+  } catch {
+    throw UpstreamError.invalidAnswer(
+      `${label} answered in an unexpected shape`,
+      answer.status,
+      answer.body,
+      secrets
+    )
   }
 }
 

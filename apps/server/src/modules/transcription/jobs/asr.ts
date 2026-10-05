@@ -229,7 +229,7 @@ export async function transcribeFile(
   try {
     return parseVerboseJson(body, chunkDuration)
   } catch {
-    throw new UpstreamError(`${label} answered in an unexpected shape`, response.status)
+    throw UpstreamError.invalidAnswer(`${label} answered in an unexpected shape`, response.status)
   }
 }
 

@@ -5,8 +5,8 @@ with the same protocol. Changes against the original, marked "Campus:" below: JS
 with the gateway's status, `POST /probe`, a connect timeout for peers that never connect, TURN
 credentials minted from a shared secret (coturn `use-auth-secret`), a mandatory BRIDGE_API_KEY,
 a session limit with idle and lifetime limits, deadlines for the upstream handshake, the
-negotiation and the probe, coalesced rotations, and upstream errors masked before they reach a log
-or a client.
+negotiation and the probe with their cleanup after the answer, coalesced rotations, and nothing
+the upstream says in a log or an answer.
 
 Bridges browser WebRTC connections to the vLLM realtime speech-to-text WebSocket (reached through
 the LiteLLM gateway). Exists because vLLM's realtime endpoint is WebSocket-only: a browser
@@ -134,10 +134,13 @@ def capacity_left() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Masking
+# What reaches a log or a client
 # ---------------------------------------------------------------------------
-# Campus: a gateway may reflect the key it refused in its error. Nothing the upstream says
-# reaches a log or a client unmasked; clients only get fixed messages.
+# Campus: a gateway may reflect the key it refused in its error, in any spelling (escaped, encoded,
+# quoted). So nothing the upstream says reaches a log or a client at all, masked or not: logs get
+# a fixed code, the gateway's status, the text's length in bytes and a keyed hash of it (`trace`),
+# exceptions only their class name; clients and the Campus server get fixed codes and messages.
+# mask() remains as a second line for the bridge's own messages.
 _BEARER = re.compile(r"Bearer\s+(?!\*\*\*)[^\s\"',;)\]}]+", re.IGNORECASE)
 _SK = re.compile(r"\bsk-(?!\*\*\*)[\w-]{6,}")
 _KEY_FIELD = re.compile(
@@ -150,7 +153,8 @@ _KEY_FIELD = re.compile(
 def mask(text, *secrets: str, limit: int = 300) -> str:
     """`text` with the given secrets, however short, and anything that looks like a key masked,
     cut to `limit` afterwards (cut first, the start of a key at the cut would stay). Longer
-    secrets go first, so one inside another leaves no rest of the longer one."""
+    secrets go first, so one inside another leaves no rest of the longer one. Only for the
+    bridge's own messages: upstream text never reaches a log (`trace`)."""
     safe = str(text)
     spellings = set()
     for secret in (BRIDGE_API_KEY, *secrets):
@@ -164,15 +168,26 @@ def mask(text, *secrets: str, limit: int = 300) -> str:
     return safe[:limit]
 
 
-def upstream_error_detail(event: dict, *secrets: str) -> str:
-    """Campus: an upstream `error` event as one masked line for the log."""
-    error = event.get("error")
-    if isinstance(error, dict):
-        code = error.get("code") or error.get("type") or "error"
-        detail = f"{code}: {error.get('message', '')}"
-    else:
-        detail = str(error or event.get("message") or "error")
-    return mask(detail, *secrets)
+# Campus: the key of `trace`'s hash, new for every process, so a hash in the log tells two
+# answers apart (or alike) but cannot be checked against a guessed key.
+_TRACE_KEY = os.urandom(32)
+
+
+def trace(text) -> str:
+    """Campus: what the log learns of an upstream text: its length in bytes and a short keyed
+    hash, never the text itself."""
+    data = text if isinstance(text, bytes) else str(text or "").encode("utf-8", "replace")
+    digest = hmac.new(_TRACE_KEY, data, hashlib.sha256).hexdigest()[:12]
+    return f"{len(data)} bytes, hash {digest}"
+
+
+def failure_text(exc: BaseException) -> str:
+    """Campus: an exception as the log names it: the bridge's own (a refused or stalled
+    handshake) with their message, any other by its class only, as its text may quote the
+    upstream."""
+    if isinstance(exc, (UpstreamRejected, UpstreamTimeout)):
+        return str(exc)
+    return type(exc).__name__
 
 
 # What clients learn about an upstream failure (data channel); never the upstream's own words.
@@ -320,6 +335,35 @@ async def close_quietly(ws) -> None:
         pass
 
 
+# Campus: cleanup after a failed or overdue negotiation or probe runs after the answer, so closing
+# a stream (up to its five seconds of ws_close) cannot push the answer past NEGOTIATE_TIMEOUT_S or
+# PROBE_TIMEOUT_S, and with the Campus server's 15 s. It gets CLEANUP_TIMEOUT_S, then it is
+# cancelled. The tasks are kept here until they end.
+CLEANUP_TIMEOUT_S = float(os.environ.get("CLEANUP_TIMEOUT_S", "10"))
+BACKGROUND_TASKS: set = set()
+
+
+def keep(task: asyncio.Future) -> asyncio.Future:
+    """Campus: holds a task that runs on after its answer until it ends."""
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
+    return task
+
+
+def in_background(coro, what: str) -> asyncio.Future:
+    """Campus: runs a cleanup after the answer, within CLEANUP_TIMEOUT_S."""
+
+    async def run():
+        try:
+            await asyncio.wait_for(coro, CLEANUP_TIMEOUT_S)
+        except TimeoutError:
+            logger.warning("%s did not finish within %gs", what, CLEANUP_TIMEOUT_S)
+        except Exception as exc:
+            logger.warning("%s failed: %s", what, failure_text(exc))
+
+    return keep(asyncio.ensure_future(run()))
+
+
 async def start_stream(http: aiohttp.ClientSession, url: str, gateway_key: str, model: str):
     """Campus: one upstream stream with its model validated (session.update), within
     UPSTREAM_HANDSHAKE_TIMEOUT_S for each step; a stream that does not get there is closed."""
@@ -330,10 +374,11 @@ async def start_stream(http: aiohttp.ClientSession, url: str, gateway_key: str, 
             # (note: `model` sits at the event's top level, unlike OpenAI).
             await ws.send_json({"type": "session.update", "model": model})
     except TimeoutError:
-        await close_quietly(ws)
+        # Campus: closed after the answer (`in_background`), not before it.
+        in_background(close_quietly(ws), "closing a stalled upstream stream")
         raise UpstreamTimeout(UPSTREAM_HANDSHAKE_TIMEOUT_S) from None
     except BaseException:
-        await close_quietly(ws)
+        in_background(close_quietly(ws), "closing an upstream stream")
         raise
     return ws
 
@@ -553,10 +598,8 @@ class BridgeSession:
                     )
                     done.set()
                 elif etype == "error":
-                    # Campus: masked in the log, a fixed message for the client.
-                    self.log.error(
-                        "upstream error: %s", upstream_error_detail(event, self.gateway_key)
-                    )
+                    # Campus: neither the log nor the client get the gateway's words (`trace`).
+                    self.log.error("upstream error event (%s, %s)", item_id, trace(msg.data))
                     self._channel_send(
                         {
                             "type": "conversation.item.input_audio_transcription.failed",
@@ -569,7 +612,7 @@ class BridgeSession:
                     done.set()
         except Exception as exc:
             if not self.closed:
-                self.log.warning("upstream reader ended: %s", mask(repr(exc), self.gateway_key))
+                self.log.warning("upstream reader ended: %s", failure_text(exc))
         finally:
             done.set()
 
@@ -728,7 +771,7 @@ class BridgeSession:
             try:
                 new_ws, new_done = await opening
             except Exception as exc:
-                self.log.error("next upstream failed: %s", mask(repr(exc), self.gateway_key))
+                self.log.error("next upstream failed: %s", failure_text(exc))
                 self._channel_send(
                     {
                         "type": "conversation.item.input_audio_transcription.failed",
@@ -859,52 +902,70 @@ async def handle_realtime(request: web.Request) -> web.Response:
     if not offer_sdp.startswith("v="):
         return error_response(400, "bad_request", "body must be an SDP offer")
 
-    # Campus: the slot is taken before anything opens and freed by close() on every path.
+    # Campus: the slot is taken before anything opens and freed on every path.
     if not capacity_left():
         logger.warning("session refused: %d sessions open (MAX_SESSIONS)", len(ACTIVE_SESSIONS))
         return error_response(503, "busy", "the bridge holds as many sessions as it takes")
     session = BridgeSession(*gateway)
     ACTIVE_SESSIONS.add(session)
+
+    def drop(reason: str) -> None:
+        """Frees the slot now and closes the session after the answer."""
+        ACTIVE_SESSIONS.discard(session)
+        in_background(session.close(), f"closing a session after {reason}")
+
+    # Campus: the whole negotiation has a deadline, so a stalled step frees the slot, and the
+    # answer does not wait for the cleanup of a negotiation that ran out of time (`in_background`).
+    negotiation = asyncio.ensure_future(session.negotiate(offer_sdp))
     try:
-        # Campus: the whole negotiation has a deadline, so a stalled step frees the slot.
-        answer_sdp = await asyncio.wait_for(session.negotiate(offer_sdp), NEGOTIATE_TIMEOUT_S)
-    except (UpstreamTimeout, TimeoutError) as exc:
-        reason = (
-            str(exc)
-            if isinstance(exc, UpstreamTimeout)
-            else f"the negotiation did not complete within {NEGOTIATE_TIMEOUT_S:g}s"
+        await asyncio.wait({negotiation}, timeout=NEGOTIATE_TIMEOUT_S)
+    except BaseException:
+        negotiation.cancel()
+        keep(negotiation)
+        drop("a cancelled request")
+        raise
+    if not negotiation.done():
+        negotiation.cancel()
+        keep(negotiation)
+        logger.error("negotiation did not complete within %gs", NEGOTIATE_TIMEOUT_S)
+        drop("its negotiation deadline")
+        return error_response(
+            504,
+            "upstream_failed",
+            f"upstream connection failed: the negotiation did not complete within "
+            f"{NEGOTIATE_TIMEOUT_S:g}s",
         )
-        logger.error("negotiation failed: %s", reason)
-        await session.close()
-        return error_response(504, "upstream_failed", f"upstream connection failed: {reason}")
+    try:
+        answer_sdp = negotiation.result()
+    except UpstreamTimeout as exc:
+        logger.error("negotiation failed: %s", exc)
+        drop("a stalled handshake")
+        return error_response(504, "upstream_failed", f"upstream connection failed: {exc}")
     except UpstreamRejected as exc:
         logger.error("negotiation failed: %s", exc)
-        await session.close()
+        drop("a refused handshake")
         return error_response(
             502, "upstream_rejected", str(exc), upstream_status=exc.status, model=gateway[2]
         )
     except OfferRefused as exc:
-        logger.warning("offer refused: %s", exc)
-        await session.close()
-        return error_response(400, "bad_offer", f"the offer cannot be negotiated: {exc}"[:300])
+        # The offer is the Campus server's, aiortc's words about it are no gateway's.
+        logger.warning("offer refused: %s", mask(exc, gateway[1]))
+        drop("a refused offer")
+        return error_response(400, "bad_offer", "the offer cannot be negotiated")
     except Exception as exc:
-        detail = mask(repr(exc), gateway[1])
-        logger.error("negotiation failed: %s", detail)
-        await session.close()
-        return error_response(
-            502, "upstream_failed", f"upstream connection failed: {mask(exc, gateway[1])}"
-        )
-    except BaseException:
-        await session.close()
-        raise
+        # Campus: the exception's text may quote the gateway; neither log nor answer get it.
+        logger.error("negotiation failed: %s", failure_text(exc))
+        drop("a failed negotiation")
+        return error_response(502, "upstream_failed", "upstream connection failed")
 
     return web.Response(content_type="application/sdp", text=answer_sdp)
 
 
-async def probe_refusal(ws, model: str, gateway_key: str = "") -> web.Response | None:
+async def probe_refusal(ws, model: str) -> web.Response | None:
     """Campus: the upstream's refusal of the model within PROBE_WAIT_S, as an error answer, or
     None when it refuses nothing (vLLM answers a valid session.update with nothing or with a
-    session event; `session.created` may come first)."""
+    session event; `session.created` may come first). The answer has fixed words; the log the
+    refusal's length and hash (`trace`)."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + PROBE_WAIT_S
     while True:
@@ -920,16 +981,14 @@ async def probe_refusal(ws, model: str, gateway_key: str = "") -> web.Response |
                 event = json.loads(msg.data)
             except ValueError:
                 continue
+            if not isinstance(event, dict):
+                continue
             if event.get("type") == "session.updated":
                 return None
             if event.get("type") == "error":
-                error = event.get("error")
-                detail = error.get("message") if isinstance(error, dict) else error
+                logger.warning("probe: upstream error event (%s)", trace(msg.data))
                 return error_response(
-                    502,
-                    "upstream_error",
-                    mask(detail or "upstream error", gateway_key),
-                    model=model,
+                    502, "upstream_error", "the gateway refused the realtime session", model=model
                 )
         elif msg.type in (
             aiohttp.WSMsgType.CLOSE,
@@ -937,12 +996,15 @@ async def probe_refusal(ws, model: str, gateway_key: str = "") -> web.Response |
             aiohttp.WSMsgType.CLOSED,
             aiohttp.WSMsgType.ERROR,
         ):
+            code = msg.data if isinstance(msg.data, int) else None
             reason = msg.extra if isinstance(msg.extra, str) else ""
+            logger.warning("probe: upstream closed (code %s, reason %s)", code, trace(reason))
             return error_response(
                 502,
                 "upstream_closed",
-                mask(reason or "the gateway closed the realtime connection", gateway_key),
+                "the gateway closed the realtime connection",
                 model=model,
+                **({"upstream_close_code": code} if code is not None else {}),
             )
 
 
@@ -961,16 +1023,25 @@ async def handle_probe(request: web.Request) -> web.Response:
 
     global active_probes
     active_probes += 1
+    # Campus: the whole probe has a deadline besides PROBE_WAIT_S, so it always frees its slot;
+    # one that runs out of time is cancelled and closes its stream after the answer.
+    probing = asyncio.ensure_future(probe(gateway_base, gateway_key, model))
     try:
-        # Campus: the whole probe has a deadline besides PROBE_WAIT_S, so it always frees its slot.
-        return await asyncio.wait_for(probe(gateway_base, gateway_key, model), PROBE_TIMEOUT_S)
-    except TimeoutError:
+        await asyncio.wait({probing}, timeout=PROBE_TIMEOUT_S)
+        if probing.done():
+            return probing.result()
+        probing.cancel()
+        keep(probing)
         logger.error("probe did not complete within %gs", PROBE_TIMEOUT_S)
         return error_response(
             504,
             "upstream_failed",
             f"upstream connection failed: the probe did not complete within {PROBE_TIMEOUT_S:g}s",
         )
+    except BaseException:
+        probing.cancel()
+        keep(probing)
+        raise
     finally:
         active_probes -= 1
 
@@ -978,7 +1049,9 @@ async def handle_probe(request: web.Request) -> web.Response:
 async def probe(gateway_base: str, gateway_key: str, model: str) -> web.Response:
     """Campus: the probe itself (handle_probe), within the handshake deadlines of start_stream."""
     timeout = aiohttp.ClientTimeout(total=None, connect=UPSTREAM_CONNECT_TIMEOUT_S)
-    async with aiohttp.ClientSession(timeout=timeout) as http:
+    http = aiohttp.ClientSession(timeout=timeout)
+    ws = None
+    try:
         try:
             ws = await start_stream(http, realtime_url(gateway_base, model), gateway_key, model)
         except UpstreamRejected as exc:
@@ -988,16 +1061,21 @@ async def probe(gateway_base: str, gateway_key: str, model: str) -> web.Response
         except UpstreamTimeout as exc:
             return error_response(504, "upstream_failed", f"upstream connection failed: {exc}")
         except Exception as exc:
-            return error_response(
-                502, "upstream_failed", f"upstream connection failed: {mask(exc, gateway_key)}"
-            )
-        try:
-            refusal = await probe_refusal(ws, model, gateway_key)
-            if refusal is not None:
-                return refusal
-        finally:
-            await close_quietly(ws)
-    return web.json_response({"ok": True, "model": model})
+            logger.warning("probe failed: %s", failure_text(exc))
+            return error_response(502, "upstream_failed", "upstream connection failed")
+        refusal = await probe_refusal(ws, model)
+        return refusal if refusal is not None else web.json_response({"ok": True, "model": model})
+    finally:
+        # Campus: the stream closes after the answer, so a slow close cannot delay it.
+        in_background(close_probe(ws, http), "closing a probe")
+
+
+async def close_probe(ws, http: aiohttp.ClientSession) -> None:
+    """Campus: a probe's stream, then its HTTP session."""
+    try:
+        await close_quietly(ws)
+    finally:
+        await http.close()
 
 
 async def handle_health(_request: web.Request) -> web.Response:

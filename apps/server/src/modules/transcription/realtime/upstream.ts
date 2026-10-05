@@ -51,11 +51,16 @@ export function parseSignalingAnswer(
     sdp = body
   }
   if (!sdp || !isSdp(sdp) || sdp.length > SDP_MAX) {
-    throw new UpstreamError('The signaling bridge answered without an SDP answer', 200)
+    throw UpstreamError.invalidAnswer('The signaling bridge answered without an SDP answer', 200)
   }
   const problem = sdpAnswerProblem(sdp.trimStart(), offer)
   if (problem) {
-    throw new UpstreamError(`The signaling bridge answered with an unusable SDP: ${problem}`, 200)
+    // What is wrong quotes the answer: detail, for logs only.
+    throw UpstreamError.invalidAnswer(
+      'The signaling bridge answered with an unusable SDP',
+      200,
+      problem
+    )
   }
   return sdp
 }
@@ -94,11 +99,11 @@ export function parseClientSecret(
 ): { value: string; expiresAt: string | null } {
   const parsed = clientSecretSchema.safeParse(body)
   if (!parsed.success) {
-    throw new UpstreamError('OpenAI answered without an ephemeral key', 200)
+    throw UpstreamError.invalidAnswer('OpenAI answered without an ephemeral key', 200)
   }
   const expires = parsed.data.expires_at
   if (typeof expires === 'number' && expires * 1000 <= now.getTime()) {
-    throw new UpstreamError('OpenAI answered with an ephemeral key that has expired', 200)
+    throw UpstreamError.invalidAnswer('OpenAI answered with an ephemeral key that has expired', 200)
   }
   return {
     value: parsed.data.value,
@@ -131,7 +136,7 @@ export async function issueClientSecret(
   try {
     body = await response.json()
   } catch {
-    throw new UpstreamError('OpenAI Realtime did not answer with JSON', response.status)
+    throw UpstreamError.invalidAnswer('OpenAI Realtime did not answer with JSON', response.status)
   }
   return parseClientSecret(body)
 }

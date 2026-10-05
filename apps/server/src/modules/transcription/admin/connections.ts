@@ -524,7 +524,7 @@ export async function testConnection(
         try {
           await onpremSignaling(target, probeOffer(), signal)
         } catch (error) {
-          if (error instanceof UpstreamError && error.status === 200) {
+          if (error instanceof UpstreamError && error.kind === 'invalidAnswer') {
             throw new CheckFailed({ kind: 'invalidAnswer', expected: 'sdpAnswer' }, 200)
           }
           unavailable(error)

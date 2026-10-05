@@ -172,10 +172,11 @@ describe('masking whatever the key (C-1)', () => {
     // Even one character: the request's own key is masked whatever its length.
     refusing('key x refused')
     expect((await failure({ Authorization: 'Bearer x' })).detail).not.toMatch(/\bx\b/)
+    // A key of another request is masked only from RECENT_KEY_MIN characters on (D-2).
     bearer('review7')
-    await expect(
-      ensureOk(new Response('Rejected credential review7', { status: 403 }), 'gateway')
-    ).rejects.toMatchObject({ detail: 'Rejected credential ***' })
+    expect(maskSecrets('Rejected credential review7')).toBe('Rejected credential review7')
+    bearer('review-key-8')
+    expect(maskSecrets('Rejected credential review-key-8')).toBe('Rejected credential ***')
   })
 
   it('masks the whole body before cutting it short', async () => {
@@ -260,5 +261,72 @@ describe('parseModels', () => {
       { id: 'jlu/whisper-1', label: 'jlu/whisper-1' },
       { id: 'llama', label: 'Llama 3' }
     ])
+  })
+})
+
+describe('failures decided on the raw answer (D-2)', () => {
+  /** Keys that a mask would find in ordinary words, quotes and escapes. */
+  const oddKeys = ['a', 'e', 'JSON', 'Status', 'unexpected', 'shape', '"', '%', '\\', '200']
+
+  const failures = async (key: string | null): Promise<UpstreamError[]> => {
+    const answers = [
+      () => new Response('not json', { status: 200 }),
+      () => Response.json({ other: 'shape' }),
+      () => new Response('', { status: 415 }),
+      () => new Response(`Rejected ${key ?? ''}`, { status: 503 })
+    ]
+    const errors: UpstreamError[] = []
+    for (const respond of answers) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => respond())
+      )
+      const caught = await fetchJson('https://gw.example/v1/x', z.object({ ok: z.boolean() }), {
+        label: 'The gateway',
+        headers: bearer(key)
+      }).catch((error: unknown) => error)
+      errors.push(caught as UpstreamError)
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('fetch failed')
+      })
+    )
+    errors.push(
+      (await upstreamFetch('https://gw.example/v1/x', { headers: bearer(key) }).catch(
+        (error: unknown) => error
+      )) as UpstreamError
+    )
+    return errors
+  }
+  const classes = (
+    errors: UpstreamError[]
+  ): Array<Pick<UpstreamError, 'kind' | 'status' | 'timedOut'>> =>
+    errors.map(({ kind, status, timedOut }) => ({ kind, status, timedOut }))
+
+  it('classifies the same with and without short or odd keys', async () => {
+    const expected = classes(await failures(null))
+    expect(expected).toEqual([
+      { kind: 'invalidAnswer', status: 200, timedOut: false },
+      { kind: 'invalidAnswer', status: 200, timedOut: false },
+      { kind: 'status', status: 415, timedOut: false },
+      { kind: 'status', status: 503, timedOut: false },
+      { kind: 'unreachable', status: null, timedOut: false }
+    ])
+    for (const key of oddKeys) {
+      // As the request's own key, and as a key another request sent lately.
+      expect(classes(await failures(key))).toEqual(expected)
+      bearer(key)
+      expect(classes(await failures('another-key-of-a-request'))).toEqual(expected)
+    }
+  })
+
+  it('leaves the words of other requests alone for short keys sent lately', async () => {
+    bearer('a')
+    bearer('JSON')
+    const error = UpstreamError.invalidAnswer('The gateway did not answer with JSON', 200)
+    expect(error.message).toBe('The gateway did not answer with JSON')
+    expect(error.kind).toBe('invalidAnswer')
   })
 })
