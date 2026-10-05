@@ -287,11 +287,22 @@ The server runs the whole pipeline. Browsers upload each file straight to object
 with a signed `PUT` for exactly its size and type (`storage.ts`, `@aws-sdk/client-s3`);
 the server checks the stored bytes, then a worker normalises and chunks the audio with
 `ffmpeg` (`TRANSCRIPTION_FFMPEG`, `TRANSCRIPTION_FFPROBE`, installed in the Docker image),
-analyses the voices with the admin's HTTP diarisation endpoint, transcribes through an
-OpenAI-compatible `POST /audio/transcriptions` (`verbose_json` with segments) and corrects
+analyses the voices with a Speaches diarisation server, transcribes through an
+OpenAI-compatible `POST /audio/transcriptions` (`verbose_json` with word times) and corrects
 the text with an OpenAI-compatible chat endpoint, which also writes summaries, subtitles
-and speaker optimisations. Diarised speakers get the name of the user's voice whose sample
-windows overlap them most. Playback and samples use fresh signed `GET` URLs from
+and speaker optimisations. This is kiChat's batch pipeline (`jobs/`): `asrBaseUrl` takes up to
+ten comma-separated speech workers, which take the chunks in parallel waves; one budget of
+`asrConcurrency` requests per server process (`jobs/limiter.ts`) covers transcription,
+diarisation and VAD; transport errors and `5xx` are retried three times (`jobs/upstream.ts`).
+The analysis diarises the whole file and offers samples per voice; the transcription diarises
+again with the named voices as known speakers (`known_speaker_references`, WAV cut from the
+normalised audio) plus VAD, and maps words to speakers by time overlap (`jobs/mapping.ts`,
+kiChat's `mapDiarizationSegments`). `diarizationUrl` is the Speaches base up to `/v1` (empty:
+the first speech worker), `diarizationApiKey` its key (empty: the speech key). A diariser that
+cannot be reached or refuses the key leaves the file one automatic voice; the job then carries
+`error: {code: 'diarization_failed'}` as a notice on an `analyzed` or `completed` job, and a
+failed LLM correction `correction_failed`, which the upload queue shows on the file's row.
+Playback and samples use fresh signed `GET` URLs from
 authenticated routes; signed URLs are never stored. The analysis also stores the waveform
 (20 peaks per second) right after normalising, before diarisation, for files too large for
 the browser to decode; the upload queue asks for it once the analysis ended, failed or not.
@@ -361,11 +372,13 @@ understands; endpoints that refuse unknown parameters (OpenAI) need it off.
 - **Summaries and previews** (`summaries/generate.ts`, kiChat's `summarize`): one request per AI
   section, kiChat's system prompt, then the instruction, `TRANSKRIPT:` and the transcript;
   previews read kiChat's reduced sample (beginning, middle, end, 2000 tokens).
-- **Speaker optimisation** (`optimize/speakers.ts`, kiChat's `optimizeTranscriptSpeakers`):
-  kiChat's prompt and `{original_index, text, speaker}` answer in batches of 150 segments. The
-  route takes only the speaker of most of each segment's text, as the client keeps text, timing
-  and redactions; `optimizeTranscriptSpeakers` restructures like kiChat (splits with
-  interpolated times, corrected text, same-speaker neighbours merged).
+- **LLM correction** (`jobs/correction.ts`, kiChat's `optimizeTranscriptSpeakers` after
+  recognition): kiChat's prompt and `{original_index, text, speaker}` answer, in batches of 150
+  segments or 20,000 characters; splits timed by text length, speaker labels removed,
+  same-speaker neighbours under 3 s apart merged. A failure leaves the text uncorrected.
+- **Speaker optimisation** (`optimize/speakers.ts`, the result view's button): the same prompt
+  and answer; the route takes only the speaker of most of each segment's text, as the client
+  keeps text, timing and redactions.
 
 Campus adds: the model reads redacted passages as `[AUSGEBLENDET]` (summaries then get one
 sentence not to guess them, and redacted segments keep their text), names the model invents are

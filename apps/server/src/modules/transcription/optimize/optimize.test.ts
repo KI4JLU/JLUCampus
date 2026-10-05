@@ -8,17 +8,13 @@ import {
   testApp,
   type RunningMock
 } from '../transcripts/testing.js'
+import { CORRECTION_SYSTEM_PROMPT, correctionPrompt } from '../jobs/correction.js'
 import { optimizeRouter } from './index.js'
 import {
   applyAssignments,
-  buildOptimizationPrompt,
   formatSegments,
-  mergeSpeakerRuns,
-  OPTIMIZATION_SYSTEM_PROMPT,
   optimizeSpeakers,
-  optimizeTranscriptSpeakers,
   parseCorrections,
-  restructureBatch,
   speakerAssignments,
   UnusableOptimizationError
 } from './speakers.js'
@@ -94,7 +90,7 @@ describe('kiChat’s prompt', () => {
         'Segment [1] (Unbekannt): Gut, ich war in [AUSGEBLENDET].\n' +
         'Segment [2] (Ben): Schön.\n'
     )
-    const prompt = buildOptimizationPrompt(listed)
+    const prompt = correctionPrompt(listed)
     expect(prompt).toContain('Hier ist das Transkript:\n' + listed + '\n')
     expect(prompt).toContain('"original_index"')
     expect(prompt.endsWith('kein Markdown-Fencing (kein ```json).')).toBe(true)
@@ -141,7 +137,7 @@ describe('speakers only (the route)', () => {
     })
     expect(bodies[0]).not.toHaveProperty('temperature')
     const messages = bodies[0]!.messages as Array<{ role: string; content: string }>
-    expect(messages[0]).toEqual({ role: 'system', content: OPTIMIZATION_SYSTEM_PROMPT })
+    expect(messages[0]).toEqual({ role: 'system', content: CORRECTION_SYSTEM_PROMPT })
   })
 
   it('lets Unbekannt take no name away', () => {
@@ -167,80 +163,6 @@ describe('speakers only (the route)', () => {
     const changed = applyAssignments(segments, new Map([[2, 'Ben']]))
     expect(changed[0]).toBe(segments[0])
     expect(changed[1]).toEqual({ ...segments[1], speaker: 'Ben' })
-  })
-})
-
-describe('restructuring (after recognition)', () => {
-  afterEach(() => vi.restoreAllMocks())
-
-  const long: TranscriptionSegment[] = [
-    {
-      id: 4,
-      start: 10,
-      end: 14,
-      text: ' Ich habe mir die Zahlen angeschaut. Oh Mann! Aber wir warten.',
-      speaker: 'Anna',
-      redactions: [],
-      tokens: [7, 8],
-      avgLogprob: -0.1,
-      words: [
-        { start: 10, end: 11, word: 'Ich' },
-        { start: 12.4, end: 12.6, word: 'Oh' },
-        { start: 13.5, end: 13.9, word: 'warten' }
-      ]
-    },
-    { id: 9, start: 14.5, end: 16, text: 'Das passt so.', speaker: 'Ben', redactions: [] }
-  ]
-
-  it('splits by text length, assigns words by their middle, strips labels and merges', async () => {
-    answerWith(
-      JSON.stringify([
-        { original_index: 0, text: 'Ich habe mir die Zahlen angeschaut.', speaker: 'Anna' },
-        { original_index: 0, text: 'Ben: Oh Mann!', speaker: 'Ben' },
-        { original_index: 0, text: 'Aber wir warten.', speaker: 'Anna' },
-        { original_index: 1, text: 'Das passt so.', speaker: 'Anna' }
-      ])
-    )
-    const result = await optimizeTranscriptSpeakers(target, long)
-    expect(result.map(({ id, speaker, text }) => ({ id, speaker, text }))).toEqual([
-      { id: 4, speaker: 'Anna', text: 'Ich habe mir die Zahlen angeschaut.' },
-      { id: 10, speaker: 'Ben', text: 'Oh Mann!' },
-      { id: 11, speaker: 'Anna', text: 'Aber wir warten. Das passt so.' }
-    ])
-    // 35 + 8 + 16 characters over four seconds.
-    expect(result[0]).toMatchObject({ start: 10, end: 12.37, avgLogprob: -0.1 })
-    expect(result[0]).not.toHaveProperty('tokens')
-    expect(result[0]!.words!.map((word) => word.word)).toEqual(['Ich'])
-    expect(result[1]!.words!.map((word) => word.word)).toEqual(['Oh'])
-    expect(result[2]).toMatchObject({ start: 12.92, end: 16 })
-  })
-
-  it('keeps redacted text, untrusted rewrites and segments the model left out', () => {
-    const grouped = new Map([
-      [
-        0,
-        [{ text: 'Ein ganz anderer Text, viel länger als das Original davor.', resolved: 'Ben' }]
-      ],
-      [1, [{ text: 'Gut, ich war in Berlin.', resolved: 'Ben' }]]
-    ])
-    let next = 100
-    const result = restructureBatch(segments, grouped, ['Anna', 'Ben'], () => next++)
-    expect(result[0]).toEqual({ ...segments[0], speaker: 'Ben' })
-    expect(result[1]).toEqual({ ...segments[1], speaker: 'Ben' })
-    expect(result[2]).toBe(segments[2])
-    expect(
-      restructureBatch(
-        long.slice(0, 1),
-        new Map([[0, [{ text: 'Ja.', resolved: 'Ben' }]]]),
-        ['Anna', 'Ben'],
-        () => next++
-      )[0]
-    ).toEqual({ ...long[0], speaker: 'Ben' })
-  })
-
-  it('does not merge redacted segments', () => {
-    const redacted = { ...segments[1]!, speaker: 'Anna', start: 4.2 }
-    expect(mergeSpeakerRuns([segments[0]!, redacted])).toHaveLength(2)
   })
 })
 

@@ -32,7 +32,7 @@ const configured: TranscriptionComponentConfig = {
     { id: 'jlu/whisper-2', label: 'Whisper 2' }
   ],
   diarizationEnabled: true,
-  diarizationUrl: 'http://localhost:9200/diarization/diarize',
+  diarizationUrl: 'http://localhost:9200/diarization/v1',
   llmBaseUrl: 'http://localhost:9200/llm/v1',
   llmModels: [
     { id: 'small', label: 'Small' },
@@ -40,7 +40,7 @@ const configured: TranscriptionComponentConfig = {
   ],
   defaultSummaryModel: 'large',
   realtimeModes: ['onprem', 'openai'],
-  onpremSignalingUrl: 'http://localhost:9200/realtime/onprem/signaling'
+  onpremSignalingUrl: 'http://localhost:9200/realtime/bridge'
 }
 
 describe('model choice', () => {
