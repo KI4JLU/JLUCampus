@@ -54,13 +54,25 @@ export function llmModel(
   return listed(requested) ?? listed(fallback) ?? config.llmModels[0]?.id ?? null
 }
 
-/** The live modes that are set up: on-prem needs its bridge, OpenAI its key. */
+/**
+ * The gateway of the on-prem live path up to `/v1`: the admin's, else the speech endpoint (its
+ * first worker); `null` without either.
+ */
+export function onpremGatewayUrl(
+  config: Pick<TranscriptionComponentConfig, 'onpremGatewayUrl' | 'asrBaseUrl'>
+): string | null {
+  return config.onpremGatewayUrl ?? (config.asrBaseUrl?.split(',')[0]?.trim() || null)
+}
+
+/** The live modes that are set up: on-prem needs its bridge and a gateway, OpenAI its key. */
 export function realtimeModes(
   config: TranscriptionComponentConfig,
   secrets: TranscriptionSecrets
 ): TranscriptionRealtimeMode[] {
   return config.realtimeModes.filter((mode) =>
-    mode === 'onprem' ? config.onpremSignalingUrl !== null : secrets.openaiRealtimeApiKey !== null
+    mode === 'onprem'
+      ? config.onpremSignalingUrl !== null && onpremGatewayUrl(config) !== null
+      : secrets.openaiRealtimeApiKey !== null
   )
 }
 

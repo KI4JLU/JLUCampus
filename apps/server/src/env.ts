@@ -82,7 +82,10 @@ const envSchema = z
     // The TURN servers' shared secret (coturn `static-auth-secret`), from which the server makes
     // short-lived credentials for each live session when the module's TURN auth is `ephemeral`.
     // It never leaves the server.
-    TRANSCRIPTION_TURN_SECRET: z.string().min(16).optional()
+    TRANSCRIPTION_TURN_SECRET: z.string().min(16).optional(),
+    // The realtime bridge's BRIDGE_API_KEY (infra/realtime-bridge), sent as a bearer with every
+    // request to it. Deployment-wide like the TURN secret: compose hands both containers the same.
+    TRANSCRIPTION_REALTIME_BRIDGE_KEY: z.string().min(16).optional()
   })
   .transform((value) => ({
     ...value,

@@ -1135,6 +1135,46 @@ export const transcriptionRealtimeIceSchema = z.object({
 })
 export type TranscriptionRealtimeIce = z.infer<typeof transcriptionRealtimeIceSchema>
 
+/**
+ * Why the on-prem live mode cannot run: the gateway refused the realtime model for its key (it
+ * takes the key otherwise), refused the key, refused the session otherwise or is unreachable from
+ * the bridge, or the bridge itself is unreachable or refused the server's bridge key.
+ */
+export const TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS = [
+  'modelNotAllowed',
+  'gatewayKeyRejected',
+  'gatewayRefused',
+  'gatewayUnreachable',
+  'bridgeUnreachable',
+  'bridgeKeyRejected'
+] as const
+export type TranscriptionOnpremUnavailableReason =
+  (typeof TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS)[number]
+
+/** The default model of the on-prem path: vLLM's Voxtral realtime behind the gateway, as kiChat. */
+export const TRANSCRIPTION_DEFAULT_REALTIME_MODEL = 'voxtral-mini-realtime'
+
+/**
+ * The address of a service the server reaches on its own network, such as the realtime bridge
+ * next to it (`http://host.docker.internal:8089`): `http:` or `https:` on any host. Browsers never
+ * get it.
+ */
+export const transcriptionServiceUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .url()
+  .refine(
+    (value) => {
+      try {
+        return ['http:', 'https:'].includes(new URL(value).protocol)
+      } catch {
+        return false
+      }
+    },
+    { message: 'URL must use http or https' }
+  )
+
 /** `GET TRANSCRIPTION_API.realtimeConfig` (T-59): the modes that are set up. */
 export const transcriptionRealtimeConfigSchema = z.object({
   modes: z.array(transcriptionRealtimeModeSchema),
@@ -1142,7 +1182,15 @@ export const transcriptionRealtimeConfigSchema = z.object({
   defaultMode: transcriptionRealtimeModeSchema.nullable(),
   iceServers: z.array(transcriptionIceServerSchema),
   /** The transcription model the OpenAI session asks for in `session.update`. */
-  openaiModel: z.string().nullable()
+  openaiModel: z.string().nullable(),
+  /**
+   * Why the on-prem mode is set up but cannot run right now, as the bridge's probe of the gateway
+   * found (`modes` leaves it out then); `null` while it works or is not set up.
+   */
+  onpremUnavailable: z
+    .object({ reason: z.enum(TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS), model: z.string() })
+    .nullable()
+    .default(null)
 })
 export type TranscriptionRealtimeConfig = z.infer<typeof transcriptionRealtimeConfigSchema>
 
@@ -1293,8 +1341,24 @@ export const transcriptionComponentConfigSchema = z.object({
     .refine((modes) => new Set(modes).size === modes.length, { message: 'Modes must be unique' })
     .default([]),
   defaultRealtimeMode: transcriptionRealtimeModeSchema.nullable().default(null),
-  /** The on-prem bridge's signaling endpoint: SDP offer in, SDP answer out. */
-  onpremSignalingUrl: httpsUrlSchema.nullable().default(null),
+  /**
+   * The on-prem realtime bridge (`infra/realtime-bridge`) as this server reaches it, such as
+   * `http://localhost:8089`; its signaling endpoint is `POST /realtime` below it (a URL ending in
+   * `/realtime` is taken as that endpoint). Only the server talks to it.
+   */
+  onpremSignalingUrl: transcriptionServiceUrlSchema.nullable().default(null),
+  /**
+   * The gateway the bridge streams to, up to `/v1` (`wss://…/v1/realtime`); `null`: the speech
+   * endpoint (its first worker). The server hands it with the speech key to the bridge per session.
+   */
+  onpremGatewayUrl: httpsUrlSchema.nullable().default(null),
+  /** The gateway's realtime model for the on-prem path. */
+  onpremRealtimeModel: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .default(TRANSCRIPTION_DEFAULT_REALTIME_MODEL),
   realtimeIceServers: z.array(transcriptionIceServerSchema).max(5).default([]),
   /**
    * `ephemeral`: the `turn:`/`turns:` servers get credentials made for each session with the
@@ -1399,7 +1463,11 @@ export const transcriptionConnectionTestRequestSchema = z.object({
   apiKey: z.string().trim().min(1).max(SECRET_VALUE_MAX).nullable().optional(),
   model: z.string().trim().min(1).max(200).optional(),
   /** `llm` only: `llmDisableThinking` as set in the form; left out uses the saved one. */
-  disableThinking: z.boolean().optional()
+  disableThinking: z.boolean().optional(),
+  /** `realtimeOnprem` only: the bridge (`onpremSignalingUrl`) as typed in the form. */
+  bridgeUrl: transcriptionServiceUrlSchema.optional(),
+  /** `realtimeOnprem` only: `onpremGatewayUrl` as typed; `null` uses the speech endpoint. */
+  gatewayUrl: httpsUrlSchema.nullable().optional()
 })
 export type TranscriptionConnectionTestRequest = z.infer<
   typeof transcriptionConnectionTestRequestSchema
@@ -1433,6 +1501,13 @@ export const transcriptionConnectionFindingSchema = z.discriminatedUnion('kind',
   z.object({ kind: z.literal('diarized'), turns: z.number().int().min(0) }),
   z.object({ kind: z.literal('chatAnswered'), model: z.string() }),
   z.object({ kind: z.literal('sdpAnswered') }),
+  z.object({ kind: z.literal('bridgeReachable') }),
+  z.object({ kind: z.literal('realtimeModelAccepted'), model: z.string() }),
+  z.object({
+    kind: z.literal('realtimeUnavailable'),
+    reason: z.enum(TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS),
+    model: z.string()
+  }),
   z.object({ kind: z.literal('keyIssued'), model: z.string() }),
   z.object({ kind: z.literal('signedRoundTrip'), bucket: z.string() }),
   z.object({ kind: z.literal('serverRoundTrip'), bucket: z.string() }),

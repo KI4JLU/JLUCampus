@@ -29,6 +29,7 @@ import {
   TooltipTrigger
 } from '@ki4jlu/design-system'
 import {
+  TRANSCRIPTION_DEFAULT_REALTIME_MODEL,
   TRANSCRIPTION_GROUP_FILES_MAX,
   TRANSCRIPTION_LANGUAGES,
   TRANSCRIPTION_MODELS_MAX,
@@ -540,9 +541,37 @@ export function TranscriptionConfigFields({
             id={id('onprem-signaling-url')}
             name="onpremSignalingUrl"
             value={config.onpremSignalingUrl}
+            placeholder="http://localhost:8089"
             error={errors.onpremSignalingUrl}
             onChange={(onpremSignalingUrl) => update({ onpremSignalingUrl })}
           />
+          <UrlField
+            id={id('onprem-gateway-url')}
+            name="onpremGatewayUrl"
+            value={config.onpremGatewayUrl}
+            // Empty: the speech recognition address, its first worker.
+            placeholder={config.asrBaseUrl?.split(',')[0]?.trim() || 'https://'}
+            error={errors.onpremGatewayUrl}
+            onChange={(onpremGatewayUrl) => update({ onpremGatewayUrl })}
+          />
+          <Field
+            id={id('onprem-realtime-model')}
+            label={t('transcription.recording.admin.onpremRealtimeModel.label')}
+            hint={t('transcription.recording.admin.onpremRealtimeModel.hint')}
+            error={errors.onpremRealtimeModel}
+          >
+            {(control) => (
+              <Input
+                {...control}
+                maxLength={200}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={TRANSCRIPTION_DEFAULT_REALTIME_MODEL}
+                value={config.onpremRealtimeModel}
+                onChange={(event) => update({ onpremRealtimeModel: event.target.value })}
+              />
+            )}
+          </Field>
           <IceServersField
             id={id('ice-servers')}
             servers={config.realtimeIceServers}
@@ -591,7 +620,11 @@ export function TranscriptionConfigFields({
             disabled={!config.onpremSignalingUrl}
             request={() => ({
               target: 'realtimeOnprem',
-              url: config.onpremSignalingUrl ?? undefined
+              bridgeUrl: config.onpremSignalingUrl ?? undefined,
+              gatewayUrl: config.onpremGatewayUrl,
+              // The gateway takes the speech recognition key.
+              apiKey: draftKey(secrets.apiKey),
+              model: config.onpremRealtimeModel.trim() || undefined
             })}
           />
           <UrlField
@@ -645,7 +678,12 @@ export function TranscriptionConfigFields({
 }
 
 type UrlFieldName =
-  'asrBaseUrl' | 'diarizationUrl' | 'llmBaseUrl' | 'onpremSignalingUrl' | 'openaiRealtimeUrl'
+  | 'asrBaseUrl'
+  | 'diarizationUrl'
+  | 'llmBaseUrl'
+  | 'onpremSignalingUrl'
+  | 'onpremGatewayUrl'
+  | 'openaiRealtimeUrl'
 
 function UrlField({
   id,
@@ -1205,7 +1243,11 @@ function ConnectionTest({
   const findingText = (finding: TranscriptionConnectionFinding): string =>
     finding.kind === 'invalidAnswer'
       ? t(`transcription.recording.admin.test.findings.invalidAnswer.${finding.expected}`)
-      : t(`transcription.recording.admin.test.findings.${finding.kind}`, finding)
+      : finding.kind === 'realtimeUnavailable'
+        ? t(`transcription.recording.admin.test.findings.realtimeUnavailable.${finding.reason}`, {
+            model: finding.model
+          })
+        : t(`transcription.recording.admin.test.findings.${finding.kind}`, finding)
 
   const run = (): void => {
     setResult(null)

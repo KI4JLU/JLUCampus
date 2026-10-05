@@ -186,6 +186,30 @@ describe('RealtimeSession', () => {
     expect(context.handlers.onConnectionLost).not.toHaveBeenCalled()
   })
 
+  it('follows the bridge on a short take: committed and completed only after the commit', async () => {
+    // Under 300 ms of audio the bridge has not started decoding: the commit starts and ends it,
+    // the item's events follow, and the bridge closes the connection half a second later.
+    const context = setup()
+    const peer = await started(context, fakeStream().stream)
+    const stopping = context.session.stop()
+    peer.channel.receive({ type: 'input_audio_buffer.committed', item_id: 'item_x' })
+    peer.channel.receive({
+      type: 'conversation.item.input_audio_transcription.delta',
+      item_id: 'item_x',
+      delta: 'Hallo'
+    })
+    peer.channel.receive({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item_x',
+      transcript: 'Hallo'
+    })
+    await stopping
+    peer.channel.close()
+    peer.connect('closed')
+    expect(context.handlers.text).toBe('Hallo ')
+    expect(context.handlers.onConnectionLost).not.toHaveBeenCalled()
+  })
+
   it('closes after the drain timeout when no transcript comes', async () => {
     const context = setup()
     const peer = await started(context, fakeStream().stream)

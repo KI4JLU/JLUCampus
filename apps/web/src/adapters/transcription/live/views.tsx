@@ -160,9 +160,17 @@ export function LiveView(): React.JSX.Element {
   const { t } = useTranslation()
   const { live, state } = useRecording()
   const failed = state.status === 'error' && state.kind === 'live'
+  // The local mode is set up but cannot run (the server leaves it out of the modes then).
+  const onpremUnavailable = live.config?.onpremUnavailable ?? null
   return (
     <RecordingTabs current="live">
-      {live.modes.length === 0 ? (
+      {onpremUnavailable ? (
+        <Notice tone="warning">
+          {t(`transcription.recording.onpremUnavailable.${onpremUnavailable.reason}`, {
+            model: onpremUnavailable.model
+          })}
+        </Notice>
+      ) : live.modes.length === 0 ? (
         <Notice tone="warning">{t('transcription.recording.liveUnavailable')}</Notice>
       ) : null}
       {failed || state.status === 'requesting' || state.status === 'stopping' ? (

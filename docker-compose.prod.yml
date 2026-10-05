@@ -1,5 +1,6 @@
 # Production: Postgres, MinIO (transcription audio) and the published app image. Keycloak runs
-# elsewhere.
+# elsewhere. On-prem live transcription (realtime bridge and TURN relay) is the profile
+# `realtime`: COMPOSE_PROFILES=realtime in .env.production, see infra/realtime-bridge/README.md.
 #   cp .env.production.example .env.production   # fill in the secrets
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 # The app applies database migrations on every start.
@@ -39,6 +40,11 @@ services:
     # Put a TLS-terminating reverse proxy in front; it should reach this port.
     ports:
       - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000'
+    # The realtime bridge runs on the host's network: the app reaches it as
+    # http://host.docker.internal:8089 (the module's bridge address; list host.docker.internal in
+    # NO_PROXY when a proxy is set).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
 
   # Object storage for transcription audio. Browsers upload to and play from it with signed URLs,
   # so the reverse proxy must publish this port on its own host name
@@ -72,6 +78,74 @@ services:
         until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done &&
         mc mb --ignore-existing "local/$$BUCKET" &&
         mc anonymous set none "local/$$BUCKET"
+
+  # ---- Live transcription, on-prem (COMPOSE_PROFILES=realtime) ----
+  # The realtime bridge (infra/realtime-bridge, ported from kiChat) takes the browsers' WebRTC
+  # audio and streams it to the gateway's realtime WebSocket ({gateway}/v1/realtime). The app
+  # relays the SDP offers to it with the gateway's base, key and model per session; the bridge
+  # stores none of them and browsers never reach its HTTP API. Host networking, as WebRTC media
+  # runs over UDP on ephemeral ports and the ICE candidates must carry the host's addresses.
+  # Port 8089 listens on every interface so the app container reaches it: keep it closed in the
+  # host firewall and set TRANSCRIPTION_REALTIME_BRIDGE_KEY (its BRIDGE_API_KEY).
+  # Built from this checkout: docker compose -f docker-compose.prod.yml build realtime-bridge
+  realtime-bridge:
+    profiles: ['realtime']
+    build: ./infra/realtime-bridge
+    image: ${REALTIME_BRIDGE_IMAGE:-justcampus-realtime-bridge:latest}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: ${REALTIME_BRIDGE_PORT:-8089}
+      BRIDGE_API_KEY: ${TRANSCRIPTION_REALTIME_BRIDGE_KEY:-}
+      # The university's outbound proxy, if the host needs one to reach the gateway.
+      HTTPS_PROXY: ${REALTIME_BRIDGE_HTTPS_PROXY:-}
+      NO_PROXY: ${REALTIME_BRIDGE_NO_PROXY:-localhost,127.0.0.1}
+      # The bridge's own TURN client, normally the coturn below: turn:<host>:3478, with
+      # credentials minted from its shared secret.
+      TURN_URLS: ${REALTIME_BRIDGE_TURN_URLS:-}
+      TURN_SECRET: ${TRANSCRIPTION_TURN_SECRET:-}
+      STUN_URLS: ${REALTIME_BRIDGE_STUN_URLS:-}
+
+  # A TURN relay for browsers without a direct UDP path to this host (firewalls, VPN): they reach
+  # it on TURN_PORT (TCP and UDP) or, with a certificate, TLS on TURN_TLS_PORT, and it relays to
+  # the bridge on this host. Short-lived credentials only (coturn use-auth-secret with
+  # TRANSCRIPTION_TURN_SECRET, which the app also has): set the module's ICE servers, such as
+  # turn:campus.example.uni-giessen.de:3478?transport=tcp, and TURN sign-in "short-lived".
+  # Relays only to TURN_ALLOWED_PEER_IP (this host's address, which the bridge advertises); open
+  # TURN_PORT/TURN_TLS_PORT and the relay range TURN_MIN_PORT-TURN_MAX_PORT (UDP) in the firewall.
+  # With TURN_CERT_DIR holding cert.pem and key.pem, TLS (turns:) listens as well.
+  coturn:
+    profiles: ['realtime']
+    image: coturn/coturn:4.17.2
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TURN_SECRET: ${TRANSCRIPTION_TURN_SECRET:-}
+      TURN_REALM: ${TURN_REALM:-jlu-campus}
+      TURN_PORT: ${TURN_PORT:-3478}
+      TURN_TLS_PORT: ${TURN_TLS_PORT:-5349}
+      TURN_MIN_PORT: ${TURN_MIN_PORT:-49160}
+      TURN_MAX_PORT: ${TURN_MAX_PORT:-49250}
+      TURN_ALLOWED_PEER_IP: ${TURN_ALLOWED_PEER_IP:-}
+    volumes:
+      - ${TURN_CERT_DIR:-./infra/realtime-bridge/no-certs}:/etc/coturn/certs:ro
+    # The secret goes into a config file, not onto the command line where `ps` shows it. Every
+    # peer but this host is denied, so the relay cannot be used to reach the internal network.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        test -n "$$TURN_SECRET" || { echo 'TRANSCRIPTION_TURN_SECRET is not set' >&2; exit 1; };
+        test -n "$$TURN_ALLOWED_PEER_IP" || { echo 'TURN_ALLOWED_PEER_IP is not set' >&2; exit 1; };
+        printf 'static-auth-secret=%s\n' "$$TURN_SECRET" > /tmp/turnserver.conf &&
+        if [ -r /etc/coturn/certs/cert.pem ] && [ -r /etc/coturn/certs/key.pem ]; then
+        set -- --cert=/etc/coturn/certs/cert.pem --pkey=/etc/coturn/certs/key.pem
+        --tls-listening-port="$$TURN_TLS_PORT"; else set -- --no-tls; fi;
+        exec turnserver -c /tmp/turnserver.conf --log-file=stdout --simple-log
+        --use-auth-secret --realm="$$TURN_REALM" --fingerprint --listening-port="$$TURN_PORT"
+        --min-port="$$TURN_MIN_PORT" --max-port="$$TURN_MAX_PORT" --no-multicast-peers
+        --denied-peer-ip=0.0.0.0-255.255.255.255 --denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+        --allowed-peer-ip="$$TURN_ALLOWED_PEER_IP" "$$@"
 
 volumes:
   postgres-data:

@@ -2,35 +2,31 @@ import { readBody, sendJson, sendText } from './http.mjs'
 import { answerWithPeer, OfferRefused } from './realtime-peer.mjs'
 
 /**
- * Live transcription, below `/realtime`: the on-prem bridge's `POST /onprem/signaling` (SDP offer
- * in, SDP answer out) and OpenAI Realtime below `/openai/v1`: `POST /realtime/client_secrets`
- * (ephemeral key) and `POST /realtime/calls` (SDP with that key).
+ * Live transcription, below `/realtime`: the on-prem realtime bridge (`infra/realtime-bridge`)
+ * below `/bridge` with its protocol, and OpenAI Realtime below `/openai/v1`:
+ * `POST /realtime/client_secrets` (ephemeral key) and `POST /realtime/calls` (SDP with that key).
  *
- * Both answer with a real WebRTC peer (`realtime-peer.mjs`, on werift) that receives the audio and
- * sends a deterministic transcript over the `oai-events` data channel, so either live mode can be
- * tried end to end. An offer the peer cannot negotiate is refused with 400, as by a real bridge.
- * Only without werift does an offer get a well-formed stub answer derived from it, with which no
- * media or data channel connects. Ephemeral keys are `ek_mock_<n>` and work for `/realtime/calls`
- * only; any other bearer there answers 401.
+ * The bridge's `POST /realtime` takes the SDP offer as `application/sdp` with the gateway headers
+ * the Campus server sends (`X-Gateway-Base`, `X-Model`, `X-Gateway-Key`) and answers with SDP;
+ * `POST /probe` checks the same headers, `GET /health` answers `ok`. A model whose id contains
+ * `denied` is refused as the gateway refuses a model the key may not use: `502` with
+ * `upstream_status: 403`. With `TRANSCRIPTION_MOCK_BRIDGE_KEY` set, the bridge wants it as bearer.
+ *
+ * Both modes answer with a real WebRTC peer (`realtime-peer.mjs`, on werift) that receives the
+ * audio and sends a deterministic transcript over the `oai-events` data channel, so either live
+ * mode can be tried end to end. An offer the peer cannot negotiate is refused with 400, as by the
+ * bridge. Only without werift does an offer get a well-formed stub answer derived from it, with
+ * which no media or data channel connects. Ephemeral keys are `ek_mock_<n>` and work for
+ * `/realtime/calls` only; any other bearer there answers 401.
  *
  * @param {import('node:http').IncomingMessage} request
  * @param {import('node:http').ServerResponse} response
- * @param {string} path the path below `/realtime`, e.g. `/onprem/signaling`
+ * @param {string} path the path below `/realtime`, e.g. `/bridge/realtime`
  * @returns {Promise<boolean>} whether the request was handled
  */
 export async function handle(request, response, path) {
+  if (path.startsWith('/bridge/')) return handleBridge(request, response, path.slice(7))
   if (request.method !== 'POST') return false
-  if (path === '/onprem/signaling') {
-    const offer = await offerOf(request)
-    if (!offer) {
-      sendJson(response, 400, { error: 'Expected an SDP offer' })
-      return true
-    }
-    const answer = await answerOrRefusal(offer)
-    if (answer.refused) sendJson(response, 400, { error: answer.refused })
-    else sendJson(response, 200, { type: 'answer', sdp: answer.sdp })
-    return true
-  }
   if (path === '/openai/v1/realtime/client_secrets') {
     if (!bearerOf(request)) {
       sendJson(response, 401, {
@@ -74,6 +70,56 @@ export async function handle(request, response, path) {
 }
 
 /**
+ * The bridge's API (`bridge.py`): errors as `{ error, message, upstream_status? }`.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function handleBridge(request, response, path) {
+  if (request.method === 'GET' && path === '/health') {
+    sendText(response, 200, 'ok')
+    return true
+  }
+  if (request.method !== 'POST' || (path !== '/realtime' && path !== '/probe')) return false
+  const key = process.env.TRANSCRIPTION_MOCK_BRIDGE_KEY
+  if (key && request.headers.authorization !== `Bearer ${key}`) {
+    await readBody(request)
+    sendJson(response, 401, { error: 'unauthorized', message: 'missing or wrong bridge API key' })
+    return true
+  }
+  const base = String(request.headers['x-gateway-base'] ?? '').trim()
+  const model = String(request.headers['x-model'] ?? '').trim()
+  const body = (await readBody(request)).toString('utf8')
+  if (!base || !model) {
+    sendJson(response, 400, {
+      error: 'bad_request',
+      message: 'X-Gateway-Base and X-Model are required'
+    })
+    return true
+  }
+  if (model.includes('denied')) {
+    sendJson(response, 502, {
+      error: 'upstream_rejected',
+      message: 'the gateway refused the realtime connection with status 403',
+      upstream_status: 403,
+      model
+    })
+    return true
+  }
+  if (path === '/probe') {
+    sendJson(response, 200, { ok: true, model })
+    return true
+  }
+  if (!body.startsWith('v=')) {
+    sendJson(response, 400, { error: 'bad_request', message: 'body must be an SDP offer' })
+    return true
+  }
+  const answer = await answerOrRefusal(body)
+  if (answer.refused) sendJson(response, 400, { error: 'bad_offer', message: answer.refused })
+  else sendText(response, 200, answer.sdp, 'application/sdp')
+  return true
+}
+
+/**
  * The peer's answer to an offer, the stub's without werift, or why the offer is refused.
  *
  * @param {string} offer
@@ -99,18 +145,6 @@ function bearerOf(request) {
 
 function isSdp(text) {
   return /^v=0\r?\n/.test(text.trimStart())
-}
-
-/** The offer of a request: JSON `{sdp}` or the SDP itself. */
-async function offerOf(request) {
-  const text = (await readBody(request)).toString('utf8')
-  if (isSdp(text)) return text
-  try {
-    const sdp = JSON.parse(text)?.sdp
-    return typeof sdp === 'string' && isSdp(sdp) ? sdp : null
-  } catch {
-    return null
-  }
 }
 
 /**

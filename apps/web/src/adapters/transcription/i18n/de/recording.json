@@ -53,6 +53,14 @@
   "liveRunning": "Live-Transkription läuft",
   "liveRunningHint": "Das Mikrofon wird live transkribiert und zugleich lokal im Browser aufgenommen.",
   "liveUnavailable": "Für die Live-Transkription ist noch kein Dienst eingerichtet.",
+  "onpremUnavailable": {
+    "modelNotAllowed": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway gibt das Modell {{model}} für seinen API-Schlüssel nicht frei. Sobald die Freigabe da ist, funktioniert sie ohne weitere Einrichtung.",
+    "gatewayKeyRejected": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt den API-Schlüssel ab.",
+    "gatewayRefused": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
+    "gatewayUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge erreicht das Gateway nicht.",
+    "bridgeUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge antwortet nicht.",
+    "bridgeKeyRejected": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge lehnt den Server ab."
+  },
   "liveTranscript": "Live-Transkript",
   "liveServiceError": "Fehler der Live-Transkription: {{message}}",
   "appearance": "Darstellung",
@@ -225,7 +233,7 @@
     },
     "realtimeModes": {
       "label": "Angebotene Modi",
-      "hint": "Lokal braucht die Signaling-Adresse der Bridge, OpenAI den API-Schlüssel für OpenAI Realtime."
+      "hint": "Lokal braucht die Realtime-Bridge und ein Gateway (ohne eigenes: die Spracherkennung), OpenAI den API-Schlüssel für OpenAI Realtime."
     },
     "modes": {
       "onprem": "Lokal (Bridge)",
@@ -237,8 +245,16 @@
       "auto": "Erster angebotener Modus"
     },
     "onpremSignalingUrl": {
-      "label": "Signaling-Adresse der Bridge",
-      "hint": "Nimmt das SDP-Angebot des Browsers an und antwortet mit dem SDP der Bridge; der Server leitet beides weiter."
+      "label": "Adresse der Realtime-Bridge",
+      "hint": "Die Bridge aus infra/realtime-bridge, wie dieser Server sie erreicht, etwa http://localhost:8089 oder http://host.docker.internal:8089. Der Server leitet das SDP-Angebot des Browsers an POST /realtime weiter; Browser erreichen die Bridge nur über WebRTC."
+    },
+    "onpremGatewayUrl": {
+      "label": "Gateway der Live-Transkription",
+      "hint": "Bis /v1; die Bridge streamt an dessen /v1/realtime. Leer: die Adresse der Spracherkennung. Der Server gibt der Bridge für jede Sitzung den API-Schlüssel der Spracherkennung mit, Browser bekommen ihn nie."
+    },
+    "onpremRealtimeModel": {
+      "label": "Live-Modell des Gateways",
+      "hint": "Das Realtime-Modell des Gateways, wie in kiChat voxtral-mini-realtime. Der API-Schlüssel muss es nutzen dürfen."
     },
     "iceServers": {
       "label": "ICE-Server",
@@ -282,6 +298,16 @@
         "diarized": "Ein Testclip wurde auf Sprecher untersucht ({{turns}} Abschnitte)",
         "chatAnswered": "{{model}} hat eine Testfrage beantwortet",
         "sdpAnswered": "Die Bridge hat ein Testangebot mit SDP beantwortet",
+        "bridgeReachable": "Die Realtime-Bridge antwortet",
+        "realtimeModelAccepted": "Das Gateway nimmt den Schlüssel und das Live-Modell {{model}} an",
+        "realtimeUnavailable": {
+          "modelNotAllowed": "Das Gateway gibt das Modell {{model}} für diesen API-Schlüssel nicht frei. Der Schlüssel funktioniert sonst; die Freigabe des Modells muss beim Betreiber des Gateways beantragt werden.",
+          "gatewayKeyRejected": "Das Gateway lehnt den API-Schlüssel ab.",
+          "gatewayRefused": "Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
+          "gatewayUnreachable": "Die Realtime-Bridge erreicht das Gateway nicht.",
+          "bridgeUnreachable": "Die Realtime-Bridge ist nicht erreichbar.",
+          "bridgeKeyRejected": "Die Realtime-Bridge lehnt den Server ab: TRANSCRIPTION_REALTIME_BRIDGE_KEY muss ihrem BRIDGE_API_KEY gleichen."
+        },
         "keyIssued": "OpenAI hat einen kurzlebigen Schlüssel für {{model}} ausgegeben (nicht angezeigt)",
         "signedRoundTrip": "Eine Testdatei wurde über signierte URLs in Bucket {{bucket}} hochgeladen, zurückgelesen und gelöscht",
         "serverRoundTrip": "Eine Testdatei wurde vom Server in Bucket {{bucket}} geschrieben, zurückgelesen und gelöscht",

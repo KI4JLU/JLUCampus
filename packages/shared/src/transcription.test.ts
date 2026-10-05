@@ -23,6 +23,7 @@ import {
   transcriptionComponentConfigSchema,
   transcriptionDispatchSchema,
   transcriptionJobCreateSchema,
+  transcriptionRealtimeConfigSchema,
   transcriptionSegmentSchema,
   transcriptionSummaryRequestSchema,
   transcriptionTemplateInputSchema,
@@ -110,6 +111,35 @@ describe('module registration', () => {
     expect(
       transcriptionComponentConfigSchema.safeParse({ realtimeModes: ['onprem', 'onprem'] }).success
     ).toBe(false)
+  })
+
+  it('takes the realtime bridge on the server’s own network, and the live model', () => {
+    const config = transcriptionComponentConfigSchema.parse({
+      onpremSignalingUrl: 'http://host.docker.internal:8089'
+    })
+    expect(config).toMatchObject({
+      onpremSignalingUrl: 'http://host.docker.internal:8089',
+      onpremGatewayUrl: null,
+      onpremRealtimeModel: 'voxtral-mini-realtime'
+    })
+    expect(
+      transcriptionComponentConfigSchema.safeParse({ onpremSignalingUrl: 'ws://bridge:8089' })
+        .success
+    ).toBe(false)
+    // The gateway is reached over the internet: https only, as every other upstream.
+    expect(
+      transcriptionComponentConfigSchema.safeParse({ onpremGatewayUrl: 'http://gw.example/v1' })
+        .success
+    ).toBe(false)
+    // An older server's realtime config parses: on-prem counts as available.
+    expect(
+      transcriptionRealtimeConfigSchema.parse({
+        modes: ['onprem'],
+        defaultMode: 'onprem',
+        iceServers: [],
+        openaiModel: null
+      }).onpremUnavailable
+    ).toBeNull()
   })
 
   it('takes secret changes in the admin input and reports them as booleans', () => {

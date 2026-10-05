@@ -149,7 +149,8 @@ describe('connection tests', () => {
       llmBaseUrl: `${mock.origin}/llm/v1`,
       llmModels: [{ id: 'mock-chat', label: 'Mock Chat' }],
       defaultSummaryModel: 'mock-chat',
-      onpremSignalingUrl: `${mock.origin}/realtime/onprem/signaling`,
+      onpremSignalingUrl: `${mock.origin}/realtime/bridge`,
+      onpremRealtimeModel: 'voxtral-mini-realtime',
       openaiRealtimeUrl: `${mock.origin}/realtime/openai/v1`,
       openaiRealtimeModel: 'gpt-realtime-whisper',
       diarizationUrl: null,
@@ -302,7 +303,10 @@ describe('connection tests', () => {
     const answers: Record<string, () => Response> = {
       'audio/transcriptions': () => Response.json({ error: 'operation failed' }),
       'chat/completions': () => Response.json({ choices: [{ message: {} }] }),
-      signaling: () => new Response('v=0\r\n', { headers: { 'Content-Type': 'application/sdp' } }),
+      '/health': () => new Response('ok'),
+      '/probe': () => Response.json({ ok: true }),
+      '/bridge/realtime': () =>
+        new Response('v=0\r\n', { headers: { 'Content-Type': 'application/sdp' } }),
       client_secrets: () => Response.json({ value: 'expired-key', expires_at: 1 })
     }
     const fetchMock = vi.fn(async (url: string | URL) => {
@@ -362,9 +366,20 @@ describe('connection tests', () => {
       ok: false,
       finding: { kind: 'invalidAnswer', expected: 'sdpAnswer' }
     })
-    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
-    const { sdp, type } = JSON.parse(String(init.body)) as { sdp: string; type: string }
-    expect(type).toBe('offer')
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>
+    expect(calls.map(([url]) => String(url))).toEqual([
+      `${mock.origin}/realtime/bridge/health`,
+      `${mock.origin}/realtime/bridge/probe`,
+      `${mock.origin}/realtime/bridge/realtime`
+    ])
+    const init = calls[2]![1]
+    const headers = new Headers(init.headers)
+    // The bridge protocol: the offer as SDP, the gateway per request in headers.
+    expect(headers.get('content-type')).toBe('application/sdp')
+    expect(headers.get('x-gateway-base')).toBe(`${mock.origin}/asr`)
+    expect(headers.get('x-gateway-key')).toBe('sk-speech-secret')
+    expect(headers.get('x-model')).toBe('voxtral-mini-realtime')
+    const sdp = String(init.body)
     for (const line of [
       /^m=audio 9 UDP\/TLS\/RTP\/SAVPF 111$/m,
       /^m=application 9 UDP\/DTLS\/SCTP webrtc-datachannel$/m,
@@ -408,10 +423,17 @@ describe('connection tests', () => {
   })
 
   it('tests the bridge with an offer and OpenAI with a key request, never echoing keys', async () => {
-    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
+    const onprem = await testConnection({ target: 'realtimeOnprem' }, context())
+    expect(onprem).toMatchObject({
       ok: true,
-      finding: { kind: 'sdpAnswered' }
+      finding: { kind: 'sdpAnswered' },
+      checks: [
+        { kind: 'bridgeReachable' },
+        { kind: 'realtimeModelAccepted', model: 'voxtral-mini-realtime' },
+        { kind: 'sdpAnswered' }
+      ]
     })
+    expect(JSON.stringify(onprem)).not.toContain('sk-speech-secret')
     const openai = await testConnection({ target: 'realtimeOpenai' }, context())
     expect(openai).toMatchObject({
       ok: true,
@@ -422,6 +444,66 @@ describe('connection tests', () => {
     expect(JSON.stringify(openai)).not.toMatch(/ek_mock|sk-openai/)
     const typedKeyOnly = await testConnection({ target: 'realtimeOpenai', apiKey: null }, context())
     expect(typedKeyOnly).toMatchObject({ ok: false, finding: { kind: 'notSetUp' } })
+  })
+
+  it('says precisely why the on-prem path cannot run', async () => {
+    // The mock gateway refuses `denied` models with 403, as the HRZ gateway refuses a realtime
+    // model the key may not use; its model list works and lacks the model.
+    const denied = await testConnection(
+      { target: 'realtimeOnprem', model: 'voxtral-denied' },
+      context()
+    )
+    expect(denied).toMatchObject({
+      ok: false,
+      status: 502,
+      finding: { kind: 'realtimeUnavailable', reason: 'modelNotAllowed', model: 'voxtral-denied' },
+      checks: [{ kind: 'bridgeReachable' }, { kind: 'realtimeUnavailable' }]
+    })
+    expect(JSON.stringify(denied)).not.toContain('sk-speech-secret')
+
+    // The same refusal while the model list refuses the key too: the key is wrong.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const path = String(url)
+        if (path.endsWith('/health')) return new Response('ok')
+        if (path.endsWith('/models')) return new Response('Unauthorized', { status: 401 })
+        return Response.json(
+          { error: 'upstream_rejected', message: 'refused', upstream_status: 403 },
+          { status: 502 }
+        )
+      })
+    )
+    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
+      ok: false,
+      finding: { kind: 'realtimeUnavailable', reason: 'gatewayKeyRejected' }
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) =>
+        String(url).endsWith('/health')
+          ? new Response('ok')
+          : Response.json({ error: 'unauthorized', message: 'wrong key' }, { status: 401 })
+      )
+    )
+    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
+      finding: { kind: 'realtimeUnavailable', reason: 'bridgeKeyRejected' }
+    })
+    vi.unstubAllGlobals()
+
+    expect(
+      await testConnection({ target: 'realtimeOnprem', bridgeUrl: 'http://127.0.0.1:9' }, context())
+    ).toMatchObject({
+      ok: false,
+      finding: { kind: 'realtimeUnavailable', reason: 'bridgeUnreachable' }
+    })
+    // Without a bridge, or without a gateway (no speech endpoint either), nothing to test.
+    expect(
+      await testConnection({ target: 'realtimeOnprem' }, context({ onpremSignalingUrl: null }))
+    ).toMatchObject({ finding: { kind: 'notSetUp' } })
+    expect(
+      await testConnection({ target: 'realtimeOnprem' }, context({ asrBaseUrl: null }))
+    ).toMatchObject({ finding: { kind: 'notSetUp' } })
   })
 
   describe('storage', () => {

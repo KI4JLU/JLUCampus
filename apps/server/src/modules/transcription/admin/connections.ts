@@ -10,18 +10,22 @@ import type {
 } from '@justcampus/shared'
 import { z } from 'zod'
 
+import { env } from '../../../env.js'
 import type { TranscriptionRuntime } from '../config.js'
 import { openaiRealtimeEndpoints } from '../config.js'
 import { bearer, listModels, upstreamFetch, UpstreamError, upstreamUrl } from '../http.js'
 import { parseVerboseJson } from '../jobs/asr.js'
 import { parseDiarization } from '../jobs/diarization.js'
+import {
+  bridgeEndpoints,
+  OnpremUnavailable,
+  onpremSignaling,
+  onpremTarget,
+  probeOnprem
+} from '../realtime/bridge.js'
 import { probeOffer } from '../realtime/sdp.js'
 import { completionBody, withoutThinking } from '../summaries/chat.js'
-import {
-  clientSecretRequest,
-  parseClientSecret,
-  parseSignalingAnswer
-} from '../realtime/upstream.js'
+import { clientSecretRequest, parseClientSecret } from '../realtime/upstream.js'
 import type { TranscriptionStorage } from '../storage.js'
 
 /**
@@ -324,23 +328,26 @@ export interface ConnectionContext {
     Partial<Pick<TranscriptionRuntime, 'componentId'>>
   storage: TestStorage | null
   signal?: AbortSignal
+  /** The realtime bridge's key; left out: `TRANSCRIPTION_REALTIME_BRIDGE_KEY`. */
+  bridgeKey?: string
 }
 
 /**
  * Checks one upstream with the typed values, else the saved ones, by doing what the module does
- * with it: a second of audio recognised or diarised, a chat answer, a usable SDP answer from the
- * bridge to a browser-like offer, an unexpired ephemeral key from OpenAI (withheld), a stored
+ * with it: a second of audio recognised or diarised, a chat answer, the bridge running, the
+ * gateway taking key and realtime model (else why not: `realtimeUnavailable`) and a usable SDP
+ * answer to a browser-like offer, an unexpired ephemeral key from OpenAI (withheld), a stored
  * object read back through signed URLs and deleted. A 2xx answer of another shape fails. Model lists are reported besides, never as proof (section 5). `checks` names each
  * step; nothing in the answer is a key.
  */
 export async function testConnection(
   input: TranscriptionConnectionTestRequest,
-  { runtime, storage, signal }: ConnectionContext
+  { runtime, storage, signal, bridgeKey = env.TRANSCRIPTION_REALTIME_BRIDGE_KEY }: ConnectionContext
 ): Promise<TranscriptionConnectionTest> {
   const { config, secrets } = runtime
   const keyOf = (saved: string | null): string | null =>
     input.apiKey === undefined ? saved : input.apiKey
-  const keys = [input.apiKey, ...Object.values(secrets)]
+  const keys = [input.apiKey, bridgeKey, ...Object.values(secrets)]
   const started = Date.now()
   const checks: Finding[] = []
   const finish = (outcome: Outcome): TranscriptionConnectionTest => ({
@@ -406,28 +413,44 @@ export async function testConnection(
         return passed(response.status)
       }
       case 'realtimeOnprem': {
-        const url = input.url ?? config.onpremSignalingUrl
-        if (!url) return notSetUp()
-        const offer = probeOffer()
-        const response = await answer(
-          url,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Accept: 'application/json, application/sdp'
-            },
-            body: JSON.stringify({ sdp: offer, type: 'offer' })
-          },
-          signal
-        )
+        const target = onpremTarget(config, secrets, bridgeKey, {
+          bridgeUrl: input.bridgeUrl ?? input.url,
+          gatewayUrl: input.gatewayUrl,
+          apiKey: input.apiKey,
+          model: input.model
+        })
+        if (!target) return notSetUp()
+        const unavailable = (error: unknown): never => {
+          if (error instanceof OnpremUnavailable) {
+            throw new CheckFailed(
+              { kind: 'realtimeUnavailable', reason: error.reason, model: target.model },
+              error.status
+            )
+          }
+          throw error
+        }
+        // The bridge runs, then the gateway takes key and model, then the bridge answers an offer.
         try {
-          parseSignalingAnswer(await response.text(), response.headers.get('content-type'), offer)
-        } catch {
-          throw new CheckFailed({ kind: 'invalidAnswer', expected: 'sdpAnswer' }, response.status)
+          await answer(bridgeEndpoints(target.bridgeUrl).health, { method: 'GET' }, signal)
+        } catch (error) {
+          if (error instanceof UpstreamError && error.status === null && !signal?.aborted) {
+            unavailable(new OnpremUnavailable('bridgeUnreachable', target.model, null))
+          }
+          throw error
+        }
+        checks.push({ kind: 'bridgeReachable' })
+        await probeOnprem(target, signal, TEST_TIMEOUT_MS).catch(unavailable)
+        checks.push({ kind: 'realtimeModelAccepted', model: target.model })
+        try {
+          await onpremSignaling(target, probeOffer(), signal)
+        } catch (error) {
+          if (error instanceof UpstreamError && error.status === 200) {
+            throw new CheckFailed({ kind: 'invalidAnswer', expected: 'sdpAnswer' }, 200)
+          }
+          unavailable(error)
         }
         checks.push({ kind: 'sdpAnswered' })
-        return passed(response.status)
+        return passed(200)
       }
       case 'realtimeOpenai': {
         const apiKey = keyOf(secrets.openaiRealtimeApiKey)

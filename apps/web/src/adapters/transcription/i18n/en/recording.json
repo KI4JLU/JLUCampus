@@ -53,6 +53,14 @@
   "liveRunning": "Live transcription running",
   "liveRunningHint": "The microphone is transcribed live and recorded locally in your browser at the same time.",
   "liveUnavailable": "No service is set up for live transcription yet.",
+  "onpremUnavailable": {
+    "modelNotAllowed": "Local live transcription is unavailable right now: the gateway does not allow the model {{model}} for its API key. Once it is allowed, it works without further setup.",
+    "gatewayKeyRejected": "Local live transcription is unavailable right now: the gateway refuses the API key.",
+    "gatewayRefused": "Local live transcription is unavailable right now: the gateway refuses a live session with {{model}}.",
+    "gatewayUnreachable": "Local live transcription is unavailable right now: the realtime bridge cannot reach the gateway.",
+    "bridgeUnreachable": "Local live transcription is unavailable right now: the realtime bridge does not answer.",
+    "bridgeKeyRejected": "Local live transcription is unavailable right now: the realtime bridge refuses the server."
+  },
   "liveTranscript": "Live transcript",
   "liveServiceError": "Live transcription error: {{message}}",
   "appearance": "Appearance",
@@ -225,7 +233,7 @@
     },
     "realtimeModes": {
       "label": "Offered modes",
-      "hint": "Local needs the bridge's signaling address, OpenAI the API key for OpenAI Realtime."
+      "hint": "Local needs the realtime bridge and a gateway (without its own: speech recognition), OpenAI the API key for OpenAI Realtime."
     },
     "modes": {
       "onprem": "Local (bridge)",
@@ -237,8 +245,16 @@
       "auto": "First mode offered"
     },
     "onpremSignalingUrl": {
-      "label": "Bridge signaling address",
-      "hint": "Takes the browser's SDP offer and answers with the bridge's SDP; the server passes both on."
+      "label": "Realtime bridge address",
+      "hint": "The bridge from infra/realtime-bridge as this server reaches it, such as http://localhost:8089 or http://host.docker.internal:8089. The server passes the browser’s SDP offer on to POST /realtime; browsers reach the bridge over WebRTC only."
+    },
+    "onpremGatewayUrl": {
+      "label": "Live transcription gateway",
+      "hint": "Up to /v1; the bridge streams to its /v1/realtime. Empty: the speech recognition address. For every session the server hands the bridge the speech recognition API key; browsers never get it."
+    },
+    "onpremRealtimeModel": {
+      "label": "Gateway live model",
+      "hint": "The gateway’s realtime model, voxtral-mini-realtime as in kiChat. The API key must be allowed to use it."
     },
     "iceServers": {
       "label": "ICE servers",
@@ -282,6 +298,16 @@
         "diarized": "A test clip was analysed for speakers ({{turns}} turns)",
         "chatAnswered": "{{model}} answered a test question",
         "sdpAnswered": "The bridge answered a test offer with SDP",
+        "bridgeReachable": "The realtime bridge answers",
+        "realtimeModelAccepted": "The gateway accepts the key and the live model {{model}}",
+        "realtimeUnavailable": {
+          "modelNotAllowed": "The gateway does not allow the model {{model}} for this API key. The key works otherwise; ask the gateway’s operator to allow the model.",
+          "gatewayKeyRejected": "The gateway refuses the API key.",
+          "gatewayRefused": "The gateway refuses a live session with {{model}}.",
+          "gatewayUnreachable": "The realtime bridge cannot reach the gateway.",
+          "bridgeUnreachable": "The realtime bridge is unreachable.",
+          "bridgeKeyRejected": "The realtime bridge refuses the server: TRANSCRIPTION_REALTIME_BRIDGE_KEY must equal its BRIDGE_API_KEY."
+        },
         "keyIssued": "OpenAI issued a short-lived key for {{model}} (not shown)",
         "signedRoundTrip": "A test file was uploaded, read back and deleted through signed URLs in bucket {{bucket}}",
         "serverRoundTrip": "A test file was written, read back and deleted by the server in bucket {{bucket}}",

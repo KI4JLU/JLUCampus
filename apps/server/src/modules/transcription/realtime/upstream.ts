@@ -4,9 +4,8 @@ import { bearer, ensureOk, upstreamFetch, UpstreamError } from '../http.js'
 import { sdpAnswerProblem } from './sdp.js'
 
 /**
- * The two live transcription upstreams (T-59, T-60): the on-prem bridge, which takes the
- * browser's SDP offer and answers with its own, and OpenAI Realtime, which issues ephemeral keys
- * for the browser's own WebRTC call. Neither ever sees a key of the browser's.
+ * What the two live transcription upstreams (T-59, T-60) share, and OpenAI Realtime, which issues
+ * ephemeral keys for the browser's own WebRTC call. The on-prem bridge is `bridge.ts`.
  */
 
 /** Signaling and key requests are quick; the browser waits 15 s for the whole connection. */
@@ -59,25 +58,6 @@ export function parseSignalingAnswer(
     throw new UpstreamError(`The signaling bridge answered with an unusable SDP: ${problem}`, 200)
   }
   return sdp
-}
-
-/** Sends the browser's SDP offer to the on-prem bridge and returns its answer. */
-export async function onpremSignaling(
-  url: string,
-  offer: string,
-  signal?: AbortSignal
-): Promise<string> {
-  const response = await ensureOk(
-    await upstreamFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json, application/sdp' },
-      body: JSON.stringify({ sdp: offer, type: 'offer' }),
-      timeoutMs: REALTIME_TIMEOUT_MS,
-      signal
-    }),
-    'The signaling bridge'
-  )
-  return parseSignalingAnswer(await response.text(), response.headers.get('content-type'), offer)
 }
 
 /** How long an ephemeral key lasts: long enough to connect, not more. */

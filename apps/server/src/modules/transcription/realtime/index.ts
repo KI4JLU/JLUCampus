@@ -13,8 +13,15 @@ import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { defaultRealtimeMode, openaiRealtimeEndpoints, realtimeModes } from '../config.js'
 import { upstream } from '../http.js'
+import {
+  OnpremUnavailable,
+  onpremAvailability,
+  onpremSignaling,
+  onpremTarget,
+  rememberAvailability
+} from './bridge.js'
 import { sessionIceServers, TurnNotSetUpError } from './turn.js'
-import { issueClientSecret, onpremSignaling } from './upstream.js'
+import { issueClientSecret } from './upstream.js'
 
 /**
  * Live transcription (`TRANSCRIPTION_API.realtime*`): the modes that are set up, the on-prem ICE
@@ -23,17 +30,26 @@ import { issueClientSecret, onpremSignaling } from './upstream.js'
  */
 export const realtimeRouter = new Hono<AppEnvironment>()
 
-/** The modes set up (on-prem needs its bridge, OpenAI its key) and the default (T-59). */
-realtimeRouter.get('/realtime/config', (context) => {
+/**
+ * The modes set up (on-prem needs its bridge and gateway, OpenAI its key) and the default (T-59).
+ * On-prem is left out while the bridge's probe finds that it cannot run, such as a gateway key
+ * that may not use the realtime model; `onpremUnavailable` says why.
+ */
+realtimeRouter.get('/realtime/config', async (context) => {
   const { config, secrets } = getModuleRuntime(context, 'transcription')
-  const modes = realtimeModes(config, secrets)
+  let modes = realtimeModes(config, secrets)
+  const target = onpremTarget(config, secrets, env.TRANSCRIPTION_REALTIME_BRIDGE_KEY)
+  const onpremUnavailable =
+    modes.includes('onprem') && target ? await onpremAvailability(target) : null
+  if (onpremUnavailable) modes = modes.filter((mode) => mode !== 'onprem')
   return context.json(
     transcriptionRealtimeConfigSchema.parse({
       modes,
       defaultMode: defaultRealtimeMode(config, modes),
       // Addresses only; credentials come with `/realtime/onprem/ice-servers` for each session.
       iceServers: modes.includes('onprem') ? config.realtimeIceServers : [],
-      openaiModel: modes.includes('openai') ? config.openaiRealtimeModel : null
+      openaiModel: modes.includes('openai') ? config.openaiRealtimeModel : null,
+      onpremUnavailable
     })
   )
 })
@@ -59,17 +75,29 @@ realtimeRouter.post('/realtime/onprem/ice-servers', (context) => {
   return context.json(transcriptionRealtimeIceSchema.parse(ice))
 })
 
-/** Passes the browser's SDP offer to the on-prem bridge and its answer back (T-60). */
+/**
+ * Passes the browser's SDP offer to the on-prem bridge with the gateway's base, key and model, and
+ * its answer back (T-60). The key stays between this server and the bridge.
+ */
 realtimeRouter.post('/realtime/onprem/signaling', async (context) => {
   const { sdp } = await parseBody(context, transcriptionSignalingRequestSchema)
   const { config, secrets } = getModuleRuntime(context, 'transcription')
-  if (!realtimeModes(config, secrets).includes('onprem') || !config.onpremSignalingUrl) {
+  const target = onpremTarget(config, secrets, env.TRANSCRIPTION_REALTIME_BRIDGE_KEY)
+  if (!realtimeModes(config, secrets).includes('onprem') || !target) {
     throw new ApiError(502, 'module_unavailable', 'On-prem live transcription is not set up')
   }
-  const url = config.onpremSignalingUrl
-  const answer = await upstream('The signaling bridge did not answer', () =>
-    onpremSignaling(url, sdp, context.req.raw.signal)
-  )
+  const answer = await upstream('The signaling bridge did not answer', async () => {
+    try {
+      return await onpremSignaling(target, sdp, context.req.raw.signal)
+    } catch (error) {
+      if (!(error instanceof OnpremUnavailable)) throw error
+      // The live tab's config shows it from now on, until the next probe.
+      rememberAvailability(target, { reason: error.reason, model: error.model })
+      console.error(`Transcription realtime signaling failed: ${error.message}`, error.detail ?? '')
+      throw new ApiError(502, 'module_unavailable', error.message)
+    }
+  })
+  rememberAvailability(target, null)
   return context.json(transcriptionSignalingResponseSchema.parse({ sdp: answer }))
 })
 

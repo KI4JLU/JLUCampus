@@ -1,7 +1,8 @@
 import { TRANSCRIPTION_API } from '@justcampus/shared'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { json, startUpstreamMock, testApp, type RunningMock } from '../transcripts/testing.js'
+import { forgetAvailability } from './bridge.js'
 import { realtimeRouter } from './index.js'
 import { probeOffer, sdpAnswerProblem } from './sdp.js'
 import { isTurnServer, sessionIceServers, turnCredential, TurnNotSetUpError } from './turn.js'
@@ -233,7 +234,8 @@ describe('realtime routes', () => {
       config: {
         realtimeModes: ['openai', 'onprem'],
         defaultRealtimeMode: 'onprem',
-        onpremSignalingUrl: `${mock.origin}/realtime/onprem/signaling`,
+        onpremSignalingUrl: `${mock.origin}/realtime/bridge`,
+        onpremGatewayUrl: `${mock.origin}/asr/v1`,
         realtimeIceServers: [{ urls: ['stun:stun.example.org:3478'] }],
         openaiRealtimeUrl: `${mock.origin}/realtime/openai/v1`
       },
@@ -244,6 +246,7 @@ describe('realtime routes', () => {
     await mock.close()
     vi.restoreAllMocks()
   })
+  beforeEach(() => forgetAvailability())
 
   it('offers the modes that are set up, with the default', async () => {
     const response = await testApp(realtimeRouter, config).request(
@@ -253,7 +256,8 @@ describe('realtime routes', () => {
       modes: ['openai', 'onprem'],
       defaultMode: 'onprem',
       iceServers: [{ urls: ['stun:stun.example.org:3478'] }],
-      openaiModel: 'gpt-realtime-whisper'
+      openaiModel: 'gpt-realtime-whisper',
+      onpremUnavailable: null
     })
     const withoutKey = await testApp(realtimeRouter, {
       config: config!.config,
@@ -265,7 +269,46 @@ describe('realtime routes', () => {
       modes: [],
       defaultMode: null,
       iceServers: [],
-      openaiModel: null
+      openaiModel: null,
+      onpremUnavailable: null
+    })
+  })
+
+  it('leaves on-prem out while the gateway refuses the realtime model, and says why', async () => {
+    const denied = {
+      ...config,
+      config: { ...config!.config, onpremRealtimeModel: 'voxtral-denied' }
+    }
+    const response = await testApp(realtimeRouter, denied).request(
+      relative(TRANSCRIPTION_API.realtimeConfig)
+    )
+    expect(await response.json()).toEqual({
+      modes: ['openai'],
+      defaultMode: 'openai',
+      iceServers: [],
+      openaiModel: 'gpt-realtime-whisper',
+      onpremUnavailable: { reason: 'modelNotAllowed', model: 'voxtral-denied' }
+    })
+    // A session started anyway fails with the reason, not a generic bridge error.
+    const signaling = await testApp(realtimeRouter, denied).request(
+      relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
+      json('POST', { sdp: probeOffer() })
+    )
+    expect(signaling.status).toBe(502)
+    expect(await signaling.json()).toMatchObject({
+      error: {
+        code: 'module_unavailable',
+        message: 'The gateway does not allow the realtime model voxtral-denied for this API key'
+      }
+    })
+    // A bridge that does not run is unavailable too.
+    const down = await testApp(realtimeRouter, {
+      ...config,
+      config: { ...config!.config, onpremSignalingUrl: 'http://127.0.0.1:9' }
+    }).request(relative(TRANSCRIPTION_API.realtimeConfig))
+    expect(await down.json()).toMatchObject({
+      modes: ['openai'],
+      onpremUnavailable: { reason: 'bridgeUnreachable', model: 'voxtral-mini-realtime' }
     })
   })
 

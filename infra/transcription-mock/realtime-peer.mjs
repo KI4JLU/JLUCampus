@@ -7,7 +7,8 @@
  * on-prem bridge's `input_audio_buffer.committed`, the next sentence of a fixed German script word
  * by word as `conversation.item.input_audio_transcription.delta`, then `…completed` with the whole
  * sentence. The browser's `input_audio_buffer.commit` (on-prem stop) finishes at once with one last
- * item, empty if no audio came since the last one, so stopping does not wait.
+ * item, empty if no audio came since the last one, so stopping does not wait; half a second later
+ * the peer closes, as the bridge does after finalising.
  *
  * An offer werift cannot take (no ICE credentials or fingerprint, say) is refused as a real bridge
  * would refuse it: `answerWithPeer` throws `OfferRefused`. Only a missing `werift` makes it return
@@ -23,6 +24,8 @@ const DELTA_MS = 80
 const IDLE_MS = 120_000
 /** A peer not connected after this long is closed. */
 const CONNECT_MS = 30_000
+/** After the final item the bridge gives the data channel this long before it closes. */
+const FINALIZE_CLOSE_MS = 500
 
 /** An offer the peer cannot negotiate; the bridge answers it with an error. */
 export class OfferRefused extends Error {}
@@ -163,11 +166,17 @@ class MockSession {
     } catch {
       return
     }
-    // On-prem stop: finish with what came since the last item.
+    // On-prem stop: finish with what came since the last item, then close as the bridge does
+    // (its `keep_open` commit goes on with the next item instead).
     if (event?.type === 'input_audio_buffer.commit') {
       const withText = this.packets > 0
       this.packets = 0
       this.queueItem(withText)
+      if (!event.keep_open) {
+        this.sending = this.sending
+          .then(() => new Promise((resolve) => setTimeout(resolve, FINALIZE_CLOSE_MS)))
+          .then(() => this.close())
+      }
     }
   }
 
