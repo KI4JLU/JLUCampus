@@ -190,6 +190,12 @@ const keycloakSessions = createKeycloakSessionKeeper({
         .set({ keycloakRefreshToken: refreshToken, keycloakCheckedAt: checkedAt })
         .where(eq(schema.session.id, sessionId))
     },
+    async postpone(sessionId, checkedAt) {
+      await db
+        .update(schema.session)
+        .set({ keycloakCheckedAt: checkedAt })
+        .where(eq(schema.session.id, sessionId))
+    },
     async end(sessionId) {
       await db.delete(schema.session).where(eq(schema.session.id, sessionId))
     }

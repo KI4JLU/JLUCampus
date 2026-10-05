@@ -28,6 +28,8 @@ export interface KeycloakSessionStore {
   /** `null` when the app session no longer exists. */
   read(sessionId: string): Promise<KeycloakSessionRecord | null>
   save(sessionId: string, refreshToken: string, checkedAt: Date): Promise<void>
+  /** Sets only the check time, keeping whatever token is stored by then. */
+  postpone(sessionId: string, checkedAt: Date): Promise<void>
   end(sessionId: string): Promise<void>
 }
 
@@ -71,13 +73,10 @@ export function createKeycloakSessionKeeper(options: {
       await store.end(sessionId)
       return false
     }
-    // Without an answer the old token stays, and the next try waits an interval as well, so an
-    // outage neither ends sessions nor slows every request down.
-    await store.save(
-      sessionId,
-      result.status === 'active' ? result.refreshToken : record.refreshToken,
-      time
-    )
+    if (result.status === 'active') await store.save(sessionId, result.refreshToken, time)
+    // Without an answer the next try waits an interval as well, so an outage neither ends
+    // sessions nor slows every request down.
+    else await store.postpone(sessionId, time)
     return true
   }
 

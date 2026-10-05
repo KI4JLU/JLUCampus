@@ -34,6 +34,9 @@ function setup(record: KeycloakSessionRecord | null, refreshResult: KeycloakRefr
       save: async (_sessionId, refreshToken, checkedAt) => {
         current = { refreshToken, checkedAt }
       },
+      postpone: async (_sessionId, checkedAt) => {
+        if (current) current = { ...current, checkedAt }
+      },
       end: async (sessionId) => {
         ended.push(sessionId)
         current = null
@@ -104,6 +107,7 @@ describe('Keycloak session keeper', () => {
       store: {
         read: async () => ({ refreshToken: reads.shift() ?? 'r2', checkedAt: null }),
         save: async () => {},
+        postpone: async () => {},
         end
       }
     })
