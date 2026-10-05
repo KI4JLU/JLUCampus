@@ -82,7 +82,7 @@ export function AccountMenu({ me }: { me: Me }): React.JSX.Element {
           {t('account.signOut')}
         </DropdownMenuItem>
       </SidebarUserMenu>
-      <UserSettingsDialog open={settingsOpen} onOpenChange={handleSettingsOpenChange} />
+      <UserSettingsDialog me={me} open={settingsOpen} onOpenChange={handleSettingsOpenChange} />
     </div>
   )
 }

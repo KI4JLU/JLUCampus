@@ -627,14 +627,28 @@
     "title": "Einstellungen",
     "search": "Einstellungen suchen",
     "noMatches": "Keine Treffer",
+    "general": {
+      "title": "Allgemein"
+    },
     "language": {
-      "title": "Sprache",
       "label": "Sprache der Oberfläche",
       "description": "Wird in Ihrem Profil gespeichert."
     },
     "appearance": {
-      "title": "Darstellung",
       "description": "Hell, dunkel oder wie im Betriebssystem eingestellt."
+    },
+    "profile": {
+      "title": "Profil",
+      "username": "Benutzername",
+      "givenName": "Vorname",
+      "familyName": "Nachname",
+      "email": "E-Mail-Adresse",
+      "role": "Rolle",
+      "managed": "Ihr Profil wird zentral über Ihre JLU-Kennung verwaltet. Änderungen können nur dort vorgenommen werden.",
+      "roles": {
+        "admin": "Administrator",
+        "user": "Nutzer"
+      }
     }
   },
   "admin": {

@@ -38,6 +38,10 @@ export const meSchema = z.object({
   name: z.string(),
   email: z.string(),
   image: z.string().nullable(),
+  /** From Keycloak, `null` until the next sign-in or when the realm leaves it out. */
+  username: z.string().nullable(),
+  givenName: z.string().nullable(),
+  familyName: z.string().nullable(),
   role: userRoleSchema,
   /** `null` until the user picked one; clients then fall back to the browser language. */
   language: languageSchema.nullable()

@@ -627,14 +627,28 @@
     "title": "Settings",
     "search": "Search settings",
     "noMatches": "No matches",
+    "general": {
+      "title": "General"
+    },
     "language": {
-      "title": "Language",
       "label": "Interface language",
       "description": "Saved to your profile."
     },
     "appearance": {
-      "title": "Appearance",
       "description": "Light, dark, or the same as your operating system."
+    },
+    "profile": {
+      "title": "Profile",
+      "username": "Username",
+      "givenName": "First name",
+      "familyName": "Last name",
+      "email": "Email address",
+      "role": "Role",
+      "managed": "Your profile is managed centrally through your JLU account. Changes can only be made there.",
+      "roles": {
+        "admin": "Administrator",
+        "user": "User"
+      }
     }
   },
   "admin": {
