@@ -90,3 +90,105 @@ const envSchema = z
   }))
 
 export const env = envSchema.parse(process.env)
+
+// ---------------------------------------------------------------------------
+// Outbound proxy
+// ---------------------------------------------------------------------------
+
+/**
+ * Hosts that reach the internet only through a proxy (the campus host): Node's `fetch` (the
+ * transcription and translator upstreams, Keycloak) and its `http`/`https` modules (the S3 client)
+ * use `HTTPS_PROXY`/`HTTP_PROXY` only with `NODE_USE_ENV_PROXY=1` (Node 22.21 and 24.5 or later)
+ * or `--use-env-proxy`, and go direct to the hosts of `NO_PROXY`. Object storage, Keycloak and
+ * local services usually sit inside and must be listed there. Nothing here changes requests; the
+ * server only warns at start about settings that would send them the wrong way.
+ */
+
+/** A proxy variable as Node reads it: lower case before upper case; empty counts as unset. */
+export function proxyVariable(
+  environment: NodeJS.ProcessEnv,
+  name: 'HTTPS_PROXY' | 'HTTP_PROXY' | 'NO_PROXY'
+): string | null {
+  return environment[name.toLowerCase()]?.trim() || environment[name]?.trim() || null
+}
+
+function ipNumber(address: string): number | null {
+  const parts = address.split('.')
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255))
+    return null
+  return parts.reduce((value, part) => value * 256 + Number(part), 0)
+}
+
+/**
+ * Whether `NO_PROXY` sends requests to `url` direct, read as strictly as Node's `http` module
+ * does (`fetch` is a little more lenient): `*`, the exact host, `.domain` or `*.domain` for its
+ * subdomains, an IPv4 address or `from-to` range, each optionally with `:port`.
+ */
+export function noProxyCovers(noProxy: string | null, url: string): boolean {
+  if (!noProxy) return false
+  const target = new URL(url)
+  const host = target.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  const port = target.port || (target.protocol === 'https:' ? '443' : '80')
+  return noProxy
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .some((raw) => {
+      const entry = raw.toLowerCase()
+      if (entry === '*') return true
+      const portMatch = /^(.+?):(\d+)$/.exec(entry)
+      if (portMatch && !portMatch[1]!.includes(':') && portMatch[2] !== port) return false
+      const name = portMatch && !portMatch[1]!.includes(':') ? portMatch[1]! : entry
+      const range = /^([\d.]+)-([\d.]+)$/.exec(name)
+      if (range) {
+        const [from, to, value] = [ipNumber(range[1]!), ipNumber(range[2]!), ipNumber(host)]
+        return from !== null && to !== null && value !== null && value >= from && value <= to
+      }
+      if (name.startsWith('*.')) return host.endsWith(name.slice(1))
+      if (name.startsWith('.')) return host.endsWith(name)
+      return host === name.replace(/^\[|\]$/g, '')
+    })
+}
+
+/**
+ * What the server warns about at start: proxy variables Node ignores without
+ * `NODE_USE_ENV_PROXY=1`, and `internalUrls` (object storage, Keycloak, the server itself) that
+ * the proxy would get. Never names the proxy, whose URL may hold credentials.
+ */
+export function outboundProxyWarnings(
+  environment: NodeJS.ProcessEnv,
+  internalUrls: readonly string[],
+  execArgv: readonly string[] = []
+): string[] {
+  const proxies = {
+    'http:': proxyVariable(environment, 'HTTP_PROXY'),
+    'https:': proxyVariable(environment, 'HTTPS_PROXY')
+  }
+  if (!proxies['http:'] && !proxies['https:']) return []
+  const enabled =
+    environment.NODE_USE_ENV_PROXY === '1' ||
+    [...execArgv, ...(environment.NODE_OPTIONS?.split(/\s+/) ?? [])].includes('--use-env-proxy')
+  if (!enabled) {
+    return [
+      'HTTPS_PROXY/HTTP_PROXY is set but Node ignores it without NODE_USE_ENV_PROXY=1: outbound requests go direct.'
+    ]
+  }
+  const noProxy = proxyVariable(environment, 'NO_PROXY')
+  return internalUrls.flatMap((url) => {
+    const protocol = new URL(url).protocol as keyof typeof proxies
+    if (!proxies[protocol] || noProxyCovers(noProxy, url)) return []
+    return [`${new URL(url).host} would be reached through the proxy: add it to NO_PROXY.`]
+  })
+}
+
+for (const warning of outboundProxyWarnings(
+  process.env,
+  [
+    `http://127.0.0.1:${env.PORT}`,
+    `http://localhost:${env.PORT}`,
+    env.KEYCLOAK_ISSUER,
+    env.TRANSCRIPTION_S3_ENDPOINT
+  ].filter((url): url is string => Boolean(url)),
+  process.execArgv
+)) {
+  console.warn(`Outbound proxy: ${warning}`)
+}
