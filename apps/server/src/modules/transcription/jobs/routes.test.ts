@@ -307,10 +307,11 @@ describe('upload session', () => {
   })
 
   it('offers no uploads before transcription is set up', async () => {
-    const response = await app('alice', TRANSCRIPTION_DEFAULT_CONFIG).request(
-      local(TRANSCRIPTION_API.jobs),
-      post('', upload)
-    )
+    // The default speech endpoint is the HRZ gateway; without one nothing can be transcribed.
+    const response = await app('alice', {
+      ...TRANSCRIPTION_DEFAULT_CONFIG,
+      asrBaseUrl: null
+    }).request(local(TRANSCRIPTION_API.jobs), post('', upload))
     expect(response.status).toBe(502)
   })
 })

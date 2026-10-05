@@ -30,6 +30,7 @@ import {
   transcriptionTemplateSchema,
   transcriptionTranscriptCreateSchema,
   transcriptionTranscriptPatchSchema,
+  transcriptionUrls,
   widgetDefinition
 } from './index'
 
@@ -87,7 +88,13 @@ describe('module registration', () => {
     const config = transcriptionComponentConfigSchema.parse({})
     expect(config).toEqual(TRANSCRIPTION_DEFAULT_CONFIG)
     expect(config).toMatchObject({
-      asrBaseUrl: null,
+      asrBaseUrl: 'https://api.hrz.uni-giessen.de/v1',
+      asrModels: [],
+      defaultAsrModel: 'jlu/whisper-1',
+      asrConcurrency: 3,
+      diarizationEnabled: false,
+      diarizationUrl: null,
+      diarizationModel: 'pyannote/speaker-diarization-community-1',
       defaultLanguage: 'auto',
       defaultSpeakerCount: 'auto',
       defaultLlmCorrection: true,
@@ -108,6 +115,21 @@ describe('module registration', () => {
       transcriptionComponentConfigSchema.safeParse({ asrBaseUrl: 'http://asr.example.org/v1' })
         .success
     ).toBe(false)
+    // Several speech workers, comma-separated as kiChat's `base_url`; each must be a valid URL.
+    expect(
+      transcriptionComponentConfigSchema.safeParse({
+        asrBaseUrl: 'https://w1.example.org/v1, https://w2.example.org/v1'
+      }).success
+    ).toBe(true)
+    expect(
+      transcriptionComponentConfigSchema.safeParse({
+        asrBaseUrl: 'https://w1.example.org/v1, http://w2.example.org/v1'
+      }).success
+    ).toBe(false)
+    expect(transcriptionUrls(' https://a.test/v1 ,, https://b.test/v1')).toEqual([
+      'https://a.test/v1',
+      'https://b.test/v1'
+    ])
     expect(
       transcriptionComponentConfigSchema.safeParse({ realtimeModes: ['onprem', 'onprem'] }).success
     ).toBe(false)

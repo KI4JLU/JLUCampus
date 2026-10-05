@@ -4,20 +4,28 @@ import type { TranscriptionLanguage } from '@justcampus/shared'
 import { z } from 'zod'
 
 import { bearer, ensureOk, readJson, UpstreamError, upstreamFetch, upstreamUrl } from '../http.js'
+import { upstreamLimiter, type ConcurrencyLimiter } from './limiter.js'
+import { withRetry } from './upstream.js'
 
 /**
- * Speech recognition through an OpenAI-compatible `POST /audio/transcriptions` (Speaches with
- * `jlu/whisper-1` at the JLU), asking for Whisper's `verbose_json` with segments. Times are
- * relative to the audio sent; the merge adds each chunk's offset.
+ * Speech recognition through an OpenAI-compatible `POST /audio/transcriptions` (the HRZ gateway
+ * with `jlu/whisper-1`, or Speaches workers), with kiChat's fields: Whisper's `verbose_json` and
+ * word timing where the server gives it. Times are relative to the audio sent; the merge adds
+ * each chunk's offset.
  */
 
 const numberOrNull = z.number().finite().nullable().optional().catch(null)
+/** Some servers (the HRZ gateway) send numbers as strings, e.g. `"duration": "8.26"`. */
+const numeric = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() !== '' ? Number(value) : value),
+  z.number().finite()
+)
 
 const verboseSegmentSchema = z.object({
   id: z.number().optional().catch(undefined),
   seek: z.number().nullable().optional().catch(null),
-  start: z.number().finite(),
-  end: z.number().finite(),
+  start: numeric,
+  end: numeric,
   text: z.string(),
   tokens: z.array(z.number()).optional().catch(undefined),
   temperature: numberOrNull,
@@ -28,17 +36,30 @@ const verboseSegmentSchema = z.object({
 
 const verboseWordSchema = z.object({
   word: z.string(),
-  start: z.number().finite(),
-  end: z.number().finite(),
+  start: numeric,
+  end: numeric,
   probability: numberOrNull
 })
 
+/** `null` lists count as none: the HRZ gateway answers `"words": null` without word timing. */
 const verboseJsonSchema = z.object({
-  text: z.string().optional().default(''),
+  text: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((value) => value ?? ''),
   language: z.string().nullable().optional().catch(null),
-  duration: z.number().finite().nullable().optional().catch(null),
-  segments: z.array(verboseSegmentSchema).optional().default([]),
-  words: z.array(verboseWordSchema).optional().default([])
+  duration: numeric.nullable().optional().catch(null),
+  segments: z
+    .array(verboseSegmentSchema)
+    .nullable()
+    .optional()
+    .transform((value) => value ?? []),
+  words: z
+    .array(verboseWordSchema)
+    .nullable()
+    .optional()
+    .transform((value) => value ?? [])
 })
 
 /** One recognised segment, relative to its chunk, with Whisper's decoder fields camelCased. */
@@ -165,28 +186,34 @@ export interface AsrRequest {
   apiKey: string | null
   model: string
   language: TranscriptionLanguage
-  /** Text that came before, so recognition carries on across chunks. */
-  prompt?: string
   timeoutMs: number
   signal?: AbortSignal
 }
 
 /**
- * Recognises one WAV file. The file is streamed from disk; `auto` sends no language rather than
- * an unsupported literal (section 5).
+ * kiChat's request fields: `model`, `language` unless `auto` (no unsupported literal, section 5),
+ * `response_format=verbose_json`, `timestamp_granularities[]=word`, and the WAV as `file`.
  */
+export function transcriptionForm(
+  file: Blob,
+  request: Pick<AsrRequest, 'model' | 'language'>
+): FormData {
+  const form = new FormData()
+  form.set('model', request.model)
+  if (request.language !== 'auto') form.set('language', request.language)
+  form.set('response_format', 'verbose_json')
+  form.append('timestamp_granularities[]', 'word')
+  form.set('file', file, 'audio.wav')
+  return form
+}
+
+/** Recognises one WAV file, streamed from disk; one attempt, without a permit. */
 export async function transcribeFile(
   path: string,
   chunkDuration: number | null,
   request: AsrRequest
 ): Promise<AsrResult> {
-  const form = new FormData()
-  form.set('file', await openAsBlob(path, { type: 'audio/wav' }), 'audio.wav')
-  form.set('model', request.model)
-  form.set('response_format', 'verbose_json')
-  form.append('timestamp_granularities[]', 'segment')
-  if (request.language !== 'auto') form.set('language', request.language)
-  if (request.prompt) form.set('prompt', request.prompt)
+  const form = transcriptionForm(await openAsBlob(path, { type: 'audio/wav' }), request)
   const label = 'Die Spracherkennung'
   const response = await ensureOk(
     await upstreamFetch(upstreamUrl(request.baseUrl, 'audio/transcriptions'), {
@@ -204,4 +231,81 @@ export async function transcribeFile(
   } catch {
     throw new UpstreamError(`${label} answered in an unexpected shape`, response.status)
   }
+}
+
+/** One chunk file to recognise. */
+export interface AsrChunk {
+  path: string
+  duration: number | null
+}
+
+export interface ParallelAsrRequest extends Omit<AsrRequest, 'baseUrl'> {
+  /** The workers, used in turn (kiChat's comma-separated `base_url`). */
+  baseUrls: readonly string[]
+  /** Requests in flight at most (`asrConcurrency`). */
+  limit: number
+  limiter?: ConcurrencyLimiter
+  retryTimes?: number
+  retryDelayMs?: number
+  /** After each wave, with the chunks done so far. */
+  onWave?: (done: number) => Promise<void> | void
+  /** The recognition of one chunk, before the next wave starts (e.g. to cache it). */
+  onResult?: (index: number, result: AsrResult) => Promise<void> | void
+}
+
+/**
+ * kiChat's `transcribeAudioParallel`: the chunks go out in waves as large as the permits the
+ * shared budget gives (at least one; with none after the wait, as large as `limit`), so one big
+ * job never floods the servers and parallel jobs share them. Workers take the chunks round-robin
+ * across waves. Each request is retried for transient failures (`withRetry`); one that still
+ * fails fails the whole recognition once its wave is done. Results keep the chunks' order.
+ */
+export async function transcribeChunksParallel(
+  chunks: readonly AsrChunk[],
+  request: ParallelAsrRequest
+): Promise<AsrResult[]> {
+  const urls = request.baseUrls.map((url) => url.trim()).filter(Boolean)
+  if (urls.length === 0) throw new Error('No speech worker is set up')
+  const limiter = request.limiter ?? upstreamLimiter
+  const limit = Math.max(1, request.limit)
+  const results = new Array<AsrResult>(chunks.length)
+  const pending = chunks.map((_, index) => index)
+  let worker = 0
+  let done = 0
+  while (pending.length > 0) {
+    const permits = await limiter.acquire(Math.min(limit, pending.length), {
+      label: 'transcriptions (parallel)',
+      signal: request.signal
+    })
+    const size =
+      permits.count > 0 ? Math.min(permits.count, pending.length) : Math.min(limit, pending.length)
+    const wave = pending.splice(0, size)
+    let settled: PromiseSettledResult<AsrResult>[]
+    try {
+      settled = await Promise.allSettled(
+        wave.map((index) => {
+          const baseUrl = urls[worker++ % urls.length]!
+          const chunk = chunks[index]!
+          return withRetry(
+            () => transcribeFile(chunk.path, chunk.duration, { ...request, baseUrl }),
+            {
+              times: request.retryTimes,
+              delayMs: request.retryDelayMs,
+              signal: request.signal
+            }
+          )
+        })
+      )
+    } finally {
+      permits.release()
+    }
+    for (const [position, outcome] of settled.entries()) {
+      if (outcome.status === 'rejected') throw outcome.reason
+      results[wave[position]!] = outcome.value
+      await request.onResult?.(wave[position]!, outcome.value)
+    }
+    done += wave.length
+    await request.onWave?.(done)
+  }
+  return results
 }

@@ -136,11 +136,12 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), 'transcription-pipeline-'))
     // Twenty seconds of "speech" as 44.1 kHz stereo WAV, and five seconds of video with sound.
+    // Noise, not a tone: the diarisation mock finds the voices' references in it by their samples.
     ffmpeg(
       '-f',
       'lavfi',
       '-i',
-      'sine=frequency=300:duration=20',
+      'anoisesrc=duration=20:color=pink:amplitude=0.3:seed=7',
       '-ac',
       '2',
       '-ar',
@@ -175,20 +176,33 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     mock = await startMock(0)
     mockUrl = `http://127.0.0.1:${(mock.address() as AddressInfo).port}`
 
-    // A chat endpoint that corrects "zehn Uhr", and a diariser answering kiChat's 415.
+    // A chat endpoint that corrects "zehn Uhr" in kiChat's answer format, a diariser answering
+    // kiChat's 415, and a server without diarisation (the HRZ gateway's 404).
     helper = createServer((request, response) => {
       const chunks: Buffer[] = []
       request.on('data', (chunk: Buffer) => chunks.push(chunk))
       request.on('end', () => {
-        if (request.url === '/diarize-415') {
+        if (request.url?.startsWith('/d415/')) {
           response.writeHead(415).end()
+          return
+        }
+        if (request.url?.startsWith('/none/')) {
+          response.writeHead(404, { 'Content-Type': 'application/json' })
+          response.end('{"detail":"Not Found"}')
           return
         }
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
           messages: Array<{ content: string }>
         }
-        const texts = JSON.parse(body.messages[1]!.content) as string[]
-        const content = JSON.stringify({ text: texts.map((text) => text.replace('zehn', '10')) })
+        const transcript = body.messages[1]!.content.split('Hier ist das Transkript:\n')[1]!
+        const corrections = [...transcript.matchAll(/^Segment \[(\d+)\] \((.*?)\): (.*)$/gm)].map(
+          ([, index, speaker, text]) => ({
+            original_index: Number(index),
+            speaker,
+            text: text!.replace('zehn', '10')
+          })
+        )
+        const content = JSON.stringify(corrections)
         response.writeHead(200, { 'Content-Type': 'application/json' })
         response.end(JSON.stringify({ choices: [{ message: { content } }] }))
       })
@@ -212,7 +226,7 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
       asrModels: [{ id: 'jlu/whisper-1', label: 'Whisper' }],
       providerName: 'KI@JLU',
       diarizationEnabled: true,
-      diarizationUrl: `${mockUrl}/diarization/diarize`,
+      diarizationUrl: `${mockUrl}/diarization/v1`,
       llmBaseUrl: `${helperUrl}/v1`,
       llmModels: [{ id: 'mock-chat', label: 'Mock' }],
       chunkSeconds: 10,
@@ -291,7 +305,6 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     const prefix = `transcription/${componentId}/jobs/${id}/`
     expect(storage.keys()).toEqual(
       [
-        `${prefix}diarization.json`,
         `${prefix}normalized.wav`,
         `${prefix}peaks.json`,
         ...speakers.flatMap((speaker) =>
@@ -335,21 +348,23 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     expect(result.model).toBe('jlu/whisper-1')
     expect(result.provider).toBe('KI@JLU')
     expect(result.duration).toBeCloseTo(20, 1)
-    // Two chunks of ten seconds, each recognised from 0 and moved by its start.
+    // Two chunks of ten seconds, each recognised from 0 and moved by its start; the words map to
+    // the voices, the correction merges one voice's neighbouring sentences as kiChat's does.
     expect(
       result.segments.map(({ id, start, end, speaker }) => ({ id, start, end, speaker }))
     ).toEqual([
-      { id: 1, start: 0, end: 4, speaker: 'Anna' },
-      { id: 2, start: 4, end: 8, speaker: 'Anna' },
-      { id: 3, start: 8, end: 10, speaker: 'Ben' },
-      { id: 4, start: 10, end: 14, speaker: 'Ben' },
-      { id: 5, start: 14, end: 18, speaker: 'Anna' },
-      { id: 6, start: 18, end: expect.closeTo(20, 1), speaker: 'Anna' }
+      { id: 1, start: 0, end: 7.7, speaker: 'Anna' },
+      { id: 2, start: 8, end: 13.7, speaker: 'Ben' },
+      { id: 3, start: 14, end: expect.closeTo(19.7, 1), speaker: 'Anna' }
     ])
-    expect(result.segments[2]!.text).toBe('Wir treffen uns am Montag um 10 Uhr.')
+    expect(result.segments[1]!.text).toBe(
+      'Wir treffen uns am Montag um 10 Uhr. Guten Tag und herzlich willkommen.'
+    )
     expect(result.segments[0]).toMatchObject({ temperature: 0, compressionRatio: 0.98 })
     expect(result.text.startsWith('Guten Tag und herzlich willkommen.')).toBe(true)
-    expect(result.words).toEqual([])
+    expect(result.words[0]).toMatchObject({ start: 0, word: ' Guten', speaker: 'Anna' })
+    expect(result.words.find((word) => word.start >= 8)!.speaker).toBe('Ben')
+    expect(done.error).toBeNull()
     expect(done.progress).toEqual({ phase: null, currentChunk: 2, totalChunks: 2, percent: 100 })
     expect(statuses).toContain('preprocessed:chunking')
     expect(statuses).toContain('transcribing:transcribing')
@@ -357,7 +372,23 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     expect(statuses).toContain('optimizing:correcting')
     expect(storage.keys().filter((key) => key.includes('/asr/'))).toHaveLength(2)
 
-    // `single` puts every segment on the voice that speaks most, still named by the windows.
+    // The diariser recognises the named voices by their samples: no mapping needed.
+    const known = await runTranscription(
+      run(
+        {
+          ...transcription.job,
+          status: 'preprocessing',
+          mapping: {},
+          settings: { language: 'auto', speakerCount: 'auto', llmCorrection: false }
+        },
+        storage
+      )
+    )
+    expect(new Set(known.result!.segments.map((segment) => segment.speaker))).toEqual(
+      new Set(['Anna', 'Ben'])
+    )
+
+    // `single` asks for one voice, which the diariser recognises as Anna's.
     const single = await runTranscription(
       run(
         {
@@ -373,7 +404,7 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     )
   }, 60_000)
 
-  it('diarises again when the speaker count changed after the analysis (T-09)', async () => {
+  it('diarises again at transcription with the count chosen then (T-09)', async () => {
     const id = '00000000-0000-4000-8000-0000000000a7'
     const storage = await storageWith(id, 'talk.wav')
     const analysis = run(
@@ -382,8 +413,7 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     )
     const analyzed = await runAnalysis(analysis)
     expect(analyzed.speakers).toHaveLength(1)
-    const stored = JSON.parse(storage.objects.get(turnsKey(componentId, id))!.toString('utf8'))
-    expect(stored.speakerCount).toBe('single')
+    expect(storage.objects.has(turnsKey(componentId, id))).toBe(false)
 
     const multi = run(
       {
@@ -396,9 +426,74 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     )
     const done = await runTranscription(multi)
     expect(done.status).toBe('completed')
-    expect(new Set(done.result!.segments.map((segment) => segment.speaker)).size).toBe(2)
-    const again = JSON.parse(storage.objects.get(turnsKey(componentId, id))!.toString('utf8'))
-    expect(again.speakerCount).toBe('multi')
+    expect(new Set(done.result!.segments.map((segment) => segment.speaker))).toEqual(
+      new Set(['Stimme 1', 'Stimme 2'])
+    )
+  }, 60_000)
+
+  it('maps segments without word timing as the HRZ gateway answers', async () => {
+    const id = '00000000-0000-4000-8000-0000000000a9'
+    const storage = await storageWith(id, 'talk.wav')
+    const settings = config({ asrModels: [{ id: 'mock-gateway', label: 'Gateway' }] })
+    const analysis = run(jobRow(id), storage, settings)
+    const analyzed = await runAnalysis(analysis)
+    const done = await runTranscription(
+      run(
+        {
+          ...analysis.job,
+          ...analyzed,
+          status: 'preprocessing',
+          mapping: { SPEAKER_00: 'Anna', SPEAKER_01: 'Ben' }
+        } as JobRow,
+        storage,
+        settings
+      )
+    )
+    const result = done.result!
+    expect(result.words).toEqual([])
+    expect(
+      result.segments.map(({ id, start, end, speaker }) => ({ id, start, end, speaker }))
+    ).toEqual([
+      { id: 1, start: 0, end: 8, speaker: 'Anna' },
+      { id: 2, start: 8, end: 14, speaker: 'Ben' },
+      { id: 3, start: 14, end: expect.closeTo(20, 1), speaker: 'Anna' }
+    ])
+  }, 60_000)
+
+  it('gives one automatic voice with a notice when the diariser is unavailable', async () => {
+    const id = '00000000-0000-4000-8000-0000000000aa'
+    const storage = await storageWith(id, 'talk.wav')
+    const settings = config({ diarizationUrl: `${helperUrl}/none/v1` })
+    const analysis = run(jobRow(id), storage, settings)
+    const analyzed = await runAnalysis(analysis)
+    expect(analyzed.status).toBe('analyzed')
+    expect(analyzed.speakers).toEqual([
+      expect.objectContaining({ id: 'SPEAKER_00', label: 'Stimme 1', start: 0, samples: [] })
+    ])
+    expect(analyzed.error).toEqual({
+      code: 'diarization_failed',
+      message:
+        'Sprechererkennung nicht verfügbar (Diarization-Server antwortete mit Status 404). Die Datei hat eine automatische Stimme.'
+    })
+    const done = await runTranscription(
+      run(
+        {
+          ...analysis.job,
+          ...analyzed,
+          status: 'preprocessing',
+          error: null,
+          mapping: { SPEAKER_00: 'Anna' }
+        } as JobRow,
+        storage,
+        settings
+      )
+    )
+    expect(done.status).toBe('completed')
+    expect(new Set(done.result!.segments.map((segment) => segment.speaker))).toEqual(
+      new Set(['Anna'])
+    )
+    expect(done.result!.words.every((word) => word.speaker === 'Anna')).toBe(true)
+    expect(done.error).toMatchObject({ code: 'diarization_failed' })
   }, 60_000)
 
   it('fails a recognition longer than a transcript holds instead of cutting it', async () => {
@@ -455,7 +550,7 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     const id = '00000000-0000-4000-8000-0000000000a4'
     const storage = await storageWith(id, 'talk.wav')
     const failure = await runAnalysis(
-      run(jobRow(id), storage, config({ diarizationUrl: `${helperUrl}/diarize-415` }))
+      run(jobRow(id), storage, config({ diarizationUrl: `${helperUrl}/d415/v1` }))
     ).catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(JobFailure)
     expect(failure).toMatchObject({
@@ -465,14 +560,25 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     })
   }, 60_000)
 
-  it('analyses without voices when diarisation is off and refuses audio over the limit', async () => {
+  it('analyses one automatic voice when diarisation is off and refuses audio over the limit', async () => {
     const id = '00000000-0000-4000-8000-0000000000a5'
     const storage = await storageWith(id, 'talk.wav')
     storage.objects.set(turnsKey(componentId, id), Buffer.from('[]'))
     const analyzed = await runAnalysis(
       run(jobRow(id), storage, config({ diarizationEnabled: false }))
     )
-    expect(analyzed.speakers).toEqual([])
+    expect(analyzed.speakers).toEqual([
+      {
+        id: 'SPEAKER_00',
+        index: 0,
+        label: 'Stimme 1',
+        start: 0,
+        end: expect.closeTo(20, 1),
+        samples: []
+      }
+    ])
+    // Off is no failure: the capabilities say so, the job carries no notice.
+    expect(analyzed.error).toBeNull()
     expect(storage.objects.has(turnsKey(componentId, id))).toBe(false)
 
     await expect(

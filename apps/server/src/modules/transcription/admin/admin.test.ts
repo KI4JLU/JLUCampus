@@ -169,7 +169,7 @@ describe('connection tests', () => {
       status: 200,
       finding: { kind: 'transcribed', model: 'jlu/whisper-1' },
       checks: [
-        { kind: 'models', count: 2 },
+        { kind: 'models', count: 3 },
         { kind: 'transcribed', model: 'jlu/whisper-1' }
       ],
       message: null
@@ -178,7 +178,7 @@ describe('connection tests', () => {
     expect(await testConnection({ target: 'asr', model: 'mock-fail' }, context())).toMatchObject({
       ok: false,
       status: 503,
-      checks: [{ kind: 'models', count: 2 }]
+      checks: [{ kind: 'models', count: 3 }]
     })
     expect(await testConnection({ target: 'llm', model: 'mock-chat' }, context())).toMatchObject({
       ok: true,
@@ -197,9 +197,15 @@ describe('connection tests', () => {
     expect(
       await testConnection(
         { target: 'diarization' },
-        context({ diarizationUrl: `${mock.origin}/diarization/diarize` })
+        context({ diarizationUrl: `${mock.origin}/diarization/v1` })
       )
     ).toMatchObject({ ok: true, finding: { kind: 'diarized', turns: 1 } })
+    // Without a diariser of its own, the speech server is asked, as kiChat does; the HRZ gateway
+    // (here the speech mock) has no diarisation.
+    expect(await testConnection({ target: 'diarization' }, context())).toMatchObject({
+      ok: false,
+      status: 404
+    })
   })
 
   it('fails an endpoint that lists the model but rejects the operation', async () => {
@@ -599,7 +605,9 @@ describe('connection tests', () => {
   })
 
   it('reports what is not set up, and storage without a bucket', async () => {
-    expect(await testConnection({ target: 'diarization' }, context())).toMatchObject({
+    expect(
+      await testConnection({ target: 'diarization' }, context({ asrBaseUrl: null }))
+    ).toMatchObject({
       ok: false,
       status: null,
       finding: { kind: 'notSetUp' }

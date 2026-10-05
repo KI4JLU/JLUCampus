@@ -6,8 +6,10 @@ import {
 import { describe, expect, it } from 'vitest'
 
 import {
+  asrBaseUrls,
   asrModel,
   capabilitiesOf,
+  diarizationSetup,
   defaultRealtimeMode,
   llmModel,
   openaiRealtimeEndpoints,
@@ -82,6 +84,39 @@ describe('live modes', () => {
       clientSecretsUrl: 'https://api.openai.com/v1/realtime/client_secrets',
       callsUrl: 'https://api.openai.com/v1/realtime/calls'
     })
+  })
+})
+
+describe('speech workers and diarisation (kiChat’s resolution)', () => {
+  it('splits comma-separated workers and defaults to the HRZ gateway', () => {
+    expect(asrBaseUrls({ asrBaseUrl: ' https://a.test/v1, https://b.test/v1 ,' })).toEqual([
+      'https://a.test/v1',
+      'https://b.test/v1'
+    ])
+    expect(asrBaseUrls(TRANSCRIPTION_DEFAULT_CONFIG)).toEqual(['https://api.hrz.uni-giessen.de/v1'])
+    expect(asrBaseUrls({ asrBaseUrl: null })).toEqual([])
+  })
+
+  it('falls back to the speech server and key, with kiChat’s default model', () => {
+    const base = {
+      ...TRANSCRIPTION_DEFAULT_CONFIG,
+      asrBaseUrl: 'https://a.test/v1,https://b.test/v1',
+      diarizationEnabled: true,
+      diarizationModel: null
+    }
+    expect(diarizationSetup(base, { ...noSecrets, apiKey: 'speech' })).toEqual({
+      baseUrl: 'https://a.test/v1',
+      apiKey: 'speech',
+      model: 'pyannote/speaker-diarization-community-1'
+    })
+    expect(
+      diarizationSetup(
+        { ...base, diarizationUrl: 'https://diar.test/diarization/v1' },
+        { ...noSecrets, apiKey: 'speech', diarizationApiKey: 'diar' }
+      )
+    ).toMatchObject({ baseUrl: 'https://diar.test/diarization/v1', apiKey: 'diar' })
+    expect(diarizationSetup({ ...base, diarizationEnabled: false }, noSecrets)).toBeNull()
+    expect(diarizationSetup({ ...base, asrBaseUrl: null }, noSecrets)).toBeNull()
   })
 })
 

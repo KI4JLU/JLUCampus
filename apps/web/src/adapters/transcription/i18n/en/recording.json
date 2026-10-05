@@ -109,7 +109,11 @@
     },
     "asrBaseUrl": {
       "label": "Speech recognition address",
-      "hint": "OpenAI-compatible endpoint up to /v1, such as Speaches. Transcription uses POST /audio/transcriptions (verbose_json with segments)."
+      "hint": "OpenAI-compatible endpoint up to /v1, preset to the HRZ AI gateway with jlu/whisper-1. Several Speaches workers separated by commas; the chunks of a job go to them in turn. Transcription uses POST /audio/transcriptions (verbose_json, word timing where the server gives it)."
+    },
+    "asrConcurrency": {
+      "label": "Simultaneous requests to the servers",
+      "hint": "Requests to speech and speaker recognition at once, across all jobs of this server process (like kiChat's SPEACHES_MAX_CONCURRENCY). As many as the servers have model instances; from 1 to 32."
     },
     "providerName": {
       "label": "Provider name",
@@ -125,15 +129,15 @@
     },
     "diarizationEnabled": {
       "label": "Recognise speakers",
-      "hint": "Analyses the voices before transcribing, so they can be named. Without it, no text has a speaker."
+      "hint": "Analyses the voices before transcribing, so they can be named, and assigns the transcript's segments to them. Without it, or while the server cannot be reached, every file has one automatic voice."
     },
     "diarizationUrl": {
       "label": "Speaker recognition address",
-      "hint": "HTTP endpoint that takes the audio file and returns the speakers' turns."
+      "hint": "Speaches server up to /v1 with POST /audio/diarization and /audio/speech/timestamps, such as https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1. Empty: the speech recognition address (the HRZ AI gateway offers no speaker recognition). Without an API key of its own, the speech recognition key is used."
     },
     "diarizationModel": {
       "label": "Speaker recognition model",
-      "hint": "Only needed if the endpoint expects one."
+      "hint": "Empty: pyannote/speaker-diarization-community-1, as in kiChat."
     },
     "llmBaseUrl": {
       "label": "AI endpoint address",

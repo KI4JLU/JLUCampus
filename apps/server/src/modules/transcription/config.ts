@@ -1,11 +1,13 @@
 import {
   TRANSCRIPTION_DEFAULT_CONFIG,
+  TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL,
   transcriptionCapabilitiesSchema,
   transcriptionComponentConfigSchema,
   type TranscriptionCapabilities,
   type TranscriptionComponentConfig,
   type TranscriptionModel,
-  type TranscriptionRealtimeMode
+  type TranscriptionRealtimeMode,
+  transcriptionUrls
 } from '@justcampus/shared'
 
 import { loadModuleRuntime } from '../runtime.js'
@@ -34,6 +36,34 @@ export function asrModel(config: TranscriptionComponentConfig): TranscriptionMod
     config.asrModels[0] ??
     null
   )
+}
+
+/** The speech workers of `asrBaseUrl` (comma-separated, kiChat's `base_url`), in order. */
+export function asrBaseUrls(config: Pick<TranscriptionComponentConfig, 'asrBaseUrl'>): string[] {
+  return transcriptionUrls(config.asrBaseUrl)
+}
+
+/** Where diarisation goes, as kiChat resolves it; `null` while it is off or has no server. */
+export interface DiarizationSetup {
+  /** `diarizationUrl`, else the first speech worker (kiChat: empty = the batch server). */
+  baseUrl: string
+  /** `diarizationApiKey`, else the speech key. */
+  apiKey: string | null
+  model: string
+}
+
+export function diarizationSetup(
+  config: TranscriptionComponentConfig,
+  secrets: TranscriptionSecrets
+): DiarizationSetup | null {
+  if (!config.diarizationEnabled) return null
+  const baseUrl = config.diarizationUrl ?? asrBaseUrls(config)[0] ?? null
+  if (!baseUrl) return null
+  return {
+    baseUrl,
+    apiKey: secrets.diarizationApiKey ?? secrets.apiKey,
+    model: config.diarizationModel ?? TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL
+  }
 }
 
 /**
@@ -107,8 +137,10 @@ export function capabilitiesOf(
   const chat = config.llmBaseUrl !== null && config.llmModels.length > 0
   const modes = realtimeModes(config, secrets)
   return transcriptionCapabilitiesSchema.parse({
-    batch: storageConfigured && config.asrBaseUrl !== null && speechModel !== null,
-    diarization: config.diarizationEnabled && config.diarizationUrl !== null,
+    batch: storageConfigured && asrBaseUrls(config).length > 0 && speechModel !== null,
+    // Off, every file gets one automatic voice; a diariser that turns out unavailable says so on
+    // the job (`diarization_failed` as a notice).
+    diarization: diarizationSetup(config, secrets) !== null,
     llmCorrection: chat,
     summaries: chat,
     speakerOptimization: chat,

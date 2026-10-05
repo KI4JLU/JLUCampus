@@ -2,15 +2,18 @@ import { readBody, sendJson } from './http.mjs'
 
 /**
  * OpenAI-compatible speech recognition, below `/asr/v1`: `GET /models` and
- * `POST /audio/transcriptions` (multipart `file`, `model`, optional `language` and `prompt`,
- * `response_format=verbose_json`) answering Whisper-style `verbose_json` with segments.
+ * `POST /audio/transcriptions` (multipart `file`, `model`, optional `language`,
+ * `response_format=verbose_json`, `timestamp_granularities[]`) answering Whisper-style
+ * `verbose_json` with segments.
  *
  * Nothing is recognised: the answer depends only on the WAV's length (read from its header) and
  * the language. Every four seconds of audio give one segment with the next sentence of a fixed
  * script, German unless `language=en`; the German script says "zehn Uhr", which the chat mock's
- * correction turns into "10 Uhr" as kiChat's did. Words come back too when
- * `timestamp_granularities[]=word` is asked for. A file that is no WAV answers 415, the model
- * `mock-fail` answers 503, and `TRANSCRIPTION_MOCK_FAIL=asr` makes every request answer 503.
+ * correction turns into "10 Uhr" as kiChat's did. Words (with Whisper's leading space) come back
+ * too when `timestamp_granularities[]=word` is asked for, as kiChat asks and Speaches answers;
+ * the model `mock-gateway` answers as the HRZ gateway does, without words and with the duration
+ * as a string. A file that is no WAV answers 415, the model `mock-fail` answers 503, and
+ * `TRANSCRIPTION_MOCK_FAIL=asr` makes every request answer 503.
  *
  * @param {import('node:http').IncomingMessage} request
  * @param {import('node:http').ServerResponse} response
@@ -23,6 +26,7 @@ export async function handle(request, response, path) {
       object: 'list',
       data: [
         { id: 'jlu/whisper-1', object: 'model' },
+        { id: 'mock-gateway', object: 'model' },
         { id: 'mock-fail', object: 'model' }
       ]
     })
@@ -45,6 +49,10 @@ export async function handle(request, response, path) {
       return true
     }
     const language = form.get('language') === 'en' ? 'en' : 'de'
+    if (form.get('model') === 'mock-gateway') {
+      sendJson(response, 200, asGateway(recognize(duration, language)))
+      return true
+    }
     const words = form.getAll('timestamp_granularities[]').includes('word')
     sendJson(response, 200, recognize(duration, language, words))
     return true
@@ -158,9 +166,12 @@ export function recognize(duration, language, withWords = false) {
   if (withWords) {
     result.words = segments.flatMap((segment) => {
       const parts = segment.text.trim().split(/\s+/)
-      const step = (segment.end - segment.start) / parts.length
+      // Speech ends a little before the segment does: a pause between sentences.
+      const pause = Math.min(0.3, (segment.end - segment.start) / 4)
+      const step = (segment.end - pause - segment.start) / parts.length
+      // Whisper's words carry their leading space, as Speaches answers them.
       return parts.map((word, position) => ({
-        word,
+        word: ` ${word}`,
         start: round(segment.start + position * step),
         end: round(segment.start + (position + 1) * step),
         probability: 0.95
@@ -168,4 +179,12 @@ export function recognize(duration, language, withWords = false) {
     })
   }
   return result
+}
+
+/**
+ * An answer as the HRZ gateway (vLLM behind LiteLLM) gives it: no word timing (`words: null`)
+ * whatever was asked for, the duration as a string and no usage.
+ */
+export function asGateway(result) {
+  return { ...result, duration: String(result.duration), words: null, usage: null }
 }

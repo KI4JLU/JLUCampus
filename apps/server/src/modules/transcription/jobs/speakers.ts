@@ -2,10 +2,8 @@ import {
   TRANSCRIPTION_SAMPLE_MAX_SECONDS,
   TRANSCRIPTION_SAMPLE_MIN_SECONDS,
   TRANSCRIPTION_SPEAKERS_MAX,
-  type TranscriptionSegment,
   type TranscriptionSnippet,
-  type TranscriptionSpeaker,
-  type TranscriptionWord
+  type TranscriptionSpeaker
 } from '@justcampus/shared'
 
 /** One stretch of speech of one diarised voice, in seconds of the whole file. */
@@ -15,8 +13,8 @@ export interface SpeakerTurn {
   speaker: string
 }
 
-/** Samples the analysis offers per voice: its longest turns. */
-export const SAMPLES_PER_SPEAKER = 3
+/** Samples the analysis offers per voice: its longest turns, five as in kiChat. */
+export const SAMPLES_PER_SPEAKER = 5
 
 /** kiChat's automatic label, which the web app localises (`Stimme 1`, `Voice 1`). */
 export function autoSpeakerLabel(index: number): string {
@@ -133,142 +131,36 @@ export function speakersFromTurns(
     })
 }
 
-/** A voice the user named at dispatch: its name, the ids it was sent with and all its windows. */
-interface NamedVoice {
-  name: string
-  ids: Set<string>
-  windows: TranscriptionSnippet[]
-}
+/** The id of the one automatic voice a file gets without diarisation. */
+export const AUTOMATIC_VOICE_ID = 'SPEAKER_00'
 
-/** The voices the user named at dispatch, in first-seen order. */
-function namedVoices(snippets: readonly TranscriptionSnippet[]): NamedVoice[] {
-  const voices = new Map<string, NamedVoice>()
-  for (const snippet of snippets) {
-    const name = snippet.name.trim()
-    if (!name) continue
-    const voice = voices.get(name) ?? { name, ids: new Set<string>(), windows: [] }
-    voice.ids.add(snippet.id)
-    voice.windows.push(snippet)
-    voices.set(name, voice)
+/**
+ * The one voice of a file whose voices could not be analysed (no diarisation set up, or the
+ * diariser unavailable): the whole file, automatically labelled, without samples, since nothing
+ * was heard apart.
+ */
+export function automaticVoice(duration: number | null): TranscriptionSpeaker {
+  return {
+    id: AUTOMATIC_VOICE_ID,
+    index: 0,
+    label: autoSpeakerLabel(0),
+    start: 0,
+    end: round2(duration !== null && duration > 0 ? duration : 0),
+    samples: []
   }
-  return [...voices.values()]
 }
 
 /**
- * The name of each diarised voice (owner decision): the named voice whose sample windows overlap
- * its turns most. So a voice the user added by hand names whatever the diariser heard in its
- * windows, without an identification service. A voice no window touches keeps the name the
- * mapping gives its id, else its automatic label.
+ * The name of the automatic voice in the transcript: what the user named it at dispatch (by
+ * mapping, else by snippet), else its automatic label.
  */
-export function resolveSpeakerNames(
-  turns: readonly SpeakerTurn[],
-  speakers: readonly Pick<TranscriptionSpeaker, 'id' | 'index'>[],
+export function automaticVoiceName(
   mapping: Readonly<Record<string, string>>,
   snippets: readonly TranscriptionSnippet[]
-): Map<string, string> {
-  const voices = namedVoices(snippets)
-  const ids = new Set([...speakers.map((speaker) => speaker.id), ...turns.map((t) => t.speaker)])
-  const indexOf = new Map(speakers.map((speaker) => [speaker.id, speaker.index]))
-  const names = new Map<string, string>()
-  let nextIndex = speakers.length
-  for (const id of ids) {
-    const own = turns.filter((turn) => turn.speaker === id)
-    let best: { name: string; seconds: number; own: boolean } | null = null
-    for (const voice of voices) {
-      let seconds = 0
-      for (const window of voice.windows) {
-        for (const turn of own) seconds += overlap(window, turn)
-      }
-      if (seconds <= 0) continue
-      const ownVoice = voice.ids.has(id)
-      // Ties go to the voice the user named for this very id, then to the first named.
-      if (
-        !best ||
-        seconds > best.seconds + 1e-9 ||
-        (Math.abs(seconds - best.seconds) <= 1e-9 && ownVoice && !best.own)
-      ) {
-        best = { name: voice.name, seconds, own: ownVoice }
-      }
-    }
-    const mapped = mapping[id]?.trim()
-    const index = indexOf.get(id) ?? nextIndex++
-    names.set(id, best?.name ?? (mapped || autoSpeakerLabel(index)))
-  }
-  return names
-}
-
-/** The diarised voice speaking most within a range, else the nearest one; `null` without turns. */
-function speakerAt(
-  turns: readonly SpeakerTurn[],
-  range: { start: number; end: number }
-): string | null {
-  if (turns.length === 0) return null
-  const spoken = new Map<string, number>()
-  for (const turn of turns) {
-    if (turn.end <= range.start || turn.start >= range.end) continue
-    spoken.set(turn.speaker, (spoken.get(turn.speaker) ?? 0) + overlap(turn, range))
-  }
-  let best: string | null = null
-  let seconds = 0
-  for (const [speaker, value] of spoken) {
-    if (value > seconds) {
-      best = speaker
-      seconds = value
-    }
-  }
-  if (best) return best
-  // A segment between turns (or a zero-length word) belongs to the closest voice.
-  const middle = (range.start + range.end) / 2
-  let nearest = turns[0]!
-  let distance = Number.POSITIVE_INFINITY
-  for (const turn of turns) {
-    const gap =
-      middle < turn.start ? turn.start - middle : middle > turn.end ? middle - turn.end : 0
-    if (gap < distance) {
-      nearest = turn
-      distance = gap
-    }
-  }
-  return nearest.speaker
-}
-
-/** Without diarisation: the named voice whose windows overlap a range most, if any. */
-function windowNameAt(
-  voices: readonly NamedVoice[],
-  range: { start: number; end: number }
-): string | null {
-  let best: string | null = null
-  let seconds = 0
-  for (const voice of voices) {
-    const value = voice.windows.reduce((sum, window) => sum + overlap(window, range), 0)
-    if (value > seconds) {
-      best = voice.name
-      seconds = value
-    }
-  }
-  return best
-}
-
-/**
- * Gives each segment and word the name of the diarised voice speaking most during it (T-17). With
- * no turns at all (no diarisation), the named windows themselves decide, else the speaker stays
- * `null`. Text and timing are untouched.
- */
-export function assignSpeakers(
-  segments: readonly TranscriptionSegment[],
-  words: readonly TranscriptionWord[],
-  turns: readonly SpeakerTurn[],
-  names: ReadonlyMap<string, string>,
-  snippets: readonly TranscriptionSnippet[]
-): { segments: TranscriptionSegment[]; words: TranscriptionWord[] } {
-  const voices = namedVoices(snippets)
-  const nameAt = (range: { start: number; end: number }): string | null => {
-    if (turns.length === 0) return windowNameAt(voices, range)
-    const speaker = speakerAt(turns, range)
-    return speaker === null ? null : (names.get(speaker) ?? null)
-  }
-  return {
-    segments: segments.map((segment) => ({ ...segment, speaker: nameAt(segment) })),
-    words: words.map((word) => ({ ...word, speaker: nameAt(word) }))
-  }
+): string {
+  return (
+    mapping[AUTOMATIC_VOICE_ID]?.trim() ||
+    snippets.find((snippet) => snippet.id === AUTOMATIC_VOICE_ID)?.name.trim() ||
+    autoSpeakerLabel(0)
+  )
 }

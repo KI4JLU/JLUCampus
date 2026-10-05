@@ -1,21 +1,22 @@
 import { randomUUID } from 'node:crypto'
 import type { Readable } from 'node:stream'
 
-import type {
-  TRANSCRIPTION_CONNECTION_ANSWERS,
-  TranscriptionConnectionFinding,
-  TranscriptionConnectionTest,
-  TranscriptionConnectionTestRequest,
-  TranscriptionModel
+import {
+  TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL,
+  type TRANSCRIPTION_CONNECTION_ANSWERS,
+  type TranscriptionConnectionFinding,
+  type TranscriptionConnectionTest,
+  type TranscriptionConnectionTestRequest,
+  type TranscriptionModel
 } from '@justcampus/shared'
 import { z } from 'zod'
 
 import { env } from '../../../env.js'
 import type { TranscriptionRuntime } from '../config.js'
-import { openaiRealtimeEndpoints } from '../config.js'
+import { asrBaseUrls, openaiRealtimeEndpoints } from '../config.js'
 import { bearer, listModels, upstreamFetch, UpstreamError, upstreamUrl } from '../http.js'
-import { parseVerboseJson } from '../jobs/asr.js'
-import { parseDiarization } from '../jobs/diarization.js'
+import { parseVerboseJson, transcriptionForm } from '../jobs/asr.js'
+import { diarizationForm, parseDiarization } from '../jobs/diarization.js'
 import {
   bridgeEndpoints,
   OnpremUnavailable,
@@ -176,11 +177,10 @@ async function checkTranscription(
   model: string,
   signal?: AbortSignal
 ): Promise<number> {
-  const form = new FormData()
-  form.set('file', new Blob([silentWav(1)], { type: 'audio/wav' }), 'test.wav')
-  form.set('model', model)
-  form.set('response_format', 'verbose_json')
-  form.append('timestamp_granularities[]', 'segment')
+  const form = transcriptionForm(new Blob([silentWav(1)], { type: 'audio/wav' }), {
+    model,
+    language: 'auto'
+  })
   const response = await answer(
     upstreamUrl(baseUrl, 'audio/transcriptions'),
     { method: 'POST', body: form, headers: { Accept: 'application/json', ...bearer(apiKey) } },
@@ -368,7 +368,8 @@ export async function testConnection(
   try {
     switch (input.target) {
       case 'asr': {
-        const url = input.url ?? config.asrBaseUrl
+        // Several workers: the first is checked, as the admin form sends it.
+        const url = input.url ?? asrBaseUrls(config)[0]
         if (!url) return notSetUp()
         const apiKey = keyOf(secrets.apiKey)
         const model = input.model ?? config.defaultAsrModel ?? config.asrModels[0]?.id ?? null
@@ -387,18 +388,20 @@ export async function testConnection(
         return passed(await checkChat(checks, url, apiKey, model, disableThinking, signal))
       }
       case 'diarization': {
-        const url = input.url ?? config.diarizationUrl
+        // kiChat's resolution: no own server is the speech server, no own key the speech key.
+        const url = input.url ?? config.diarizationUrl ?? asrBaseUrls(config)[0]
         if (!url) return notSetUp()
-        const form = new FormData()
-        form.set('file', new Blob([silentWav(1)], { type: 'audio/wav' }), 'test.wav')
-        const model = input.model ?? config.diarizationModel
-        if (model) form.set('model', model)
+        const apiKey = keyOf(secrets.diarizationApiKey ?? secrets.apiKey) ?? secrets.apiKey
+        const form = diarizationForm(new Blob([silentWav(1)], { type: 'audio/wav' }), {
+          model: input.model ?? config.diarizationModel ?? TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL,
+          speakerCount: 'auto'
+        })
         const response = await answer(
-          url,
+          upstreamUrl(url, 'audio/diarization'),
           {
             method: 'POST',
             body: form,
-            headers: { Accept: 'application/json', ...bearer(keyOf(secrets.diarizationApiKey)) }
+            headers: { Accept: 'application/json', ...bearer(apiKey) }
           },
           signal,
           OPERATION_TIMEOUT_MS

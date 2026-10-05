@@ -16,7 +16,12 @@ export class UpstreamError extends Error {
     /** The upstream's HTTP status, if it answered. */
     readonly status: number | null = null,
     /** The start of its answer, for logs and safe error detail. */
-    readonly detail: string | null = null
+    readonly detail: string | null = null,
+    /**
+     * The request ran out of its time while the upstream was still working on it (kiChat's
+     * processing timeout): the same request again would take as long, so it is not retried.
+     */
+    readonly timedOut = false
   ) {
     super(message)
     this.name = 'UpstreamError'
@@ -59,7 +64,12 @@ export async function upstreamFetch(url: string, init: UpstreamInit = {}): Promi
   } catch (error) {
     if (signal?.aborted) throw signal.reason
     const reason = timeout.aborted ? `timed out after ${timeoutMs} ms` : 'is unreachable'
-    throw new UpstreamError(`${new URL(url).host} ${reason}`, null, String(error).slice(0, 200))
+    throw new UpstreamError(
+      `${new URL(url).host} ${reason}`,
+      null,
+      String(error).slice(0, 200),
+      timeout.aborted
+    )
   }
 }
 

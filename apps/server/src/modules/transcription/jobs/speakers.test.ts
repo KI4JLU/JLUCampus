@@ -1,23 +1,13 @@
-import type { TranscriptionSegment, TranscriptionSnippet } from '@justcampus/shared'
 import { describe, expect, it } from 'vitest'
 
 import {
-  assignSpeakers,
+  automaticVoice,
+  automaticVoiceName,
   normalizeTurns,
-  resolveSpeakerNames,
   sampleWindow,
   speakersFromTurns,
   type SpeakerTurn
 } from './speakers.js'
-
-function segment(
-  id: number,
-  start: number,
-  end: number,
-  text = `Satz ${id}`
-): TranscriptionSegment {
-  return { id, start, end, text, speaker: null, redactions: [], avgLogprob: -0.1 }
-}
 
 /** Two voices taking turns every eight seconds over 24 seconds. */
 const turns: SpeakerTurn[] = normalizeTurns(
@@ -72,98 +62,42 @@ describe('speakersFromTurns', () => {
     expect(sampleWindow({ start: 2, end: 2.05 }, null)).toEqual({ start: 2, end: 2.2 })
   })
 
+  it('offers up to five samples per voice from its longest turns, as kiChat', () => {
+    const many = normalizeTurns(
+      Array.from({ length: 7 }, (_, index) => ({
+        start: index * 10,
+        end: index * 10 + 1 + index,
+        speaker: 'A'
+      })),
+      80
+    )
+    const [voice] = speakersFromTurns(many, 80)
+    expect(voice!.samples.map((sample) => sample.start)).toEqual([20, 30, 40, 50, 60])
+    expect(voice!.samples.at(-1)).toMatchObject({ start: 60, end: 65 })
+  })
+
   it('offers no voices without turns', () => {
     expect(speakersFromTurns([], 10)).toEqual([])
   })
 })
 
-describe('resolveSpeakerNames', () => {
-  const speakers = speakersFromTurns(turns, 24)
-
-  it('names each diarised voice after the window overlapping it most', () => {
-    const snippets: TranscriptionSnippet[] = [
-      { id: 'SPEAKER_00', name: 'Anna', start: 0.03, end: 5.03 },
-      { id: 'SPEAKER_01', name: 'Ben', start: 8.05, end: 13.05 }
-    ]
-    const names = resolveSpeakerNames(turns, speakers, { SPEAKER_00: 'Anna' }, snippets)
-    expect(Object.fromEntries(names)).toEqual({ SPEAKER_00: 'Anna', SPEAKER_01: 'Ben' })
+describe('automatic voice', () => {
+  it('is one voice over the whole file without samples', () => {
+    expect(automaticVoice(12.345)).toEqual({
+      id: 'SPEAKER_00',
+      index: 0,
+      label: 'Stimme 1',
+      start: 0,
+      end: 12.35,
+      samples: []
+    })
   })
 
-  it('lets a voice added by hand name what the diariser heard in its window', () => {
-    const snippets: TranscriptionSnippet[] = [
-      { id: 'SPEAKER_00', name: 'Anna', start: 0.03, end: 5.03 },
-      // The user added Carla and marked a window where SPEAKER_01 speaks.
-      { id: 'MANUAL_0', name: 'Carla', start: 9, end: 12 }
-    ]
-    const names = resolveSpeakerNames(turns, speakers, { MANUAL_0: 'Carla' }, snippets)
-    expect(names.get('SPEAKER_01')).toBe('Carla')
-    expect(names.get('SPEAKER_00')).toBe('Anna')
-  })
-
-  it('follows edited windows over the id they were sent with', () => {
-    // The sample of SPEAKER_01 was moved to where SPEAKER_00 speaks.
-    const snippets: TranscriptionSnippet[] = [
-      { id: 'SPEAKER_00', name: 'Anna', start: 1, end: 2 },
-      { id: 'SPEAKER_01', name: 'Ben', start: 17, end: 21 }
-    ]
-    const names = resolveSpeakerNames(turns, speakers, { SPEAKER_01: 'Ben' }, snippets)
-    expect(names.get('SPEAKER_00')).toBe('Ben')
-    // No window touches SPEAKER_01 any more: the mapping names it.
-    expect(names.get('SPEAKER_01')).toBe('Ben')
-  })
-
-  it('falls back to the mapping, then to the automatic label', () => {
-    const names = resolveSpeakerNames(turns, speakers, { SPEAKER_01: '  Ben ' }, [])
-    expect(Object.fromEntries(names)).toEqual({ SPEAKER_00: 'Stimme 1', SPEAKER_01: 'Ben' })
-  })
-
-  it('breaks a tie in favour of the voice named for that id', () => {
-    const snippets: TranscriptionSnippet[] = [
-      { id: 'MANUAL_0', name: 'Other', start: 1, end: 2 },
-      { id: 'SPEAKER_00', name: 'Own', start: 3, end: 4 }
-    ]
-    expect(resolveSpeakerNames(turns, speakers, {}, snippets).get('SPEAKER_00')).toBe('Own')
-  })
-})
-
-describe('assignSpeakers', () => {
-  it('gives each segment the voice speaking most during it, text and timing untouched', () => {
-    const names = new Map([
-      ['SPEAKER_00', 'Anna'],
-      ['SPEAKER_01', 'Ben']
-    ])
-    const segments = [
-      segment(1, 0, 4),
-      segment(2, 7, 10),
-      segment(3, 15.98, 16.04),
-      segment(4, 30, 31)
-    ]
-    const { segments: named, words } = assignSpeakers(
-      segments,
-      [{ start: 9, end: 9.5, word: 'Hallo' }],
-      turns,
-      names,
-      []
+  it('takes the name the user gave it, else its label', () => {
+    expect(automaticVoiceName({ SPEAKER_00: ' Anna ' }, [])).toBe('Anna')
+    expect(automaticVoiceName({}, [{ id: 'SPEAKER_00', name: 'Ben', start: 0, end: 1 }])).toBe(
+      'Ben'
     )
-    expect(named.map((value) => value.speaker)).toEqual(['Anna', 'Ben', 'Anna', 'Anna'])
-    const withoutSpeaker = (value: TranscriptionSegment): Omit<TranscriptionSegment, 'speaker'> =>
-      Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'speaker')) as Omit<
-        TranscriptionSegment,
-        'speaker'
-      >
-    expect(named.map(withoutSpeaker)).toEqual(segments.map(withoutSpeaker))
-    expect(words[0]!.speaker).toBe('Ben')
-  })
-
-  it('uses the named windows directly without diarisation, else no speaker', () => {
-    const snippets: TranscriptionSnippet[] = [{ id: 'MANUAL_0', name: 'Solo', start: 0, end: 3 }]
-    const { segments } = assignSpeakers(
-      [segment(1, 0, 4), segment(2, 5, 8)],
-      [],
-      [],
-      new Map(),
-      snippets
-    )
-    expect(segments.map((value) => value.speaker)).toEqual(['Solo', null])
+    expect(automaticVoiceName({ SPEAKER_01: 'Other' }, [])).toBe('Stimme 1')
   })
 })

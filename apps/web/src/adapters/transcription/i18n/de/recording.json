@@ -109,7 +109,11 @@
     },
     "asrBaseUrl": {
       "label": "Adresse der Spracherkennung",
-      "hint": "OpenAI-kompatibler Endpunkt bis /v1, etwa Speaches. Transkribiert wird mit POST /audio/transcriptions (verbose_json mit Segmenten)."
+      "hint": "OpenAI-kompatibler Endpunkt bis /v1, voreingestellt das KI-Gateway des HRZ mit jlu/whisper-1. Mehrere Speaches-Worker durch Kommas getrennt; die Abschnitte eines Auftrags gehen reihum an sie. Transkribiert wird mit POST /audio/transcriptions (verbose_json, Wortzeiten, soweit der Server sie liefert)."
+    },
+    "asrConcurrency": {
+      "label": "Gleichzeitige Anfragen an die Server",
+      "hint": "Anfragen an Spracherkennung und Sprechererkennung zugleich, über alle Aufträge dieses Serverprozesses (wie kiChats SPEACHES_MAX_CONCURRENCY). So viele, wie die Server Modellinstanzen haben; von 1 bis 32."
     },
     "providerName": {
       "label": "Anbietername",
@@ -125,15 +129,15 @@
     },
     "diarizationEnabled": {
       "label": "Sprecher erkennen",
-      "hint": "Analysiert die Stimmen vor der Transkription, damit sie benannt werden können. Ohne bleibt jeder Text ohne Sprecher."
+      "hint": "Analysiert die Stimmen vor der Transkription, damit sie benannt werden können, und ordnet die Abschnitte bei der Transkription den Stimmen zu. Ohne, oder wenn der Server nicht erreichbar ist, hat jede Datei eine automatische Stimme."
     },
     "diarizationUrl": {
       "label": "Adresse der Sprechererkennung",
-      "hint": "HTTP-Endpunkt, der die Audiodatei annimmt und die Abschnitte der Sprecher liefert."
+      "hint": "Speaches-Server bis /v1 mit POST /audio/diarization und /audio/speech/timestamps, etwa https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1. Leer: die Adresse der Spracherkennung (das KI-Gateway des HRZ bietet keine Sprechererkennung). Ohne eigenen API-Schlüssel gilt der der Spracherkennung."
     },
     "diarizationModel": {
       "label": "Modell der Sprechererkennung",
-      "hint": "Nur nötig, wenn der Endpunkt eines erwartet."
+      "hint": "Leer: pyannote/speaker-diarization-community-1, wie in kiChat."
     },
     "llmBaseUrl": {
       "label": "Adresse des KI-Endpunkts",

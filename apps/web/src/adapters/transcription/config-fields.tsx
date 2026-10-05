@@ -29,6 +29,7 @@ import {
   TooltipTrigger
 } from '@ki4jlu/design-system'
 import {
+  TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL,
   TRANSCRIPTION_DEFAULT_REALTIME_MODEL,
   TRANSCRIPTION_GROUP_FILES_MAX,
   TRANSCRIPTION_LANGUAGES,
@@ -47,7 +48,8 @@ import {
   type TranscriptionModelKind,
   type TranscriptionRealtimeMode,
   type TranscriptionSpeakerCount,
-  type TranscriptionTurnAuth
+  type TranscriptionTurnAuth,
+  transcriptionUrls
 } from '@justcampus/shared'
 import { Field } from '@/components/field'
 import { ApiRequestError } from '@/lib/api'
@@ -210,12 +212,22 @@ export function TranscriptionConfigFields({
             error={errors.defaultAsrModel}
             onChange={(defaultAsrModel) => update({ defaultAsrModel })}
           />
+          <NumberField
+            id={id('asr-concurrency')}
+            name="asrConcurrency"
+            value={config.asrConcurrency}
+            min={1}
+            max={32}
+            error={errors.asrConcurrency}
+            onChange={(value) => update({ asrConcurrency: value ?? Number.NaN })}
+          />
           <ConnectionTest
             target="asr"
             disabled={!config.asrBaseUrl}
             request={() => ({
               target: 'asr',
-              url: config.asrBaseUrl ?? undefined,
+              // Several workers: the first is checked.
+              url: transcriptionUrls(config.asrBaseUrl)[0],
               apiKey: draftKey(secrets.apiKey),
               model: config.defaultAsrModel ?? firstModel(config.asrModels)
             })}
@@ -235,6 +247,8 @@ export function TranscriptionConfigFields({
             id={id('diarization-url')}
             name="diarizationUrl"
             value={config.diarizationUrl}
+            // Empty: the speech recognition address, its first worker (kiChat's fallback).
+            placeholder={transcriptionUrls(config.asrBaseUrl)[0] || 'https://'}
             error={errors.diarizationUrl}
             onChange={(diarizationUrl) => update({ diarizationUrl })}
           />
@@ -250,6 +264,7 @@ export function TranscriptionConfigFields({
                 maxLength={200}
                 spellCheck={false}
                 autoComplete="off"
+                placeholder={TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL}
                 value={config.diarizationModel ?? ''}
                 onChange={(event) =>
                   update({
@@ -261,10 +276,12 @@ export function TranscriptionConfigFields({
           </Field>
           <ConnectionTest
             target="diarization"
-            disabled={!config.diarizationUrl}
+            disabled={!config.diarizationUrl && !config.asrBaseUrl}
             request={() => ({
               target: 'diarization',
+              // Left out, the server asks the speech recognition address, as jobs do.
               url: config.diarizationUrl ?? undefined,
+              // Without a key of its own, the server uses the speech recognition key.
               apiKey: draftKey(secrets.diarizationApiKey),
               model: config.diarizationModel?.trim() || undefined
             })}
@@ -711,7 +728,8 @@ function UrlField({
       {(control) => (
         <Input
           {...control}
-          type="url"
+          // The speech address may list several workers, comma-separated, which `url` refuses.
+          type={name === 'asrBaseUrl' ? 'text' : 'url'}
           inputMode="url"
           spellCheck={false}
           placeholder={placeholder}
@@ -759,6 +777,7 @@ type NumberFieldName =
   | 'maxFilesPerGroup'
   | 'maxActiveJobsPerUser'
   | 'workerConcurrency'
+  | 'asrConcurrency'
   | 'chunkSeconds'
   | 'upstreamTimeoutSeconds'
   | 'transcriptRetentionHours'
@@ -849,7 +868,9 @@ function ModelList({
     | null
   >(null)
   const models = config[field]
-  const baseUrl = kind === 'asr' ? config.asrBaseUrl : config.llmBaseUrl
+  // Several speech workers serve the same models: the first is asked.
+  const baseUrl =
+    kind === 'asr' ? (transcriptionUrls(config.asrBaseUrl)[0] ?? null) : config.llmBaseUrl
   const groupError = errors[field]
 
   const load = (): void => {
@@ -861,7 +882,9 @@ function ModelList({
         onSuccess: (fetched) => {
           const current = latest.current
           // The address changed meanwhile; these models belong to the old one.
-          if ((kind === 'asr' ? current.asrBaseUrl : current.llmBaseUrl) !== baseUrl) return
+          const now =
+            kind === 'asr' ? (transcriptionUrls(current.asrBaseUrl)[0] ?? null) : current.llmBaseUrl
+          if (now !== baseUrl) return
           if (fetched.length === 0) {
             setStatus({ kind: 'empty' })
             return

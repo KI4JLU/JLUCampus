@@ -5,32 +5,37 @@ import {
   TRANSCRIPTION_SEGMENTS_MAX,
   TRANSCRIPTION_WORDS_MAX,
   transcriptionResultSchema,
-  transcriptionSpeakerCountSchema,
+  type TranscriptionJobError,
   type TranscriptionJobPhase,
   type TranscriptionJobStatus,
-  type TranscriptionSpeakerCount
+  type TranscriptionSegment,
+  type TranscriptionSpeaker,
+  type TranscriptionWord
 } from '@justcampus/shared'
-import { z } from 'zod'
 
-import { asrModel, llmModel, type TranscriptionRuntime } from '../config.js'
+import { asrBaseUrls, asrModel, diarizationSetup, type TranscriptionRuntime } from '../config.js'
 import { UpstreamError } from '../http.js'
 import { missingObject, objectKeys, type TranscriptionStorage } from '../storage.js'
-import { transcribeFile, type AsrResult } from './asr.js'
-import { correctSegments } from './correction.js'
-import { diarizeFile } from './diarization.js'
+import { chatTarget } from '../summaries/chat.js'
+import { transcribeChunksParallel, type AsrResult } from './asr.js'
+import { correctSegments, InvalidCorrectionError } from './correction.js'
+import { diarizeFile, speechTimestamps, type DiarizationTurn } from './diarization.js'
+import { upstreamLimiter } from './limiter.js'
+import { mapDiarizationSegments } from './mapping.js'
 import { cutAudio, MediaToolError, normalizeAudio, probeMedia, workDirectory } from './media.js'
 import { joinText, mergeChunks, planChunks, type ChunkPlan } from './merge.js'
 import { wavPeaks } from './peaks.js'
+import { knownSpeakers } from './references.js'
 import { jobExpiry, type JobRow } from './rows.js'
 import {
-  assignSpeakers,
+  automaticVoice,
+  automaticVoiceName,
   normalizeTurns,
-  resolveSpeakerNames,
-  speakersFromTurns,
-  type SpeakerTurn
+  speakersFromTurns
 } from './speakers.js'
 import type { JobChanges } from './store.js'
 import { forwardStatus, JobFailure, progressOf } from './state.js'
+import { withRetry } from './upstream.js'
 
 /**
  * What the worker does with a claimed job: the speaker analysis after upload and the
@@ -46,7 +51,10 @@ export interface JobRun {
   update: (changes: JobChanges) => Promise<JobRow>
 }
 
-/** Where the analysis keeps the diarised turns the transcription names its segments by. */
+/**
+ * Where earlier releases kept the analysis's turns; the transcription now diarises again with the
+ * named voices, as kiChat does, and the analysis removes what an older run left.
+ */
 export function turnsKey(componentId: string, jobId: string): string {
   return `${objectKeys.jobPrefix(componentId, jobId)}diarization.json`
 }
@@ -71,51 +79,8 @@ function samplesPrefix(componentId: string, jobId: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Failures and retries
+// Failures
 // ---------------------------------------------------------------------------
-
-/** Tries an upstream call this often in all when it fails for a passing reason. */
-const UPSTREAM_TRIES = 3
-const RETRY_DELAYS_MS = [2_000, 6_000]
-
-/** Network errors, timeouts, `408`, `429` and `5xx` pass; other answers will not change. */
-export function isTransient(error: unknown): boolean {
-  if (!(error instanceof UpstreamError)) return false
-  return (
-    error.status === null || error.status === 408 || error.status === 429 || error.status >= 500
-  )
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(signal.reason)
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', abort)
-      resolve()
-    }, ms)
-    const abort = (): void => {
-      clearTimeout(timer)
-      reject(signal.reason)
-    }
-    signal.addEventListener('abort', abort, { once: true })
-  })
-}
-
-/** Runs an upstream call, retrying passing failures a bounded number of times. */
-export async function withRetries<T>(
-  call: () => Promise<T>,
-  signal: AbortSignal,
-  delays: readonly number[] = RETRY_DELAYS_MS
-): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await call()
-    } catch (error) {
-      if (signal.aborted || attempt >= UPSTREAM_TRIES || !isTransient(error)) throw error
-      await sleep(delays[attempt - 1] ?? delays.at(-1) ?? 0, signal)
-    }
-  }
-}
 
 /** How an upstream failed, as kiChat words it in the message (`antwortete mit Status 415`). */
 function upstreamReason(error: unknown, server: string): string {
@@ -125,6 +90,7 @@ function upstreamReason(error: unknown, server: string): string {
   if (error instanceof UpstreamError && /unexpected shape|JSON/.test(error.message)) {
     return `${server} lieferte eine unerwartete Antwort`
   }
+  if (error instanceof UpstreamError && error.timedOut) return `${server} zu langsam`
   return `${server} nicht erreichbar`
 }
 
@@ -263,61 +229,34 @@ async function normalizedAudio(
   return normalizeSource(run, directory)
 }
 
-function diarizationConfigured(run: JobRun): string | null {
-  const { config } = run.runtime
-  return config.diarizationEnabled && config.diarizationUrl ? config.diarizationUrl : null
-}
-
-async function diarize(run: JobRun, path: string, duration: number): Promise<SpeakerTurn[]> {
-  const url = diarizationConfigured(run)
-  if (!url) return []
-  const { config, secrets } = run.runtime
-  const turns = await withRetries(
-    () =>
-      diarizeFile(path, {
-        url,
-        apiKey: secrets.diarizationApiKey,
-        model: config.diarizationModel,
-        speakerCount: run.job.settings.speakerCount,
-        timeoutMs: config.upstreamTimeoutSeconds * 1000,
-        signal: run.signal
-      }),
-    run.signal
+/**
+ * Whether a diarisation failure means the diariser is not there for this module: unreachable,
+ * too slow, no such endpoint (the HRZ gateway has none), no access, or a server error after the
+ * retries. Other refusals (kiChat's `415` for an undecodable file) fail the analysis as in kiChat.
+ */
+export function diarizationUnavailable(error: unknown): boolean {
+  if (!(error instanceof UpstreamError)) return false
+  const status = error.status
+  return (
+    status === null ||
+    [401, 403, 404, 405, 408, 429].includes(status) ||
+    status >= 500 ||
+    /unexpected shape|JSON/.test(error.message)
   )
-  return normalizeTurns(turns, duration)
 }
 
-const turnListSchema = z.array(
-  z.object({ start: z.number(), end: z.number(), speaker: z.string() })
-)
-
-/**
- * The diarised turns as the analysis keeps them, with the speaker count the diariser was asked
- * for: a transcription with another count must not reuse them (T-09).
- */
-const storedTurnsSchema = z.object({
-  speakerCount: transcriptionSpeakerCountSchema,
-  turns: turnListSchema
-})
-type StoredTurns = z.infer<typeof storedTurnsSchema>
-
-/** The kept turns, or `null` when there are none or they are unreadable. */
-async function readTurns(run: JobRun): Promise<StoredTurns | null> {
-  const stored = await readObject(run, turnsKey(run.job.componentId, run.job.id))
-  if (!stored) return null
-  const parsed = storedTurnsSchema.safeParse(parseJson(stored))
-  return parsed.success ? parsed.data : null
+/** The notice an analysed or completed job carries when the diariser was unavailable. */
+function diarizationNotice(error: unknown): TranscriptionJobError {
+  return {
+    code: 'diarization_failed',
+    message: `Sprechererkennung nicht verfügbar (${upstreamReason(error, 'Diarization-Server')}). Die Datei hat eine automatische Stimme.`
+  }
 }
 
-/**
- * Whether turns diarised for `analysed` serve a transcription with `wanted`: the same count, or
- * `single`, which collapses any turns onto the dominant voice anyway.
- */
-export function turnsServe(
-  analysed: TranscriptionSpeakerCount,
-  wanted: TranscriptionSpeakerCount
-): boolean {
-  return analysed === wanted || wanted === 'single'
+/** The budget follows the admin's setting before each use. */
+function limiterFor(run: JobRun): typeof upstreamLimiter {
+  upstreamLimiter.setLimit(run.runtime.config.asrConcurrency)
+  return upstreamLimiter
 }
 
 function parseJson(body: Buffer): unknown {
@@ -374,8 +313,11 @@ async function storeWaveform(run: JobRun, path: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Checks and normalises the upload, diarises it and cuts the voices' samples. A repeated analysis
- * replaces the samples. Without diarisation the job is analysed with no voices.
+ * Phase 1, kiChat's `AnalyzeSpeakersJob`: checks and normalises the upload, diarises the whole
+ * file and cuts the voices' samples (up to five per voice from its longest turns). A repeated
+ * analysis replaces the samples. Without a diariser, or when it is unavailable, the file gets one
+ * automatic voice instead of invented ones; an unavailable diariser leaves a
+ * `diarization_failed` notice on the job.
  */
 export async function runAnalysis(run: JobRun): Promise<JobChanges> {
   const { job, storage, signal, runtime } = run
@@ -385,22 +327,32 @@ export async function runAnalysis(run: JobRun): Promise<JobChanges> {
     const { path, duration } = await normalizeSource(run, directory.path)
     await storeWaveform(run, path)
 
-    let turns: SpeakerTurn[] = []
-    if (diarizationConfigured(run)) {
+    let speakers: TranscriptionSpeaker[] = [automaticVoice(duration)]
+    let notice: TranscriptionJobError | null = null
+    const setup = diarizationSetup(runtime.config, runtime.secrets)
+    if (setup) {
       await advance(run, 'analyzing', 'diarizing')
       try {
-        turns = await diarize(run, path, duration)
+        const turns = await diarizeFile(
+          path,
+          duration,
+          { model: setup.model, speakerCount: run.job.settings.speakerCount },
+          { baseUrl: setup.baseUrl, apiKey: setup.apiKey, limiter: limiterFor(run), signal }
+        )
+        speakers = speakersFromTurns(normalizeTurns(turns, duration), duration)
       } catch (error) {
-        classify(error, signal, () => {
+        if (signal.aborted) throw error
+        if (!diarizationUnavailable(error)) {
           console.error('Transcription speaker analysis failed', error)
-          return new JobFailure(
+          throw new JobFailure(
             'analysis_failed',
             `Fehler bei der Sprecher-Analyse: Sprecheranalyse fehlgeschlagen (${upstreamReason(error, 'Diarization-Server')}).`
           )
-        })
+        }
+        console.warn('Transcription diariser unavailable, one automatic voice', job.id, error)
+        notice = diarizationNotice(error)
       }
     }
-    const speakers = speakersFromTurns(turns, duration)
 
     // The previous analysis's samples go, so nothing plays a voice that no longer exists.
     await storageStep(signal, () => storage.deletePrefix(samplesPrefix(job.componentId, job.id)))
@@ -424,15 +376,12 @@ export async function runAnalysis(run: JobRun): Promise<JobChanges> {
         )
       )
     }
-    const key = turnsKey(job.componentId, job.id)
-    if (turns.length > 0) {
-      await writeJson(run, key, { speakerCount: run.job.settings.speakerCount, turns })
-    } else await storageStep(signal, () => storage.delete(key))
+    await storageStep(signal, () => storage.delete(turnsKey(job.componentId, job.id)))
 
     return {
       status: 'analyzed',
       speakers,
-      error: null,
+      error: notice,
       progress: progressOf(null, 0, 0, 100),
       expiresAt: jobExpiry(runtime.config.unsavedJobRetentionHours)
     }
@@ -444,16 +393,6 @@ export async function runAnalysis(run: JobRun): Promise<JobChanges> {
 // ---------------------------------------------------------------------------
 // Transcription (T-13, section 3)
 // ---------------------------------------------------------------------------
-
-/** With `single` chosen, every turn belongs to the voice that speaks most. */
-export function singleSpeakerTurns(turns: readonly SpeakerTurn[]): SpeakerTurn[] {
-  const spoken = new Map<string, number>()
-  for (const turn of turns) {
-    spoken.set(turn.speaker, (spoken.get(turn.speaker) ?? 0) + turn.end - turn.start)
-  }
-  const dominant = [...spoken.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
-  return dominant ? turns.map((turn) => ({ ...turn, speaker: dominant })) : []
-}
 
 /**
  * Fails a recognition with more segments or words than a transcript holds (the shared result
@@ -473,15 +412,32 @@ async function cachedRecognition(run: JobRun, key: string): Promise<AsrResult | 
   return body ? ((parseJson(body) as AsrResult | undefined) ?? null) : null
 }
 
+/** Every segment and word on the file's one automatic voice. */
+function onAutomaticVoice(
+  segments: readonly TranscriptionSegment[],
+  words: readonly TranscriptionWord[],
+  name: string
+): { segments: TranscriptionSegment[]; words: TranscriptionWord[] } {
+  return {
+    segments: segments.map((segment) => ({ ...segment, speaker: name })),
+    words: words.map((word) => ({ ...word, speaker: name }))
+  }
+}
+
 /**
- * Normalises (if the analysis did not), chunks, recognises each chunk with its offset, names the
- * segments by the diarised voices and the user's windows, and corrects the text if asked.
+ * Phase 2, kiChat's `ProcessTranscriptionJob`: normalises (if the analysis did not), chunks,
+ * recognises the chunks in parallel waves within the shared budget, diarises the whole file again
+ * with the named voices as known speakers and the VAD's speech regions, maps the segments to the
+ * voices by time overlap, and lets the chat model correct speakers and misheard words if asked.
+ * A failing diarisation or correction does not fail the job, as in kiChat: the file keeps one
+ * automatic voice, or the uncorrected text, with a notice.
  */
 export async function runTranscription(run: JobRun): Promise<JobChanges> {
   const { job, signal, runtime } = run
   const { config, secrets } = runtime
   const model = asrModel(config)
-  if (!config.asrBaseUrl || !model) {
+  const workers = asrBaseUrls(config)
+  if (workers.length === 0 || !model) {
     throw new JobFailure('asr_failed', 'Die Spracherkennung ist nicht eingerichtet.')
   }
   const directory = await workDirectory()
@@ -512,111 +468,136 @@ export async function runTranscription(run: JobRun): Promise<JobChanges> {
     await advance(run, 'preprocessed', 'chunking', 0, plan.length)
 
     const language = run.job.settings.language
-    const recognized: Array<{ plan: ChunkPlan; result: AsrResult }> = []
+    const results = new Array<AsrResult>(plan.length)
+    const missing: ChunkPlan[] = []
     for (const chunk of plan) {
-      await advance(
+      const cached = await cachedRecognition(
         run,
-        'transcribing',
-        'transcribing',
-        chunk.index,
-        plan.length,
-        (chunk.index / plan.length) * 90
+        asrCacheKey(job.componentId, job.id, chunk, model.id, language)
       )
-      const key = asrCacheKey(job.componentId, job.id, chunk, model.id, language)
-      let result = await cachedRecognition(run, key)
-      if (!result) {
-        const previous = recognized.at(-1)?.result.text.slice(-200)
-        try {
-          result = await withRetries(
-            () =>
-              transcribeFile(files[chunk.index]!, chunk.end - chunk.start, {
-                baseUrl: config.asrBaseUrl!,
-                apiKey: secrets.apiKey,
-                model: model.id,
-                language,
-                prompt: previous || undefined,
-                timeoutMs: config.upstreamTimeoutSeconds * 1000,
-                signal
-              }),
-            signal
-          )
-        } catch (error) {
-          classify(error, signal, () => {
-            console.error('Transcription recognition failed', error)
-            return new JobFailure(
-              'asr_failed',
-              `Spracherkennung fehlgeschlagen (${upstreamReason(error, 'Server')}).`
-            )
-          })
-        }
-        await writeJson(run, key, result)
-      }
-      recognized.push({ plan: chunk, result })
+      if (cached) results[chunk.index] = cached
+      else missing.push(chunk)
     }
-    const merged = mergeChunks(recognized)
+    const cachedCount = plan.length - missing.length
+    await advance(
+      run,
+      'transcribing',
+      'transcribing',
+      cachedCount,
+      plan.length,
+      (cachedCount / plan.length) * 90
+    )
+    if (missing.length > 0) {
+      try {
+        await transcribeChunksParallel(
+          missing.map((chunk) => ({
+            path: files[chunk.index]!,
+            duration: chunk.end - chunk.start
+          })),
+          {
+            baseUrls: workers,
+            apiKey: secrets.apiKey,
+            model: model.id,
+            language,
+            timeoutMs: config.upstreamTimeoutSeconds * 1000,
+            limit: config.asrConcurrency,
+            limiter: limiterFor(run),
+            signal,
+            onResult: async (index, result) => {
+              const chunk = missing[index]!
+              results[chunk.index] = result
+              await writeJson(
+                run,
+                asrCacheKey(job.componentId, job.id, chunk, model.id, language),
+                result
+              )
+            },
+            onWave: (done) =>
+              advance(
+                run,
+                'transcribing',
+                'transcribing',
+                cachedCount + done,
+                plan.length,
+                ((cachedCount + done) / plan.length) * 90
+              )
+          }
+        )
+      } catch (error) {
+        classify(error, signal, () => {
+          console.error('Transcription recognition failed', error)
+          return new JobFailure(
+            'asr_failed',
+            `Spracherkennung fehlgeschlagen (${upstreamReason(error, 'Server')}).`
+          )
+        })
+      }
+    }
+    const merged = mergeChunks(
+      plan.map((chunk) => ({ plan: chunk, result: results[chunk.index]! }))
+    )
     // Nothing is cut off silently: a result beyond what a transcript holds fails clearly (before
     // the diarisation and correction would spend more on it).
     checkResultSize(merged.segments.length, merged.words.length)
 
     await advance(run, 'transcribing', 'diarizing', plan.length, plan.length, 90)
-    let turns: SpeakerTurn[] = []
-    const speakerCount = run.job.settings.speakerCount
-    const stored = await readTurns(run)
-    if (stored && turnsServe(stored.speakerCount, speakerCount)) {
-      turns = normalizeTurns(stored.turns, duration)
-    } else if (diarizationConfigured(run)) {
-      // No turns yet, or diarised for another count than the one chosen at dispatch: ask again.
+    let notice: TranscriptionJobError | null = null
+    let named: { segments: TranscriptionSegment[]; words: TranscriptionWord[] } | null = null
+    const setup = diarizationSetup(config, secrets)
+    if (setup) {
       try {
-        turns = await diarize(run, path, duration)
-      } catch (error) {
-        classify(error, signal, () => {
-          console.error('Transcription diarisation failed', error)
-          return new JobFailure(
-            'diarization_failed',
-            `Sprecherzuordnung fehlgeschlagen (${upstreamReason(error, 'Diarization-Server')}).`
-          )
+        const limiter = limiterFor(run)
+        const target = { baseUrl: setup.baseUrl, apiKey: setup.apiKey, limiter, signal }
+        const known = await knownSpeakers(path, run.job.snippets, duration)
+        const vadSegments = await speechTimestamps(path, duration, target)
+        const turns: DiarizationTurn[] = await diarizeFile(
+          path,
+          duration,
+          {
+            model: setup.model,
+            speakerCount: run.job.settings.speakerCount,
+            knownSpeakers: known
+          },
+          target
+        )
+        named = mapDiarizationSegments(merged, turns, {
+          vadSegments,
+          speakerMapping: run.job.mapping,
+          knownSpeakerNames: known.map((speaker) => speaker.name)
         })
+      } catch (error) {
+        if (signal.aborted) throw error
+        console.error('Transcription diarisation failed, one automatic voice', job.id, error)
+        notice = diarizationNotice(error)
       }
-      if (turns.length > 0) {
-        await writeJson(run, turnsKey(job.componentId, job.id), { speakerCount, turns })
-      }
-    } else if (stored) {
-      // The diariser was switched off since the analysis: its turns are all there is.
-      turns = normalizeTurns(stored.turns, duration)
     }
-    if (speakerCount === 'single') turns = singleSpeakerTurns(turns)
-    const names = resolveSpeakerNames(turns, run.job.speakers, run.job.mapping, run.job.snippets)
-    const named = assignSpeakers(merged.segments, merged.words, turns, names, run.job.snippets)
+    named ??= onAutomaticVoice(
+      merged.segments,
+      merged.words,
+      automaticVoiceName(run.job.mapping, run.job.snippets)
+    )
 
     await advance(run, 'optimizing', 'optimizing', 0, 0, 95)
     let segments = named.segments
-    const correctionModel = run.job.settings.llmCorrection ? llmModel(config, 'correction') : null
-    if (correctionModel && config.llmBaseUrl && segments.length > 0) {
+    const correction = run.job.settings.llmCorrection ? chatTarget(runtime, 'correction') : null
+    if (correction && segments.length > 0) {
       try {
-        segments = await correctSegments(
-          segments,
-          {
-            baseUrl: config.llmBaseUrl,
-            apiKey: secrets.llmApiKey,
-            model: correctionModel,
-            language: merged.language ?? (language === 'auto' ? null : language),
-            timeoutMs: config.upstreamTimeoutSeconds * 1000,
-            signal
-          },
-          {
-            run: (call) => withRetries(call, signal),
-            onBatch: (done, total) =>
-              advance(run, 'optimizing', 'correcting', done, total, 95 + (done / total) * 5)
-          }
-        )
-      } catch (error) {
-        classify(error, signal, () => {
-          console.error('Transcription correction failed', error)
-          return new JobFailure(
-            'correction_failed',
-            `KI-Korrektur fehlgeschlagen (${upstreamReason(error, 'Server')}).`
-          )
+        segments = await correctSegments(segments, correction, {
+          signal,
+          run: (call) => withRetry(call, { signal }),
+          onBatch: (done, total) =>
+            advance(run, 'optimizing', 'correcting', done, total, 95 + (done / total) * 5)
         })
+      } catch (error) {
+        if (signal.aborted) throw error
+        console.warn('Transcription correction failed, text left uncorrected', job.id, error)
+        notice ??= {
+          code: 'correction_failed',
+          message:
+            error instanceof InvalidCorrectionError
+              ? `KI-Korrektur übersprungen: ${error.message}`
+              : `KI-Korrektur übersprungen (${upstreamReason(error, 'Server')}).`
+        }
       }
     }
 
@@ -633,7 +614,7 @@ export async function runTranscription(run: JobRun): Promise<JobChanges> {
     return {
       status: 'completed',
       result,
-      error: null,
+      error: notice,
       completedAt: new Date(),
       progress: progressOf(null, plan.length, plan.length, 100),
       expiresAt: jobExpiry(config.unsavedJobRetentionHours)

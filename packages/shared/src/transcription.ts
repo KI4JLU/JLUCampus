@@ -517,6 +517,11 @@ export const transcriptionJobSchema = z.object({
   mapping: z.record(z.string(), z.string()),
   snippets: z.array(transcriptionSnippetSchema),
   colors: z.record(z.string(), transcriptionSpeakerColorIdSchema),
+  /**
+   * Why a `failed` job failed. On an `analyzed` or `completed` job it is a notice instead: with
+   * `diarization_failed` the diariser was unavailable and the file has one automatic voice, with
+   * `correction_failed` the text stayed uncorrected.
+   */
   error: transcriptionJobErrorSchema.nullable(),
   /** Set once `completed`, and only in the answer of `GET TRANSCRIPTION_API.job`; lists leave it out. */
   result: transcriptionResultSchema.nullable(),
@@ -1237,32 +1242,90 @@ const modelListSchema = z
   })
   .default([])
 
-const modelIdSchema = z.string().trim().min(1).max(200).nullable().default(null)
-
 /** The HRZ's LiteLLM gateway (KI@JLU), up to `/v1`: speech and chat models of the university. */
 export const TRANSCRIPTION_HRZ_API_URL = 'https://api.hrz.uni-giessen.de/v1'
 /** The gateway's chat model for summaries and section previews. */
 export const TRANSCRIPTION_DEFAULT_SUMMARY_MODEL = 'jlu/qwen3.8-27b'
 /** The gateway's quicker chat model for correction, speaker optimisation, title and subtitle. */
 export const TRANSCRIPTION_DEFAULT_FAST_MODEL = 'jlu/qwen3.8-27b-fast'
+/** The gateway's speech model (Whisper large v3), as kiChat's batch transcription uses it. */
+export const TRANSCRIPTION_DEFAULT_ASR_MODEL = 'jlu/whisper-1'
+/** kiChat's diarisation model on its Speaches server. */
+export const TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL = 'pyannote/speaker-diarization-community-1'
+
+/**
+ * One or more OpenAI-compatible speech workers up to `/v1`, comma-separated as kiChat's
+ * `base_url`: the chunks of a job go to them in turn.
+ */
+export const transcriptionUrlListSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4096)
+  .refine(
+    (value) => {
+      const urls = value.split(',').map((part) => part.trim())
+      return urls.length <= 10 && urls.every((url) => httpsUrlSchema.safeParse(url).success)
+    },
+    { message: 'Expected up to ten comma-separated URLs (https, http only for localhost)' }
+  )
+
+/** The URLs of a comma-separated list, trimmed, without empty entries. */
+export function transcriptionUrls(value: string | null | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
 
 /**
  * The module's settings. Every upstream is optional, so a stored config of an older release
  * parses; what is missing turns the matching capability off (`transcriptionCapabilitiesSchema`).
  */
 export const transcriptionComponentConfigSchema = z.object({
-  /** OpenAI-compatible speech endpoint up to `/v1` (`POST /audio/transcriptions`). */
-  asrBaseUrl: httpsUrlSchema.nullable().default(null),
+  /**
+   * OpenAI-compatible speech endpoint up to `/v1` (`POST /audio/transcriptions`), the HRZ gateway
+   * unless the admin names another; several workers comma-separated (kiChat's `base_url`).
+   */
+  asrBaseUrl: transcriptionUrlListSchema.nullable().default(TRANSCRIPTION_HRZ_API_URL),
   asrModels: modelListSchema,
-  /** One of `asrModels`; `null`: the first. */
-  defaultAsrModel: modelIdSchema,
+  /**
+   * One of `asrModels`; `null`: the first. kiChat's model on the gateway, used once `asrModels`
+   * lists it (`Modelle abrufen`, which needs the key).
+   */
+  defaultAsrModel: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .nullable()
+    .default(TRANSCRIPTION_DEFAULT_ASR_MODEL),
+  /**
+   * Requests in flight at the speech and diarisation servers at once, across all jobs and chunks
+   * of this server process (kiChat's `SPEACHES_MAX_CONCURRENCY`): the servers' model instances.
+   */
+  asrConcurrency: z.number().int().min(1).max(32).default(3),
   /** Provider name saved with transcripts and shown in the admin form, e.g. `KI@JLU`. */
   providerName: z.string().trim().min(1).max(80).nullable().default(null),
-  /** Speaker analysis and diarisation; off assigns no voices (and says so). */
+  /**
+   * Speaker analysis and diarisation; off gives every file one automatic voice (and says so in
+   * the capabilities).
+   */
   diarizationEnabled: z.boolean().default(false),
-  /** The diarisation endpoint itself (multipart audio in, speaker turns out). */
+  /**
+   * The Speaches diarisation server up to `/v1` (`POST /audio/diarization`,
+   * `POST /audio/speech/timestamps`), as kiChat's `diarization_base_url`; `null`: the speech
+   * endpoint (its first worker). Its key is `diarizationApiKey`, else the speech key.
+   */
   diarizationUrl: httpsUrlSchema.nullable().default(null),
-  diarizationModel: modelIdSchema,
+  /** The pyannote model the diariser runs; `null`: kiChat's default. */
+  diarizationModel: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .nullable()
+    .default(TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL),
   /**
    * OpenAI-compatible chat endpoint up to `/v1`, for correction, summaries and optimisation; the
    * HRZ gateway unless the admin names another. Chat stays off until `llmModels` lists a model.
