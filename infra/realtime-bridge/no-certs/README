@@ -1,1 +1,0 @@
-# Mounted into coturn when TURN_CERT_DIR is unset: no certificate, so no TLS listener.

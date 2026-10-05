@@ -1,4 +1,0 @@
-aiohttp==3.14.3
-aiortc==1.15.0
-# stop_peer_transports() reaches into aioice internals; keep it pinned to the tested version.
-aioice==0.10.2

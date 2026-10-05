@@ -62,55 +62,6 @@ services:
         mc mb --ignore-existing local/justcampus-transcription &&
         mc anonymous set none local/justcampus-transcription
 
-  # Live transcription, on-prem: the realtime bridge (infra/realtime-bridge, ported from kiChat)
-  # takes the browser's WebRTC audio and streams it to the gateway's realtime WebSocket. Optional:
-  #   docker compose --profile realtime up -d realtime-bridge
-  # and set the module's bridge address to http://localhost:8089. Host networking, as WebRTC
-  # media runs over UDP on ephemeral ports and the bridge's ICE candidates must carry the host's
-  # addresses. The gateway credentials come from the Campus server with every session; the
-  # bridge keeps none. BRIDGE_API_KEY is the server's TRANSCRIPTION_REALTIME_BRIDGE_KEY (.env).
-  # Behind an outbound proxy it uses HTTPS_PROXY (and NO_PROXY) from the environment or .env.
-  realtime-bridge:
-    profiles: ['realtime']
-    build: ./infra/realtime-bridge
-    image: justcampus-realtime-bridge:dev
-    network_mode: host
-    environment:
-      PORT: ${REALTIME_BRIDGE_PORT:-8089}
-      # Development: signaling only for this machine; media still uses every interface. Without
-      # TRANSCRIPTION_REALTIME_BRIDGE_KEY it takes loopback requests unauthenticated (the bridge
-      # allows that only with a loopback HOST); with the key, only the server's.
-      HOST: 127.0.0.1
-      BRIDGE_API_KEY: ${TRANSCRIPTION_REALTIME_BRIDGE_KEY:-}
-      BRIDGE_ALLOW_UNAUTHENTICATED: '1'
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-      # TURN for the bridge itself, as for browsers: turn: URLs and coturn's shared secret.
-      TURN_URLS: ${REALTIME_BRIDGE_TURN_URLS:-}
-      TURN_SECRET: ${TRANSCRIPTION_TURN_SECRET:-}
-
-  # A TURN relay to try the TURN path locally (browsers on this machine connect without one):
-  #   docker compose --profile turn up -d coturn
-  # then ICE servers turn:localhost:3478 with short-lived TURN credentials in the module's
-  # settings and TRANSCRIPTION_TURN_SECRET in .env (coturn's static-auth-secret).
-  coturn:
-    profiles: ['turn']
-    image: coturn/coturn:4.17.2
-    network_mode: host
-    environment:
-      TURN_SECRET: ${TRANSCRIPTION_TURN_SECRET:-}
-    # The secret goes into a config file, not onto the command line where `ps` shows it.
-    entrypoint:
-      - sh
-      - -c
-      - >-
-        test -n "$$TURN_SECRET" || { echo 'TRANSCRIPTION_TURN_SECRET is not set' >&2; exit 1; };
-        printf 'static-auth-secret=%s\n' "$$TURN_SECRET" > /tmp/turnserver.conf &&
-        exec turnserver -c /tmp/turnserver.conf --log-file=stdout --simple-log
-        --use-auth-secret --realm=localhost --fingerprint --listening-ip=127.0.0.1
-        --listening-port=3478 --min-port=49160 --max-port=49200 --no-multicast-peers
-        --allow-loopback-peers
-
 volumes:
   postgres-data:
   minio-data:
