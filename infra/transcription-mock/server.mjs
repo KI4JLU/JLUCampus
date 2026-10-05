@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * A local stand-in for every upstream of the transcription module, for development and tests:
- * speech recognition, diarisation, the chat model and live transcription. It needs no keys and
- * accepts any `Authorization` header. See README.md for the admin settings that point at it.
+ * speech recognition, diarisation, the chat model and the realtime WebSockets of live
+ * transcription. It needs no keys and accepts any `Authorization` header. See README.md for the admin settings that point at it.
  *
  *   bun run mock:transcription                       # port 9200
  *   TRANSCRIPTION_MOCK_PORT=9300 bun run mock:transcription
@@ -26,19 +26,6 @@ const modules = [
 
 export async function route(request, response) {
   const { pathname } = new URL(request.url ?? '/', 'http://mock')
-  // Browsers call OpenAI Realtime's `/calls` themselves, as they would api.openai.com, which
-  // allows any origin.
-  response.setHeader('Access-Control-Allow-Origin', '*')
-  response.setHeader('Access-Control-Expose-Headers', 'Location')
-  if (request.method === 'OPTIONS') {
-    response.writeHead(204, {
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Access-Control-Max-Age': '600'
-    })
-    response.end()
-    return
-  }
   if (request.method === 'GET' && pathname === '/health') {
     sendJson(response, 200, { ok: true })
     return
@@ -64,6 +51,20 @@ export function startMock(port) {
       else response.end()
     })
   })
+  // The realtime WebSockets (`realtime.mjs`); any other upgrade is refused.
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url ?? '/', 'http://mock')
+    const below = pathname.startsWith('/realtime/') ? pathname.slice('/realtime'.length) : null
+    if (below === null || !realtime.upgrade(request, socket, head, below)) {
+      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+    }
+  })
+  // Closing the mock ends its realtime streams too, which would otherwise keep it open.
+  const close = server.close.bind(server)
+  server.close = (callback) => {
+    realtime.closeStreams()
+    return close(callback)
+  }
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)))
 }
 

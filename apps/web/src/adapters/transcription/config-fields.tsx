@@ -23,7 +23,6 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-  Textarea,
   Tooltip,
   TooltipContent,
   TooltipTrigger
@@ -36,19 +35,16 @@ import {
   TRANSCRIPTION_MODELS_MAX,
   TRANSCRIPTION_REALTIME_MODES,
   TRANSCRIPTION_SPEAKER_COUNTS,
-  TRANSCRIPTION_TURN_AUTH,
   type TranscriptionComponentConfig,
   type TranscriptionConnectionFinding,
   type TranscriptionConnectionTarget,
   type TranscriptionConnectionTest,
   type TranscriptionConnectionTestRequest,
-  type TranscriptionIceServer,
   type TranscriptionLanguage,
   type TranscriptionModel,
   type TranscriptionModelKind,
   type TranscriptionRealtimeMode,
   type TranscriptionSpeakerCount,
-  type TranscriptionTurnAuth,
   firstSpeechModel,
   transcriptionUrls
 } from '@justcampus/shared'
@@ -82,13 +78,6 @@ function urlOrNull(value: string): string | null {
 function draftKey(draft: SecretDraft | undefined): string | null | undefined {
   if (draft?.remove) return null
   return draft?.value.trim() || undefined
-}
-
-/** The first error at or below `path`, e.g. of one ICE server. */
-function errorAt(errors: Partial<Record<string, string>>, path: string): string | undefined {
-  if (errors[path]) return errors[path]
-  const key = Object.keys(errors).find((candidate) => candidate.startsWith(`${path}.`))
-  return key ? errors[key] : undefined
 }
 
 /**
@@ -510,14 +499,6 @@ export function TranscriptionConfigFields({
             )}
           </Field>
           <UrlField
-            id={id('onprem-signaling-url')}
-            name="onpremSignalingUrl"
-            value={config.onpremSignalingUrl}
-            placeholder="http://localhost:8089"
-            error={errors.onpremSignalingUrl}
-            onChange={(onpremSignalingUrl) => update({ onpremSignalingUrl })}
-          />
-          <UrlField
             id={id('onprem-gateway-url')}
             name="onpremGatewayUrl"
             value={config.onpremGatewayUrl}
@@ -544,55 +525,11 @@ export function TranscriptionConfigFields({
               />
             )}
           </Field>
-          <IceServersField
-            id={id('ice-servers')}
-            servers={config.realtimeIceServers}
-            error={errorAt(errors, 'realtimeIceServers')}
-            onChange={(realtimeIceServers) => update({ realtimeIceServers })}
-          />
-          <Field
-            id={id('turn-auth')}
-            label={t('transcription.recording.admin.realtimeTurnAuth.label')}
-            hint={t('transcription.recording.admin.realtimeTurnAuth.hint')}
-            error={errors.realtimeTurnAuth}
-          >
-            {(control) => (
-              <Select
-                value={config.realtimeTurnAuth}
-                onValueChange={(value) =>
-                  update({ realtimeTurnAuth: value as TranscriptionTurnAuth })
-                }
-              >
-                <SelectTrigger {...control}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TRANSCRIPTION_TURN_AUTH.map((auth) => (
-                    <SelectItem key={auth} value={auth}>
-                      {t(`transcription.recording.admin.realtimeTurnAuth.${auth}`)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </Field>
-          {config.realtimeTurnAuth === 'ephemeral' ? (
-            <NumberField
-              id={id('turn-credential-seconds')}
-              name="realtimeTurnCredentialSeconds"
-              value={config.realtimeTurnCredentialSeconds}
-              min={60}
-              max={86_400}
-              error={errors.realtimeTurnCredentialSeconds}
-              onChange={(value) => update({ realtimeTurnCredentialSeconds: value ?? Number.NaN })}
-            />
-          ) : null}
           <ConnectionTest
             target="realtimeOnprem"
-            disabled={!config.onpremSignalingUrl}
+            disabled={!config.onpremGatewayUrl && !config.asrBaseUrl}
             request={() => ({
               target: 'realtimeOnprem',
-              bridgeUrl: config.onpremSignalingUrl ?? undefined,
               gatewayUrl: config.onpremGatewayUrl,
               // The gateway takes the speech recognition key.
               apiKey: draftKey(secrets.apiKey),
@@ -650,12 +587,7 @@ export function TranscriptionConfigFields({
 }
 
 type UrlFieldName =
-  | 'asrBaseUrl'
-  | 'diarizationUrl'
-  | 'llmBaseUrl'
-  | 'onpremSignalingUrl'
-  | 'onpremGatewayUrl'
-  | 'openaiRealtimeUrl'
+  'asrBaseUrl' | 'diarizationUrl' | 'llmBaseUrl' | 'onpremGatewayUrl' | 'openaiRealtimeUrl'
 
 function UrlField({
   id,
@@ -737,7 +669,6 @@ type NumberFieldName =
   | 'upstreamTimeoutSeconds'
   | 'transcriptRetentionHours'
   | 'unsavedJobRetentionHours'
-  | 'realtimeTurnCredentialSeconds'
 
 /**
  * A whole number. An empty field is `null` where that means "no limit" (`nullable`); elsewhere it
@@ -1166,61 +1097,6 @@ function RealtimeModesField({
         </FormDescription>
       </fieldset>
     </FormItem>
-  )
-}
-
-function serversToText(servers: readonly TranscriptionIceServer[]): string {
-  return servers.map((server) => server.urls.join(' ')).join('\n')
-}
-
-function textToServers(text: string): TranscriptionIceServer[] {
-  return text
-    .split('\n')
-    .map((line) => line.split(/[\s,]+/).filter(Boolean))
-    .filter((urls) => urls.length > 0)
-    .map((urls) => ({ urls }))
-}
-
-/** One ICE server per line; the text stays as typed while the config gets the parsed servers. */
-function IceServersField({
-  id,
-  servers,
-  error,
-  onChange
-}: {
-  id: string
-  servers: readonly TranscriptionIceServer[]
-  error: string | undefined
-  onChange: (servers: TranscriptionIceServer[]) => void
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const [text, setText] = useState(() => serversToText(servers))
-  // A config replaced from outside (another component opened) shows its own servers.
-  const parsed = serversToText(textToServers(text))
-  const outside = serversToText(servers)
-  const shown = parsed === outside ? text : outside
-
-  return (
-    <Field
-      id={id}
-      label={t('transcription.recording.admin.iceServers.label')}
-      hint={t('transcription.recording.admin.iceServers.hint')}
-      error={error}
-    >
-      {(control) => (
-        <Textarea
-          {...control}
-          rows={3}
-          spellCheck={false}
-          placeholder="stun:stun.uni-giessen.de:3478"
-          value={shown}
-          onChange={(event) => {
-            setText(event.target.value)
-            onChange(textToServers(event.target.value))
-          }}
-        />
-      )}
-    </Field>
   )
 }
 

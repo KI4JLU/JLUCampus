@@ -2,355 +2,267 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CONNECTION_TIMEOUT_MS,
   DRAIN_TIMEOUT_MS,
+  MAX_BUFFERED_BYTES,
   RealtimeError,
   RealtimeSession,
+  type AudioCapture,
   type RealtimeDependencies,
   type RealtimeHandlers
 } from './session'
 
-class FakeChannel extends EventTarget {
-  readyState: RTCDataChannelState = 'connecting'
-  sent: unknown[] = []
-  closed = false
+/** The server's live socket, as the session sees it. */
+class FakeSocket extends EventTarget {
+  readyState: number = WebSocket.CONNECTING
+  bufferedAmount = 0
+  sent: Record<string, unknown>[] = []
+  closedWith: number | null = null
   send(data: string): void {
-    this.sent.push(JSON.parse(data))
+    this.sent.push(JSON.parse(data) as Record<string, unknown>)
   }
-  close(): void {
-    this.closed = true
-    this.readyState = 'closed'
-    this.dispatchEvent(new Event('close'))
+  close(code = 1000): void {
+    this.closedWith ??= code
+    this.finish()
   }
   open(): void {
-    this.readyState = 'open'
+    this.readyState = WebSocket.OPEN
     this.dispatchEvent(new Event('open'))
   }
   receive(event: unknown): void {
     this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(event) }))
   }
+  /** The server closes the socket. */
+  finish(): void {
+    if (this.readyState === WebSocket.CLOSED) return
+    this.readyState = WebSocket.CLOSED
+    this.dispatchEvent(new Event('close'))
+  }
 }
 
-class FakePeer extends EventTarget {
-  iceGatheringState: RTCIceGatheringState = 'complete'
-  connectionState: RTCPeerConnectionState = 'new'
-  localDescription: { sdp: string } | null = null
-  remoteDescription: RTCSessionDescriptionInit | null = null
-  channel = new FakeChannel()
-  tracks: MediaStreamTrack[] = []
+class FakeCapture implements AudioCapture {
+  stopped = false
   closed = false
-  constructor(readonly configuration: RTCConfiguration) {
-    super()
-  }
-  createDataChannel(label: string): FakeChannel {
-    expect(label).toBe('oai-events')
-    return this.channel
-  }
-  addTrack(track: MediaStreamTrack): void {
-    this.tracks.push(track)
-  }
-  createOffer(): Promise<RTCSessionDescriptionInit> {
-    return Promise.resolve({ type: 'offer', sdp: 'offer' })
-  }
-  setLocalDescription(): Promise<void> {
-    this.localDescription = { sdp: 'offer+candidates' }
+  constructor(
+    readonly sampleRate: number,
+    readonly onFrame: (pcm: Uint8Array) => void
+  ) {}
+  stop(): Promise<void> {
+    this.stopped = true
+    // The worklet's last partial frame.
+    this.onFrame(new Uint8Array([1, 0, 2, 0]))
     return Promise.resolve()
-  }
-  setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
-    this.remoteDescription = description
-    return Promise.resolve()
-  }
-  connect(state: RTCPeerConnectionState = 'connected'): void {
-    this.connectionState = state
-    this.dispatchEvent(new Event('connectionstatechange'))
   }
   close(): void {
     this.closed = true
   }
 }
 
-function fakeStream(): { stream: MediaStream; stopped: () => boolean } {
-  const track = { stop: vi.fn() } as unknown as MediaStreamTrack
-  return {
-    stream: { getTracks: () => [track] } as unknown as MediaStream,
-    stopped: () => (track.stop as ReturnType<typeof vi.fn>).mock.calls.length > 0
-  }
+interface Setup {
+  socket: FakeSocket
+  tracks: { stop: ReturnType<typeof vi.fn> }[]
+  stream: MediaStream
+  handlers: { [K in keyof RealtimeHandlers]: ReturnType<typeof vi.fn> }
+  session: RealtimeSession
+  modes: string[]
+  capture: () => FakeCapture | null
 }
 
-function setup(overrides: Partial<RealtimeDependencies> = {}): {
-  session: RealtimeSession
-  peers: FakePeer[]
-  handlers: RealtimeHandlers & { text: string }
-  dependencies: RealtimeDependencies
-} {
-  const peers: FakePeer[] = []
+function setup(options: { captureFails?: boolean } = {}): Setup {
+  const socket = new FakeSocket()
+  const tracks = [{ stop: vi.fn() }]
+  const stream = { getTracks: () => tracks } as unknown as MediaStream
+  let capture: FakeCapture | null = null
+  const modes: string[] = []
+  const dependencies: RealtimeDependencies = {
+    openSocket: (mode) => {
+      modes.push(mode)
+      return socket as unknown as WebSocket
+    },
+    capture: (_stream, sampleRate, onFrame) => {
+      if (options.captureFails) return Promise.reject(new Error('NotSupportedError'))
+      capture = new FakeCapture(sampleRate, onFrame)
+      return Promise.resolve(capture)
+    }
+  }
   const handlers = {
-    text: '',
-    onText: vi.fn((text: string) => {
-      handlers.text += text
-    }),
+    onText: vi.fn(),
     onServiceError: vi.fn(),
     onConnectionLost: vi.fn()
-  }
-  const dependencies: RealtimeDependencies = {
-    createPeer: (configuration) => {
-      const peer = new FakePeer(configuration)
-      peers.push(peer)
-      return peer as unknown as RTCPeerConnection
-    },
-    onpremSignaling: vi.fn(() => Promise.resolve('answer')),
-    openaiSession: vi.fn(() =>
-      Promise.resolve({
-        value: 'ek_1',
-        callsUrl: 'https://api.openai.com/v1/realtime/calls',
-        model: 'gpt-realtime-whisper'
-      })
-    ),
-    fetch: vi.fn(() => Promise.resolve(new Response('openai-answer'))) as typeof fetch,
-    ...overrides
-  }
-  return { session: new RealtimeSession(handlers, dependencies), peers, handlers, dependencies }
-}
-
-/** Starts an on-prem session and lets the fake peer connect. */
-async function started(context: ReturnType<typeof setup>, stream: MediaStream): Promise<FakePeer> {
-  const starting = context.session.start({
+  } satisfies RealtimeHandlers
+  const session = new RealtimeSession(handlers, dependencies)
+  return {
+    socket,
+    tracks,
     stream,
-    mode: 'onprem',
-    iceServers: [{ urls: ['turn:turn.example:3478'] }],
-    openaiModel: null
-  })
-  await vi.waitFor(() => expect(context.peers[0]?.remoteDescription).toBeTruthy())
-  const peer = context.peers[0]!
-  peer.connect()
-  await starting
-  peer.channel.open()
-  return peer
+    handlers,
+    session,
+    modes,
+    capture: () => capture
+  }
 }
 
-beforeEach(() => {
-  vi.useFakeTimers({ shouldAdvanceTime: true })
-})
+/** Lets the session's awaits run. */
+async function settle(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) await Promise.resolve()
+}
 
-afterEach(() => {
-  vi.useRealTimers()
-})
+describe('live sessions over the server’s WebSocket', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
 
-describe('RealtimeSession', () => {
-  it('connects on-prem with the ICE servers, the gathered offer and the bridge answer', async () => {
-    const context = setup()
-    const { stream } = fakeStream()
-    const peer = await started(context, stream)
-    expect(peer.configuration).toEqual({ iceServers: [{ urls: ['turn:turn.example:3478'] }] })
-    expect(context.dependencies.onpremSignaling).toHaveBeenCalledWith('offer+candidates')
-    expect(peer.remoteDescription).toEqual({ type: 'answer', sdp: 'answer' })
-    expect(peer.tracks).toHaveLength(1)
-    expect(context.session.isRecording).toBe(true)
-    // The bridge manages its session itself.
-    expect(peer.channel.sent).toEqual([])
+  it('starts the audio once the server took the session, at the mode’s rate', async () => {
+    const { socket, session, stream, modes, capture } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    await settle()
+    expect(capture()).toBeNull()
+    socket.receive({ type: 'session.created', session: { mode: 'onprem', sample_rate: 16_000 } })
+    await started
+    expect(modes).toEqual(['onprem'])
+    expect(capture()?.sampleRate).toBe(16_000)
+    expect(session.isRecording).toBe(true)
+    // Frames go as base64 PCM16 appends.
+    capture()!.onFrame(new Uint8Array([0, 1, 2, 3]))
+    expect(socket.sent).toEqual([{ type: 'input_audio_buffer.append', audio: 'AAECAw==' }])
   })
 
-  it('shows a delta followed by the identical completion once', async () => {
-    const context = setup()
-    const peer = await started(context, fakeStream().stream)
-    peer.channel.receive({
-      type: 'conversation.item.input_audio_transcription.delta',
-      item_id: 'a',
-      delta: 'Hallo'
-    })
-    peer.channel.receive({
-      type: 'conversation.item.input_audio_transcription.completed',
-      item_id: 'a',
-      transcript: 'Hallo'
-    })
-    expect(context.handlers.text).toBe('Hallo ')
+  it('takes OpenAI’s rate for the OpenAI mode', async () => {
+    const { socket, session, stream, capture } = setup()
+    const started = session.start({ stream, mode: 'openai' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await started
+    expect(capture()?.sampleRate).toBe(24_000)
   })
 
-  it('commits on stop, waits for the pending transcript, then closes everything', async () => {
-    const context = setup()
-    const { stream, stopped } = fakeStream()
-    const peer = await started(context, stream)
-    peer.channel.receive({ type: 'input_audio_buffer.committed', item_id: 'a' })
-    const stopping = context.session.stop()
-    expect(context.session.stop()).toBe(stopping)
-    expect(peer.channel.sent).toEqual([{ type: 'input_audio_buffer.commit' }])
-    expect(peer.closed).toBe(false)
-    peer.channel.receive({
-      type: 'conversation.item.input_audio_transcription.completed',
-      item_id: 'a',
-      transcript: 'Ende.'
-    })
-    await stopping
-    expect(context.handlers.text).toBe('Ende. ')
-    expect(peer.closed).toBe(true)
-    expect(peer.channel.closed).toBe(true)
-    expect(stopped()).toBe(true)
-    expect(context.handlers.onConnectionLost).not.toHaveBeenCalled()
-  })
-
-  it('follows the bridge on a short take: committed and completed only after the commit', async () => {
-    // Under 300 ms of audio the bridge has not started decoding: the commit starts and ends it,
-    // the item's events follow, and the bridge closes the connection half a second later.
-    const context = setup()
-    const peer = await started(context, fakeStream().stream)
-    const stopping = context.session.stop()
-    peer.channel.receive({ type: 'input_audio_buffer.committed', item_id: 'item_x' })
-    peer.channel.receive({
-      type: 'conversation.item.input_audio_transcription.delta',
-      item_id: 'item_x',
-      delta: 'Hallo'
-    })
-    peer.channel.receive({
-      type: 'conversation.item.input_audio_transcription.completed',
-      item_id: 'item_x',
-      transcript: 'Hallo'
-    })
-    await stopping
-    peer.channel.close()
-    peer.connect('closed')
-    expect(context.handlers.text).toBe('Hallo ')
-    expect(context.handlers.onConnectionLost).not.toHaveBeenCalled()
-  })
-
-  it('closes after the drain timeout when no transcript comes', async () => {
-    const context = setup()
-    const peer = await started(context, fakeStream().stream)
-    let done = false
-    const stopping = context.session.stop().then(() => {
-      done = true
-    })
-    await vi.advanceTimersByTimeAsync(DRAIN_TIMEOUT_MS - 100)
-    expect(done).toBe(false)
-    await vi.advanceTimersByTimeAsync(200)
-    await stopping
-    expect(peer.closed).toBe(true)
-  })
-
-  it("uses the session's ICE servers with their short-lived TURN credentials", async () => {
-    const turn = {
-      urls: ['turn:turn.example:3478'],
-      username: '1791108600:jlu-campus',
-      credential: 'short-lived'
-    }
-    const context = setup({ onpremIceServers: vi.fn(() => Promise.resolve([turn])) })
-    const peer = await started(context, fakeStream().stream)
-    expect(peer.configuration).toEqual({ iceServers: [turn] })
-    // OpenAI does not ask for them.
-    const openai = setup({ onpremIceServers: vi.fn(() => Promise.resolve([turn])) })
-    void openai.session
-      .start({ stream: fakeStream().stream, mode: 'openai', iceServers: [], openaiModel: null })
-      .catch(() => {})
-    await vi.waitFor(() => expect(openai.peers[0]).toBeDefined())
-    expect(openai.dependencies.onpremIceServers).not.toHaveBeenCalled()
-    openai.session.teardown()
-  })
-
-  it('fails as a bridge error when the ICE servers are not handed out', async () => {
-    const context = setup({
-      onpremIceServers: () =>
-        Promise.reject(
-          Object.assign(new Error('x'), {
-            body: { error: { code: 'module_unavailable', message: 'TURN not set up' } }
-          })
-        )
-    })
-    const { stream, stopped } = fakeStream()
-    await expect(
-      context.session.start({ stream, mode: 'onprem', iceServers: [], openaiModel: null })
-    ).rejects.toMatchObject({ code: 'bridgeError', detail: 'TURN not set up' })
-    expect(context.peers).toHaveLength(0)
-    expect(stopped()).toBe(true)
-  })
-
-  it('fails when the audio connection is not up within 15 s and releases the microphone', async () => {
-    const context = setup()
-    const { stream, stopped } = fakeStream()
-    const starting = context.session.start({
-      stream,
-      mode: 'onprem',
-      iceServers: [],
-      openaiModel: null
-    })
-    const failure = expect(starting).rejects.toMatchObject({ code: 'connectionTimeout' })
-    await vi.advanceTimersByTimeAsync(CONNECTION_TIMEOUT_MS + 10)
-    await failure
-    expect(context.peers[0]?.configuration).toEqual({})
-    expect(context.peers[0]?.closed).toBe(true)
-    expect(stopped()).toBe(true)
-  })
-
-  it('reports the bridge error with the server message', async () => {
-    const context = setup({
-      onpremSignaling: () =>
-        Promise.reject(
-          Object.assign(new Error('x'), {
-            body: { error: { code: 'module_unavailable', message: 'Bridge down' } }
-          })
-        )
-    })
-    const error = await context.session
-      .start({ stream: fakeStream().stream, mode: 'onprem', iceServers: [], openaiModel: null })
-      .catch((caught: unknown) => caught)
+  it('fails with the server’s code when it refuses the session, and frees the microphone', async () => {
+    const { socket, session, stream, tracks } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'error', error: { code: 'model_not_allowed', message: 'words' } })
+    const error = await started.catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(RealtimeError)
-    expect(error).toMatchObject({ code: 'bridgeError', detail: 'Bridge down' })
+    expect(error).toMatchObject({ code: 'refused', detail: 'model_not_allowed' })
+    expect(tracks[0]!.stop).toHaveBeenCalled()
+    expect(socket.closedWith).toBe(1000)
   })
 
-  it('offers OpenAI the SDP with the ephemeral key and configures the transcription model', async () => {
-    const context = setup()
-    const starting = context.session.start({
-      stream: fakeStream().stream,
-      mode: 'openai',
-      iceServers: [{ urls: ['turn:ignored'] }],
-      openaiModel: 'from-config'
+  it('fails when the upgrade is refused, the socket closes early or nothing comes in time', async () => {
+    const refused = setup()
+    const first = refused.session.start({ stream: refused.stream, mode: 'onprem' })
+    refused.socket.finish()
+    await expect(first).rejects.toMatchObject({ code: 'connectionFailed' })
+
+    const closed = setup()
+    const second = closed.session.start({ stream: closed.stream, mode: 'onprem' })
+    closed.socket.open()
+    closed.socket.finish()
+    await expect(second).rejects.toMatchObject({ code: 'connectionClosed' })
+
+    const silent = setup()
+    const third = silent.session.start({ stream: silent.stream, mode: 'onprem' })
+    silent.socket.open()
+    vi.advanceTimersByTime(CONNECTION_TIMEOUT_MS)
+    await expect(third).rejects.toMatchObject({ code: 'connectionTimeout' })
+    expect(silent.socket.closedWith).toBe(1000)
+  })
+
+  it('fails when the audio processing cannot start', async () => {
+    const { socket, session, stream, tracks } = setup({ captureFails: true })
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await expect(started).rejects.toMatchObject({ code: 'audioFailed' })
+    expect(tracks[0]!.stop).toHaveBeenCalled()
+    expect(socket.closedWith).toBe(1000)
+  })
+
+  it('appends transcripts and passes service errors on while it runs', async () => {
+    const { socket, session, stream, handlers } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await started
+    socket.receive({ type: 'input_audio_buffer.committed', item_id: 'a' })
+    socket.receive({
+      type: 'conversation.item.input_audio_transcription.delta',
+      item_id: 'a',
+      delta: 'Hallo'
     })
-    await vi.waitFor(() => expect(context.peers[0]?.remoteDescription).toBeTruthy())
-    const peer = context.peers[0]!
-    expect(peer.configuration).toEqual({})
-    expect(context.dependencies.fetch).toHaveBeenCalledWith(
-      'https://api.openai.com/v1/realtime/calls',
-      expect.objectContaining({
-        method: 'POST',
-        body: 'offer+candidates',
-        headers: { Authorization: 'Bearer ek_1', 'Content-Type': 'application/sdp' }
-      })
-    )
-    expect(peer.remoteDescription).toEqual({ type: 'answer', sdp: 'openai-answer' })
-    peer.connect()
-    await starting
-    peer.channel.open()
-    expect(peer.channel.sent).toEqual([
-      {
-        type: 'session.update',
-        session: {
-          type: 'transcription',
-          audio: { input: { transcription: { model: 'gpt-realtime-whisper' } } }
-        }
-      }
+    socket.receive({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'a',
+      transcript: 'Hallo Welt'
+    })
+    expect(handlers.onText.mock.calls.map(([text]) => text)).toEqual(['Hallo', ' Welt '])
+    socket.receive({ type: 'error', error: { code: 'session_idle', message: 'idle' } })
+    expect(handlers.onServiceError).toHaveBeenCalledWith('session_idle')
+  })
+
+  it('sends the last audio and a commit on stop, and waits for the server to close', async () => {
+    const { socket, session, stream, capture, tracks } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await started
+    const stopping = session.stop()
+    await settle()
+    expect(capture()?.stopped).toBe(true)
+    expect(socket.sent.map((event) => event.type)).toEqual([
+      'input_audio_buffer.append',
+      'input_audio_buffer.commit'
     ])
-    // OpenAI commits turns itself: stopping does not wait.
-    await context.session.stop()
-    expect(peer.closed).toBe(true)
+    expect(socket.sent[1]).toEqual({ type: 'input_audio_buffer.commit' })
+    // Still waiting: the server finishes its transcript first.
+    expect(tracks[0]!.stop).not.toHaveBeenCalled()
+    socket.finish()
+    await stopping
+    expect(tracks[0]!.stop).toHaveBeenCalled()
+    expect(capture()?.closed).toBe(true)
   })
 
-  it('prefixes errors of the OpenAI endpoint', async () => {
-    const context = setup({
-      fetch: (() => Promise.resolve(new Response('bad key', { status: 401 }))) as typeof fetch
-    })
-    await expect(
-      context.session.start({
-        stream: fakeStream().stream,
-        mode: 'openai',
-        iceServers: [],
-        openaiModel: null
-      })
-    ).rejects.toMatchObject({ code: 'openaiError', detail: 'bad key' })
+  it('gives up waiting for the server after the drain timeout', async () => {
+    const { socket, session, stream, tracks } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await started
+    const stopping = session.stop()
+    await settle()
+    vi.advanceTimersByTime(DRAIN_TIMEOUT_MS)
+    await stopping
+    expect(tracks[0]!.stop).toHaveBeenCalled()
+    expect(socket.closedWith).toBe(1000)
   })
 
-  it('reports a dropped connection while recording and tears down', async () => {
-    const context = setup()
-    const { stream, stopped } = fakeStream()
-    const peer = await started(context, stream)
-    peer.connect('failed')
-    expect(context.handlers.onConnectionLost).toHaveBeenCalledWith('connectionFailed')
-    expect(stopped()).toBe(true)
-    expect(context.session.isRecording).toBe(false)
+  it('reports a socket that closes while recording, but not one closing on stop', async () => {
+    const { socket, session, stream, handlers, tracks } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await started
+    socket.finish()
+    expect(handlers.onConnectionLost).toHaveBeenCalledWith('connectionClosed')
+    expect(session.isRecording).toBe(false)
+    expect(tracks[0]!.stop).toHaveBeenCalled()
+  })
+
+  it('drops audio while the socket does not keep up', async () => {
+    const { socket, session, stream, capture } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    socket.receive({ type: 'session.created' })
+    await started
+    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1
+    capture()!.onFrame(new Uint8Array(4))
+    expect(socket.sent).toEqual([])
+    expect(session.droppedFrames).toBe(1)
+  })
+
+  it('ends a start the page overtook', async () => {
+    const { socket, session, stream } = setup()
+    const started = session.start({ stream, mode: 'onprem' })
+    socket.open()
+    session.teardown()
+    await expect(started).rejects.toMatchObject({ code: 'aborted' })
   })
 })

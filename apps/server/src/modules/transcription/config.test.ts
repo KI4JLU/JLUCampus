@@ -12,7 +12,6 @@ import {
   diarizationSetup,
   defaultRealtimeMode,
   llmModel,
-  openaiRealtimeEndpoints,
   realtimeModes,
   type TranscriptionSecrets
 } from './config.js'
@@ -39,8 +38,7 @@ const configured: TranscriptionComponentConfig = {
     { id: 'large', label: 'Large' }
   ],
   defaultSummaryModel: 'large',
-  realtimeModes: ['onprem', 'openai'],
-  onpremSignalingUrl: 'http://localhost:9200/realtime/bridge'
+  realtimeModes: ['onprem', 'openai']
 }
 
 describe('model choice', () => {
@@ -77,7 +75,14 @@ describe('live modes', () => {
       'onprem',
       'openai'
     ])
-    expect(realtimeModes({ ...configured, onpremSignalingUrl: null }, noSecrets)).toEqual([])
+    // On-prem needs a gateway: its own, else the speech endpoint.
+    expect(realtimeModes({ ...configured, asrBaseUrl: null }, noSecrets)).toEqual([])
+    expect(
+      realtimeModes(
+        { ...configured, asrBaseUrl: null, onpremGatewayUrl: 'https://gw.example/v1' },
+        noSecrets
+      )
+    ).toEqual(['onprem'])
   })
 
   it('falls back to the first mode when the default is not offered', () => {
@@ -85,15 +90,6 @@ describe('live modes', () => {
       'onprem'
     )
     expect(defaultRealtimeMode(configured, [])).toBeNull()
-  })
-
-  it('derives the OpenAI endpoints from the base URL', () => {
-    expect(
-      openaiRealtimeEndpoints({ ...configured, openaiRealtimeUrl: 'https://api.openai.com/v1/' })
-    ).toEqual({
-      clientSecretsUrl: 'https://api.openai.com/v1/realtime/client_secrets',
-      callsUrl: 'https://api.openai.com/v1/realtime/calls'
-    })
   })
 })
 

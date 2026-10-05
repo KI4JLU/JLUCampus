@@ -57,16 +57,22 @@
     "modelNotAllowed": "Local live transcription is unavailable right now: the gateway does not allow the model {{model}} for its API key. Once it is allowed, it works without further setup.",
     "gatewayKeyRejected": "Local live transcription is unavailable right now: the gateway refuses the API key.",
     "gatewayRefused": "Local live transcription is unavailable right now: the gateway refuses a live session with {{model}}.",
-    "gatewayUnreachable": "Local live transcription is unavailable right now: the realtime bridge cannot reach the gateway.",
-    "bridgeUnreachable": "Local live transcription is unavailable right now: the realtime bridge does not answer.",
-    "bridgeKeyRejected": "Local live transcription is unavailable right now: the realtime bridge refuses the server.",
-    "bridgeBusy": "Local live transcription is busy right now: the realtime bridge takes no more sessions. Please try again shortly."
+    "gatewayUnreachable": "Local live transcription is unavailable right now: the server cannot reach the gateway."
   },
   "liveTranscript": "Live transcript",
-  "liveBridgeErrors": {
+  "liveErrors": {
+    "not_set_up": "This live mode is not set up.",
+    "busy": "Live transcription is busy right now: the server takes no more sessions. Please try again shortly.",
+    "model_not_allowed": "Live transcription is unavailable right now: the gateway does not allow the live model for its API key.",
+    "gateway_key_rejected": "Live transcription is unavailable right now: the gateway refuses the API key.",
+    "gateway_refused": "Live transcription is unavailable right now: the gateway refuses the live session.",
+    "gateway_unreachable": "Live transcription is unavailable right now: the server cannot reach the gateway.",
+    "upstream_error": "The gateway reported an error during live transcription.",
+    "upstream_closed": "The gateway ended the live session.",
     "session_idle": "Live transcription ended because no audio arrived for too long.",
     "session_expired": "Live transcription reached its maximum length and ended.",
-    "upstream_error": "The gateway reported an error during live transcription."
+    "invalid_event": "The server refused a message of the live transcription.",
+    "audio_rate_exceeded": "More audio arrived than plays in real time; live transcription ended."
   },
   "liveServiceError": "Live transcription error: {{message}}",
   "appearance": "Appearance",
@@ -77,9 +83,7 @@
     "connectionFailed": "Audio connection failed.",
     "connectionClosed": "Audio connection closed.",
     "connectionTimeout": "Audio connection not established within 15s.",
-    "sessionFailed": "Failed to create realtime session.",
-    "bridgeError": "Realtime bridge error.",
-    "openaiError": "OpenAI Realtime API Error: {{detail}}",
+    "audioFailed": "The audio processing could not start.",
     "aborted": "Audio connection closed."
   },
   "widgets": {
@@ -256,10 +260,10 @@
     },
     "realtimeModes": {
       "label": "Offered modes",
-      "hint": "Local needs the realtime bridge and a gateway (without its own: speech recognition), OpenAI the API key for OpenAI Realtime."
+      "hint": "Local needs a gateway (without its own: speech recognition), OpenAI the API key for OpenAI Realtime. Both run through this server."
     },
     "modes": {
-      "onprem": "Local (bridge)",
+      "onprem": "Local (gateway)",
       "openai": "OpenAI Realtime"
     },
     "defaultRealtimeMode": {
@@ -267,35 +271,17 @@
       "hint": "Without a choice, the first one offered.",
       "auto": "First mode offered"
     },
-    "onpremSignalingUrl": {
-      "label": "Realtime bridge address",
-      "hint": "The bridge from infra/realtime-bridge as this server reaches it, such as http://localhost:8089 or http://host.docker.internal:8089. The server passes the browser’s SDP offer on to POST /realtime; browsers reach the bridge over WebRTC only."
-    },
     "onpremGatewayUrl": {
       "label": "Live transcription gateway",
-      "hint": "Up to /v1; the bridge streams to its /v1/realtime. Empty: the speech recognition address. For every session the server hands the bridge the speech recognition API key; browsers never get it."
+      "hint": "Up to /v1; the server opens its /v1/realtime as a WebSocket with the speech recognition API key. Empty: the speech recognition address. Browsers never get the key."
     },
     "onpremRealtimeModel": {
       "label": "Gateway live model",
       "hint": "The gateway’s realtime model, voxtral-mini-realtime as in kiChat. The API key must be allowed to use it."
     },
-    "iceServers": {
-      "label": "ICE servers",
-      "hint": "One server per line, several addresses separated by spaces, such as turn:turn.uni-giessen.de:3478. At most 5, for the local mode only. No credentials here: see TURN sign-in."
-    },
-    "realtimeTurnAuth": {
-      "label": "TURN sign-in",
-      "hint": "Short-lived: for every session the server makes credentials for the turn: servers from the shared secret TRANSCRIPTION_TURN_SECRET (coturn use-auth-secret). The secret never leaves the server; browsers get credentials that expire.",
-      "none": "None",
-      "ephemeral": "Short-lived credentials"
-    },
-    "realtimeTurnCredentialSeconds": {
-      "label": "TURN credential lifetime (seconds)",
-      "hint": "How long a session’s TURN credentials work, 60 to 86,400 seconds."
-    },
     "openaiRealtimeUrl": {
       "label": "OpenAI API address",
-      "hint": "Up to /v1. The server gets short-lived keys there; browsers send their SDP offer to /realtime/calls."
+      "hint": "Up to /v1. The server opens its /v1/realtime as a WebSocket with the API key for OpenAI Realtime; browsers never get it."
     },
     "openaiRealtimeModel": {
       "label": "OpenAI transcription model",
@@ -320,19 +306,13 @@
         "transcribed": "A test clip was transcribed with {{model}}",
         "diarized": "A test clip was analysed for speakers ({{turns}} turns)",
         "chatAnswered": "{{model}} answered a test question",
-        "sdpAnswered": "The bridge answered a test offer with SDP",
-        "bridgeReachable": "The realtime bridge answers",
         "realtimeModelAccepted": "The gateway accepts the key and the live model {{model}}",
         "realtimeUnavailable": {
           "modelNotAllowed": "The gateway does not allow the model {{model}} for this API key. The key works otherwise; ask the gateway’s operator to allow the model.",
           "gatewayKeyRejected": "The gateway refuses the API key.",
           "gatewayRefused": "The gateway refuses a live session with {{model}}.",
-          "gatewayUnreachable": "The realtime bridge cannot reach the gateway.",
-          "bridgeUnreachable": "The realtime bridge is unreachable.",
-          "bridgeKeyRejected": "The realtime bridge refuses the server: TRANSCRIPTION_REALTIME_BRIDGE_KEY must equal its BRIDGE_API_KEY.",
-          "bridgeBusy": "The realtime bridge is busy: it already holds as many sessions as MAX_SESSIONS allows."
+          "gatewayUnreachable": "The server cannot reach the gateway."
         },
-        "keyIssued": "OpenAI issued a short-lived key for {{model}} (not shown)",
         "signedRoundTrip": "A test file was uploaded, read back and deleted through signed URLs in bucket {{bucket}}",
         "serverRoundTrip": "A test file was written, read back and deleted by the server in bucket {{bucket}}",
         "signedUrlsUnreachable": "This server cannot reach the address of the signed URLs; browsers may still reach it",
@@ -340,8 +320,6 @@
           "transcription": "The answer was no transcription.",
           "diarization": "The answer held no speaker turns.",
           "chat": "The answer was no chat completion.",
-          "sdpAnswer": "The answer held no SDP answer.",
-          "clientSecret": "The answer held no short-lived key.",
           "storedContent": "The file read back differs from the one stored."
         }
       }
@@ -350,7 +328,7 @@
       "asr": "Test speech recognition",
       "diarization": "Test speaker recognition",
       "llm": "Test AI endpoint",
-      "realtimeOnprem": "Test bridge",
+      "realtimeOnprem": "Test gateway",
       "realtimeOpenai": "Test OpenAI Realtime",
       "storage": "Test storage"
     }

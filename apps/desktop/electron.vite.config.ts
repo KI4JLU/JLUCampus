@@ -14,7 +14,7 @@ export default defineConfig(({ mode }) => {
         ),
         // Storage and realtime origins the renderer may reach besides the API (see main's CSP).
         'import.meta.env.MAIN_VITE_CONNECT_ORIGINS': JSON.stringify(
-          env.DESKTOP_CONNECT_ORIGINS ?? 'http://localhost:9100 https://api.openai.com'
+          env.DESKTOP_CONNECT_ORIGINS ?? 'http://localhost:9100'
         )
       }
     },

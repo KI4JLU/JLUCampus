@@ -1,6 +1,8 @@
+import { isTranscriptionLiveErrorCode } from '@justcampus/shared'
+
 /**
  * The OpenAI realtime transcription events, as kiChat's `realtime_transcription.js` reads them
- * (section 3, T-60). Both the on-prem bridge and OpenAI send them over the `oai-events` channel.
+ * (section 3, T-60). The Campus server's live WebSocket sends them for either mode.
  * Deltas append at once; a completed transcript appends only what its deltas did not deliver, so a
  * delta followed by the identical completion appears once. Committed items stay pending until they
  * complete or fail, which is what stopping waits for.
@@ -30,27 +32,12 @@ function stringField(fields: Fields, key: string): string | null {
   return typeof value === 'string' ? value : null
 }
 
-/**
- * Codes of the on-prem bridge's errors, which the web app words itself: a session without audio
- * or beyond its lifetime that the bridge finalized, and a gateway error the bridge does not pass on.
- */
-export const LIVE_BRIDGE_ERROR_CODES = [
-  'session_idle',
-  'session_expired',
-  'upstream_error'
-] as const
-export type LiveBridgeErrorCode = (typeof LIVE_BRIDGE_ERROR_CODES)[number]
-
-export function isLiveBridgeErrorCode(value: string): value is LiveBridgeErrorCode {
-  return (LIVE_BRIDGE_ERROR_CODES as readonly string[]).includes(value)
-}
-
-/** An event's error as text to show; one of the bridge's codes as the code itself. */
+/** An event's error as text to show; one of the server's codes as the code itself. */
 function errorMessage(value: unknown): string | null {
   if (typeof value === 'string') return value || null
   if (!isFields(value)) return null
   const code = stringField(value, 'code')
-  if (code && isLiveBridgeErrorCode(code)) return code
+  if (code && isTranscriptionLiveErrorCode(code)) return code
   return stringField(value, 'message')
 }
 

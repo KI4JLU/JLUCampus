@@ -8,6 +8,7 @@ import {
   defaultSpeakerColorId,
   fillTemplatePlaceholders,
   isActiveJobStatus,
+  isTranscriptionLiveErrorCode,
   isSingletonType,
   isTerminalJobStatus,
   progressPercent,
@@ -18,6 +19,7 @@ import {
   TRANSCRIPTION_DEFAULT_CONFIG,
   TRANSCRIPTION_DEFAULT_TEMPLATE_ID,
   TRANSCRIPTION_GROUP_FILES_MAX,
+  TRANSCRIPTION_LIVE_UNAVAILABLE_CODES,
   TRANSCRIPTION_MAX_FILE_BYTES,
   TRANSCRIPTION_SPEAKER_COLORS,
   transcriptionComponentConfigSchema,
@@ -135,19 +137,28 @@ describe('module registration', () => {
     ).toBe(false)
   })
 
-  it('takes the realtime bridge on the server’s own network, and the live model', () => {
+  it('takes the live gateway and model, and drops the WebRTC settings of older releases', () => {
+    // A config saved by the WebRTC releases, with the bridge, ICE servers and TURN sign-in.
     const config = transcriptionComponentConfigSchema.parse({
-      onpremSignalingUrl: 'http://host.docker.internal:8089'
+      realtimeModes: ['onprem'],
+      onpremSignalingUrl: 'http://host.docker.internal:8089',
+      realtimeIceServers: [{ urls: ['turn:turn.example.org:3478'] }],
+      realtimeTurnAuth: 'ephemeral',
+      realtimeTurnCredentialSeconds: 3600
     })
     expect(config).toMatchObject({
-      onpremSignalingUrl: 'http://host.docker.internal:8089',
+      realtimeModes: ['onprem'],
       onpremGatewayUrl: null,
       onpremRealtimeModel: 'voxtral-mini-realtime'
     })
-    expect(
-      transcriptionComponentConfigSchema.safeParse({ onpremSignalingUrl: 'ws://bridge:8089' })
-        .success
-    ).toBe(false)
+    for (const key of [
+      'onpremSignalingUrl',
+      'realtimeIceServers',
+      'realtimeTurnAuth',
+      'realtimeTurnCredentialSeconds'
+    ]) {
+      expect(config).not.toHaveProperty(key)
+    }
     // The gateway is reached over the internet: https only, as every other upstream.
     expect(
       transcriptionComponentConfigSchema.safeParse({ onpremGatewayUrl: 'http://gw.example/v1' })
@@ -162,6 +173,13 @@ describe('module registration', () => {
         openaiModel: null
       }).onpremUnavailable
     ).toBeNull()
+  })
+
+  it('names a live error code for every unavailable reason', () => {
+    for (const code of Object.values(TRANSCRIPTION_LIVE_UNAVAILABLE_CODES)) {
+      expect(isTranscriptionLiveErrorCode(code)).toBe(true)
+    }
+    expect(isTranscriptionLiveErrorCode('the gateway said something')).toBe(false)
   })
 
   it('takes secret changes in the admin input and reports them as booleans', () => {

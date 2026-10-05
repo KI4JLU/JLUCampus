@@ -5,7 +5,8 @@
  * signed URLs, the server normalises and chunks it with ffmpeg, analyses the voices with an HTTP
  * diarisation endpoint, transcribes with an OpenAI-compatible `/audio/transcriptions` endpoint and
  * corrects, summarises and reassigns speakers with an OpenAI-compatible chat endpoint. Live
- * transcription runs over WebRTC, either through an on-prem bridge or OpenAI Realtime.
+ * transcription streams the microphone over a WebSocket to the server, which relays it to the
+ * gateway's realtime endpoint or OpenAI Realtime.
  *
  * Everything at the HTTP boundary is camelCase; upstream snake_case is mapped in the server's
  * adapters. Every route lives under `TRANSCRIPTION_API` and derives the user from the session.
@@ -1106,125 +1107,110 @@ export type TranscriptionSpeakerOptimization = z.infer<
 // Live transcription
 // ---------------------------------------------------------------------------
 
-/** `onprem`: WebRTC through the admin's bridge; `openai`: OpenAI Realtime with a short-lived key. */
+/**
+ * `onprem`: the gateway's realtime WebSocket (vLLM's Voxtral behind the HRZ LiteLLM gateway);
+ * `openai`: OpenAI Realtime. Both run through the Campus server (`TRANSCRIPTION_API.realtimeLive`),
+ * which holds the keys; the browser only ever talks to its own API origin.
+ */
 export const TRANSCRIPTION_REALTIME_MODES = ['onprem', 'openai'] as const
 export const transcriptionRealtimeModeSchema = z.enum(TRANSCRIPTION_REALTIME_MODES)
 export type TranscriptionRealtimeMode = z.infer<typeof transcriptionRealtimeModeSchema>
 
 /**
- * An ICE server for the on-prem bridge, as configured: addresses only. TURN credentials are never
- * stored with it; with `realtimeTurnAuth: 'ephemeral'` the server issues short-lived ones for each
- * live session (`TRANSCRIPTION_API.realtimeIceServers`).
+ * The audio each mode takes, as the browser sends it: 16-bit little-endian PCM, mono, at this
+ * rate. vLLM's realtime endpoint wants 16 kHz (as kiChat's bridge resampled to), OpenAI's
+ * transcription sessions `audio/pcm` at 24 kHz.
  */
-export const transcriptionIceServerSchema = z.object({
-  urls: z.array(z.string().trim().min(1).max(500)).min(1).max(5)
-})
-export type TranscriptionIceServer = z.infer<typeof transcriptionIceServerSchema>
+export const TRANSCRIPTION_REALTIME_SAMPLE_RATES: Record<TranscriptionRealtimeMode, number> = {
+  onprem: 16_000,
+  openai: 24_000
+}
 
-/** How the on-prem path authenticates at its TURN servers. */
-export const TRANSCRIPTION_TURN_AUTH = ['none', 'ephemeral'] as const
-export const transcriptionTurnAuthSchema = z.enum(TRANSCRIPTION_TURN_AUTH)
-export type TranscriptionTurnAuth = z.infer<typeof transcriptionTurnAuthSchema>
-
-/** An ICE server for one live session, with the short-lived TURN credentials if any. */
-export const transcriptionSessionIceServerSchema = transcriptionIceServerSchema.extend({
-  username: z.string().optional(),
-  credential: z.string().optional()
-})
-export type TranscriptionSessionIceServer = z.infer<typeof transcriptionSessionIceServerSchema>
+/** The browser sends audio in frames of this length. */
+export const TRANSCRIPTION_LIVE_FRAME_MS = 100
 
 /**
- * `POST TRANSCRIPTION_API.realtimeIceServers`: the on-prem path's ICE servers for one session.
- * TURN credentials expire at `expiresAt`; the answer is never cached.
+ * Bounds of the live WebSocket: one `input_audio_buffer.append` carries at most a second of audio
+ * (`TRANSCRIPTION_LIVE_APPEND_MAX_MS`), one message of the browser at most
+ * `TRANSCRIPTION_LIVE_MESSAGE_MAX_BYTES`; the server closes a socket that sends more.
  */
-export const transcriptionRealtimeIceSchema = z.object({
-  iceServers: z.array(transcriptionSessionIceServerSchema),
-  expiresAt: z.iso.datetime().nullable()
-})
-export type TranscriptionRealtimeIce = z.infer<typeof transcriptionRealtimeIceSchema>
+export const TRANSCRIPTION_LIVE_APPEND_MAX_MS = 1000
+export const TRANSCRIPTION_LIVE_MESSAGE_MAX_BYTES = 96 * 1024
 
 /**
- * Why the on-prem live mode cannot run: the gateway refused the realtime model for its key (it
- * takes the key otherwise), refused the key, refused the session otherwise or is unreachable from
- * the bridge, or the bridge itself is unreachable, refused the server's bridge key or holds as
- * many sessions as it takes.
+ * Why live transcription cannot run with a mode: the gateway refused the realtime model for its
+ * key (it takes the key otherwise), refused the key, refused the session otherwise, or the server
+ * cannot reach it.
  */
-export const TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS = [
+export const TRANSCRIPTION_REALTIME_UNAVAILABLE_REASONS = [
   'modelNotAllowed',
   'gatewayKeyRejected',
   'gatewayRefused',
-  'gatewayUnreachable',
-  'bridgeUnreachable',
-  'bridgeKeyRejected',
-  'bridgeBusy'
+  'gatewayUnreachable'
 ] as const
-export type TranscriptionOnpremUnavailableReason =
-  (typeof TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS)[number]
+export type TranscriptionRealtimeUnavailableReason =
+  (typeof TRANSCRIPTION_REALTIME_UNAVAILABLE_REASONS)[number]
+
+/**
+ * The codes of the server's `error` events on the live WebSocket, which the web app words itself;
+ * the server never passes on what an upstream said. Before the session is ready: the mode is not
+ * set up (`not_set_up`), the server or the user holds as many sessions as allowed (`busy`), or the
+ * gateway refused or is unreachable (`model_not_allowed`, `gateway_key_rejected`,
+ * `gateway_refused`, `gateway_unreachable`). While it runs: the gateway reported an error or
+ * closed its stream (`upstream_error`, `upstream_closed`), no audio came for too long
+ * (`session_idle`), the session reached its maximum length (`session_expired`), the browser sent
+ * something the server does not take (`invalid_event`) or more audio than real time
+ * (`audio_rate_exceeded`).
+ */
+export const TRANSCRIPTION_LIVE_ERROR_CODES = [
+  'not_set_up',
+  'busy',
+  'model_not_allowed',
+  'gateway_key_rejected',
+  'gateway_refused',
+  'gateway_unreachable',
+  'upstream_error',
+  'upstream_closed',
+  'session_idle',
+  'session_expired',
+  'invalid_event',
+  'audio_rate_exceeded'
+] as const
+export type TranscriptionLiveErrorCode = (typeof TRANSCRIPTION_LIVE_ERROR_CODES)[number]
+
+export function isTranscriptionLiveErrorCode(value: string): value is TranscriptionLiveErrorCode {
+  return (TRANSCRIPTION_LIVE_ERROR_CODES as readonly string[]).includes(value)
+}
+
+/** The live error code of an unavailable reason. */
+export const TRANSCRIPTION_LIVE_UNAVAILABLE_CODES: Record<
+  TranscriptionRealtimeUnavailableReason,
+  TranscriptionLiveErrorCode
+> = {
+  modelNotAllowed: 'model_not_allowed',
+  gatewayKeyRejected: 'gateway_key_rejected',
+  gatewayRefused: 'gateway_refused',
+  gatewayUnreachable: 'gateway_unreachable'
+}
 
 /** The default model of the on-prem path: vLLM's Voxtral realtime behind the gateway, as kiChat. */
 export const TRANSCRIPTION_DEFAULT_REALTIME_MODEL = 'voxtral-mini-realtime'
-
-/**
- * The address of a service the server reaches on its own network, such as the realtime bridge
- * next to it (`http://host.docker.internal:8089`): `http:` or `https:` on any host. Browsers never
- * get it.
- */
-export const transcriptionServiceUrlSchema = z
-  .string()
-  .trim()
-  .max(2048)
-  .url()
-  .refine(
-    (value) => {
-      try {
-        return ['http:', 'https:'].includes(new URL(value).protocol)
-      } catch {
-        return false
-      }
-    },
-    { message: 'URL must use http or https' }
-  )
 
 /** `GET TRANSCRIPTION_API.realtimeConfig` (T-59): the modes that are set up. */
 export const transcriptionRealtimeConfigSchema = z.object({
   modes: z.array(transcriptionRealtimeModeSchema),
   /** The admin's default if offered, else the first mode; `null` without modes. */
   defaultMode: transcriptionRealtimeModeSchema.nullable(),
-  iceServers: z.array(transcriptionIceServerSchema),
-  /** The transcription model the OpenAI session asks for in `session.update`. */
-  openaiModel: z.string().nullable(),
   /**
-   * Why the on-prem mode is set up but cannot run right now, as the bridge's probe of the gateway
+   * Why the on-prem mode is set up but cannot run right now, as the server's probe of the gateway
    * found (`modes` leaves it out then); `null` while it works or is not set up.
    */
   onpremUnavailable: z
-    .object({ reason: z.enum(TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS), model: z.string() })
+    .object({ reason: z.enum(TRANSCRIPTION_REALTIME_UNAVAILABLE_REASONS), model: z.string() })
     .nullable()
     .default(null)
 })
 export type TranscriptionRealtimeConfig = z.infer<typeof transcriptionRealtimeConfigSchema>
-
-/** `POST TRANSCRIPTION_API.realtimeOnpremSignaling`: the browser's SDP offer. */
-export const transcriptionSignalingRequestSchema = z.object({
-  sdp: z.string().min(1).max(100_000)
-})
-export type TranscriptionSignalingRequest = z.infer<typeof transcriptionSignalingRequestSchema>
-
-/** The bridge's SDP answer. */
-export const transcriptionSignalingResponseSchema = z.object({ sdp: z.string() })
-export type TranscriptionSignalingResponse = z.infer<typeof transcriptionSignalingResponseSchema>
-
-/**
- * `POST TRANSCRIPTION_API.realtimeSession`: an ephemeral OpenAI key. The browser sends its SDP
- * offer with it to `callsUrl`; the admin's long-lived key never leaves the server.
- */
-export const transcriptionRealtimeSessionSchema = z.object({
-  value: z.string().min(1),
-  expiresAt: z.iso.datetime().nullable(),
-  callsUrl: z.url(),
-  model: z.string()
-})
-export type TranscriptionRealtimeSession = z.infer<typeof transcriptionRealtimeSessionSchema>
 
 // ---------------------------------------------------------------------------
 // Admin configuration
@@ -1319,6 +1305,9 @@ export function transcriptionUrls(value: string | null | undefined): string[] {
 /**
  * The module's settings. Every upstream is optional, so a stored config of an older release
  * parses; what is missing turns the matching capability off (`transcriptionCapabilitiesSchema`).
+ * Keys this schema no longer knows are dropped when it parses, such as the realtime bridge and ICE
+ * servers of the WebRTC releases (`onpremSignalingUrl`, `realtimeIceServers`, `realtimeTurnAuth`,
+ * `realtimeTurnCredentialSeconds`).
  */
 export const transcriptionComponentConfigSchema = z.object({
   /**
@@ -1443,14 +1432,8 @@ export const transcriptionComponentConfigSchema = z.object({
     .default([]),
   defaultRealtimeMode: transcriptionRealtimeModeSchema.nullable().default(null),
   /**
-   * The on-prem realtime bridge (`infra/realtime-bridge`) as this server reaches it, such as
-   * `http://localhost:8089`; its signaling endpoint is `POST /realtime` below it (a URL ending in
-   * `/realtime` is taken as that endpoint). Only the server talks to it.
-   */
-  onpremSignalingUrl: transcriptionServiceUrlSchema.nullable().default(null),
-  /**
-   * The gateway the bridge streams to, up to `/v1` (`wss://…/v1/realtime`); `null`: the speech
-   * endpoint (its first worker). The server hands it with the speech key to the bridge per session.
+   * The gateway of the on-prem live mode, up to `/v1`: the server opens `wss://…/v1/realtime` there
+   * with the speech key; `null`: the speech endpoint (its first worker).
    */
   onpremGatewayUrl: httpsUrlSchema.nullable().default(null),
   /** The gateway's realtime model for the on-prem path. */
@@ -1460,17 +1443,9 @@ export const transcriptionComponentConfigSchema = z.object({
     .min(1)
     .max(200)
     .default(TRANSCRIPTION_DEFAULT_REALTIME_MODEL),
-  realtimeIceServers: z.array(transcriptionIceServerSchema).max(5).default([]),
   /**
-   * `ephemeral`: the `turn:`/`turns:` servers get credentials made for each session with the
-   * shared secret `TRANSCRIPTION_TURN_SECRET` (TURN REST API, coturn's `use-auth-secret`).
-   */
-  realtimeTurnAuth: transcriptionTurnAuthSchema.default('none'),
-  /** How long session TURN credentials last. */
-  realtimeTurnCredentialSeconds: z.number().int().min(60).max(86_400).default(3600),
-  /**
-   * OpenAI's API up to `/v1`: the server asks `/realtime/client_secrets` for ephemeral keys, the
-   * browser connects to `/realtime/calls`.
+   * OpenAI's API up to `/v1`: the server opens its realtime WebSocket below it
+   * (`wss://…/v1/realtime?intent=transcription`) with the admin's key.
    */
   openaiRealtimeUrl: httpsUrlSchema.default('https://api.openai.com/v1'),
   openaiRealtimeModel: z.string().trim().min(1).max(200).default('gpt-realtime-whisper')
@@ -1570,8 +1545,6 @@ export const transcriptionConnectionTestRequestSchema = z.object({
   model: z.string().trim().min(1).max(200).optional(),
   /** `llm` only: `llmDisableThinking` as set in the form; left out uses the saved one. */
   disableThinking: z.boolean().optional(),
-  /** `realtimeOnprem` only: the bridge (`onpremSignalingUrl`) as typed in the form. */
-  bridgeUrl: transcriptionServiceUrlSchema.optional(),
   /** `realtimeOnprem` only: `onpremGatewayUrl` as typed; `null` uses the speech endpoint. */
   gatewayUrl: httpsUrlSchema.nullable().optional()
 })
@@ -1584,17 +1557,14 @@ export const TRANSCRIPTION_CONNECTION_ANSWERS = [
   'transcription',
   'diarization',
   'chat',
-  'sdpAnswer',
-  'clientSecret',
   'storedContent'
 ] as const
 
 /**
  * What the server found itself, for the web to say in the admin's language: the number of models
  * listed, a chosen model the endpoint does not list, an upstream not set up, a reachable bucket,
- * and what an operational check did (a test clip transcribed or diarised, a chat answer, an SDP
- * answer, an ephemeral key issued and withheld, a stored object read back and deleted) or found
- * wrong with the answer.
+ * and what an operational check did (a test clip transcribed or diarised, a chat answer, a realtime
+ * session the gateway took, a stored object read back and deleted) or found wrong with the answer.
  */
 export const transcriptionConnectionFindingSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('models'), count: z.number().int().min(0) }),
@@ -1606,15 +1576,12 @@ export const transcriptionConnectionFindingSchema = z.discriminatedUnion('kind',
   z.object({ kind: z.literal('transcribed'), model: z.string() }),
   z.object({ kind: z.literal('diarized'), turns: z.number().int().min(0) }),
   z.object({ kind: z.literal('chatAnswered'), model: z.string() }),
-  z.object({ kind: z.literal('sdpAnswered') }),
-  z.object({ kind: z.literal('bridgeReachable') }),
   z.object({ kind: z.literal('realtimeModelAccepted'), model: z.string() }),
   z.object({
     kind: z.literal('realtimeUnavailable'),
-    reason: z.enum(TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS),
+    reason: z.enum(TRANSCRIPTION_REALTIME_UNAVAILABLE_REASONS),
     model: z.string()
   }),
-  z.object({ kind: z.literal('keyIssued'), model: z.string() }),
   z.object({ kind: z.literal('signedRoundTrip'), bucket: z.string() }),
   z.object({ kind: z.literal('serverRoundTrip'), bucket: z.string() }),
   z.object({ kind: z.literal('signedUrlsUnreachable') }),
@@ -1705,12 +1672,15 @@ export const TRANSCRIPTION_API = {
   speakerOptimization: `${MODULE}/speaker-optimization`,
   /** GET: `transcriptionRealtimeConfigSchema`. */
   realtimeConfig: `${MODULE}/realtime/config`,
-  /** POST `transcriptionSignalingRequestSchema` → `transcriptionSignalingResponseSchema`. */
-  realtimeOnpremSignaling: `${MODULE}/realtime/onprem/signaling`,
-  /** POST → `transcriptionRealtimeSessionSchema`. */
-  realtimeSession: `${MODULE}/realtime/session`,
-  /** POST → `transcriptionRealtimeIceSchema`: the on-prem ICE servers for one session. */
-  realtimeIceServers: `${MODULE}/realtime/onprem/ice-servers`,
+  /**
+   * WebSocket (`?mode=onprem|openai`): one live session. The browser sends
+   * `input_audio_buffer.append` (base64 PCM16 at the mode's `TRANSCRIPTION_REALTIME_SAMPLE_RATES`)
+   * and `input_audio_buffer.commit` (`keep_open` to go on with a new item), and gets OpenAI realtime
+   * transcription events (`session.created` once the gateway took the session,
+   * `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.delta`,
+   * `…completed`, `…failed`, `error` with a `TRANSCRIPTION_LIVE_ERROR_CODES` code).
+   */
+  realtimeLive: `${MODULE}/live`,
   /** Admin only. POST `transcriptionModelsRequestSchema` → `transcriptionModelListSchema`. */
   adminModels: `${ADMIN}/models`,
   /** Admin only. POST `transcriptionConnectionTestRequestSchema` → `transcriptionConnectionTestSchema`. */

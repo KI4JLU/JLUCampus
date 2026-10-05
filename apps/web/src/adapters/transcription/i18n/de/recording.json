@@ -57,17 +57,23 @@
     "modelNotAllowed": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway gibt das Modell {{model}} für seinen API-Schlüssel nicht frei. Sobald die Freigabe da ist, funktioniert sie ohne weitere Einrichtung.",
     "gatewayKeyRejected": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt den API-Schlüssel ab.",
     "gatewayRefused": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
-    "gatewayUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge erreicht das Gateway nicht.",
-    "bridgeUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge antwortet nicht.",
-    "bridgeKeyRejected": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge lehnt den Server ab.",
-    "bridgeBusy": "Die lokale Live-Transkription ist gerade ausgelastet: Die Realtime-Bridge nimmt keine weiteren Sitzungen an. Bitte gleich noch einmal versuchen."
+    "gatewayUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Der Server erreicht das Gateway nicht."
   },
   "liveTranscript": "Live-Transkript",
   "liveServiceError": "Fehler der Live-Transkription: {{message}}",
-  "liveBridgeErrors": {
+  "liveErrors": {
+    "not_set_up": "Dieser Live-Modus ist nicht eingerichtet.",
+    "busy": "Die Live-Transkription ist gerade ausgelastet: Der Server nimmt keine weiteren Sitzungen an. Bitte gleich noch einmal versuchen.",
+    "model_not_allowed": "Die Live-Transkription ist gerade nicht verfügbar: Das Gateway gibt das Live-Modell für seinen API-Schlüssel nicht frei.",
+    "gateway_key_rejected": "Die Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt den API-Schlüssel ab.",
+    "gateway_refused": "Die Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt die Live-Sitzung ab.",
+    "gateway_unreachable": "Die Live-Transkription ist gerade nicht verfügbar: Der Server erreicht das Gateway nicht.",
+    "upstream_error": "Das Gateway hat bei der Live-Transkription einen Fehler gemeldet.",
+    "upstream_closed": "Das Gateway hat die Live-Sitzung beendet.",
     "session_idle": "Die Live-Transkription wurde beendet, weil zu lange kein Ton ankam.",
     "session_expired": "Die Live-Transkription hat ihre Höchstdauer erreicht und wurde beendet.",
-    "upstream_error": "Das Gateway hat bei der Live-Transkription einen Fehler gemeldet."
+    "invalid_event": "Der Server hat eine Nachricht der Live-Transkription abgelehnt.",
+    "audio_rate_exceeded": "Es kam mehr Ton an, als in Echtzeit läuft; die Live-Transkription wurde beendet."
   },
   "appearance": "Darstellung",
   "fontSizeValue": "{{size}}px",
@@ -77,9 +83,7 @@
     "connectionFailed": "Audio connection failed.",
     "connectionClosed": "Audio connection closed.",
     "connectionTimeout": "Audio connection not established within 15s.",
-    "sessionFailed": "Failed to create realtime session.",
-    "bridgeError": "Realtime bridge error.",
-    "openaiError": "OpenAI Realtime API Error: {{detail}}",
+    "audioFailed": "Die Audioverarbeitung konnte nicht starten.",
     "aborted": "Audio connection closed."
   },
   "widgets": {
@@ -256,10 +260,10 @@
     },
     "realtimeModes": {
       "label": "Angebotene Modi",
-      "hint": "Lokal braucht die Realtime-Bridge und ein Gateway (ohne eigenes: die Spracherkennung), OpenAI den API-Schlüssel für OpenAI Realtime."
+      "hint": "Lokal braucht ein Gateway (ohne eigenes: die Spracherkennung), OpenAI den API-Schlüssel für OpenAI Realtime. Beide laufen über diesen Server."
     },
     "modes": {
-      "onprem": "Lokal (Bridge)",
+      "onprem": "Lokal (Gateway)",
       "openai": "OpenAI Realtime"
     },
     "defaultRealtimeMode": {
@@ -267,35 +271,17 @@
       "hint": "Ohne Auswahl der erste angebotene.",
       "auto": "Erster angebotener Modus"
     },
-    "onpremSignalingUrl": {
-      "label": "Adresse der Realtime-Bridge",
-      "hint": "Die Bridge aus infra/realtime-bridge, wie dieser Server sie erreicht, etwa http://localhost:8089 oder http://host.docker.internal:8089. Der Server leitet das SDP-Angebot des Browsers an POST /realtime weiter; Browser erreichen die Bridge nur über WebRTC."
-    },
     "onpremGatewayUrl": {
       "label": "Gateway der Live-Transkription",
-      "hint": "Bis /v1; die Bridge streamt an dessen /v1/realtime. Leer: die Adresse der Spracherkennung. Der Server gibt der Bridge für jede Sitzung den API-Schlüssel der Spracherkennung mit, Browser bekommen ihn nie."
+      "hint": "Bis /v1; der Server öffnet dort /v1/realtime als WebSocket, mit dem API-Schlüssel der Spracherkennung. Leer: die Adresse der Spracherkennung. Browser bekommen den Schlüssel nie."
     },
     "onpremRealtimeModel": {
       "label": "Live-Modell des Gateways",
       "hint": "Das Realtime-Modell des Gateways, wie in kiChat voxtral-mini-realtime. Der API-Schlüssel muss es nutzen dürfen."
     },
-    "iceServers": {
-      "label": "ICE-Server",
-      "hint": "Je Zeile ein Server, mehrere Adressen durch Leerzeichen getrennt, etwa turn:turn.uni-giessen.de:3478. Höchstens 5, nur für den lokalen Modus. Zugangsdaten nicht hier: siehe TURN-Anmeldung."
-    },
-    "realtimeTurnAuth": {
-      "label": "TURN-Anmeldung",
-      "hint": "Kurzlebig: Für jede Sitzung erzeugt der Server Zugangsdaten für die turn:-Server aus dem gemeinsamen Geheimnis TRANSCRIPTION_TURN_SECRET (coturn use-auth-secret). Das Geheimnis verlässt den Server nie; Browser erhalten Zugangsdaten, die ablaufen.",
-      "none": "Keine",
-      "ephemeral": "Kurzlebige Zugangsdaten"
-    },
-    "realtimeTurnCredentialSeconds": {
-      "label": "Gültigkeit der TURN-Zugangsdaten (Sekunden)",
-      "hint": "So lange gelten die TURN-Zugangsdaten einer Sitzung, 60 bis 86.400 Sekunden."
-    },
     "openaiRealtimeUrl": {
       "label": "Adresse der OpenAI-API",
-      "hint": "Bis /v1. Der Server holt dort kurzlebige Schlüssel; Browser senden ihr SDP-Angebot an /realtime/calls."
+      "hint": "Bis /v1. Der Server öffnet dort /v1/realtime als WebSocket, mit dem API-Schlüssel für OpenAI Realtime; Browser bekommen ihn nie."
     },
     "openaiRealtimeModel": {
       "label": "Transkriptionsmodell von OpenAI",
@@ -320,19 +306,13 @@
         "transcribed": "Ein Testclip wurde mit {{model}} transkribiert",
         "diarized": "Ein Testclip wurde auf Sprecher untersucht ({{turns}} Abschnitte)",
         "chatAnswered": "{{model}} hat eine Testfrage beantwortet",
-        "sdpAnswered": "Die Bridge hat ein Testangebot mit SDP beantwortet",
-        "bridgeReachable": "Die Realtime-Bridge antwortet",
         "realtimeModelAccepted": "Das Gateway nimmt den Schlüssel und das Live-Modell {{model}} an",
         "realtimeUnavailable": {
           "modelNotAllowed": "Das Gateway gibt das Modell {{model}} für diesen API-Schlüssel nicht frei. Der Schlüssel funktioniert sonst; die Freigabe des Modells muss beim Betreiber des Gateways beantragt werden.",
           "gatewayKeyRejected": "Das Gateway lehnt den API-Schlüssel ab.",
           "gatewayRefused": "Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
-          "gatewayUnreachable": "Die Realtime-Bridge erreicht das Gateway nicht.",
-          "bridgeUnreachable": "Die Realtime-Bridge ist nicht erreichbar.",
-          "bridgeKeyRejected": "Die Realtime-Bridge lehnt den Server ab: TRANSCRIPTION_REALTIME_BRIDGE_KEY muss ihrem BRIDGE_API_KEY gleichen.",
-          "bridgeBusy": "Die Realtime-Bridge ist ausgelastet: Sie hält schon so viele Sitzungen, wie MAX_SESSIONS erlaubt."
+          "gatewayUnreachable": "Der Server erreicht das Gateway nicht."
         },
-        "keyIssued": "OpenAI hat einen kurzlebigen Schlüssel für {{model}} ausgegeben (nicht angezeigt)",
         "signedRoundTrip": "Eine Testdatei wurde über signierte URLs in Bucket {{bucket}} hochgeladen, zurückgelesen und gelöscht",
         "serverRoundTrip": "Eine Testdatei wurde vom Server in Bucket {{bucket}} geschrieben, zurückgelesen und gelöscht",
         "signedUrlsUnreachable": "Dieser Server erreicht die Adresse der signierten URLs nicht; Browser erreichen sie vielleicht trotzdem",
@@ -340,8 +320,6 @@
           "transcription": "Die Antwort war keine Transkription.",
           "diarization": "Die Antwort enthielt keine Sprecherabschnitte.",
           "chat": "Die Antwort war keine Chat-Antwort.",
-          "sdpAnswer": "Die Antwort enthielt keine SDP-Antwort.",
-          "clientSecret": "Die Antwort enthielt keinen kurzlebigen Schlüssel.",
           "storedContent": "Die zurückgelesene Datei weicht von der gespeicherten ab."
         }
       }
@@ -350,7 +328,7 @@
       "asr": "Spracherkennung testen",
       "diarization": "Sprechererkennung testen",
       "llm": "KI-Endpunkt testen",
-      "realtimeOnprem": "Bridge testen",
+      "realtimeOnprem": "Gateway testen",
       "realtimeOpenai": "OpenAI Realtime testen",
       "storage": "Speicher testen"
     }

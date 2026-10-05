@@ -13,9 +13,8 @@ import {
 } from '@justcampus/shared'
 import { z } from 'zod'
 
-import { env } from '../../../env.js'
 import type { TranscriptionRuntime } from '../config.js'
-import { asrBaseUrls, openaiRealtimeEndpoints } from '../config.js'
+import { asrBaseUrls } from '../config.js'
 import {
   bearer,
   listModels,
@@ -27,16 +26,8 @@ import {
 } from '../http.js'
 import { parseVerboseJson, transcriptionForm } from '../jobs/asr.js'
 import { diarizationForm, parseDiarization } from '../jobs/diarization.js'
-import {
-  bridgeEndpoints,
-  OnpremUnavailable,
-  onpremSignaling,
-  onpremTarget,
-  probeOnprem
-} from '../realtime/bridge.js'
-import { probeOffer } from '../realtime/sdp.js'
+import { probeGateway, realtimeTarget } from '../realtime/gateway.js'
 import { completionBody, withoutThinking } from '../summaries/chat.js'
-import { clientSecretRequest, parseClientSecret } from '../realtime/upstream.js'
 import type { TranscriptionStorage } from '../storage.js'
 
 /**
@@ -404,26 +395,24 @@ export interface ConnectionContext {
     Partial<Pick<TranscriptionRuntime, 'componentId'>>
   storage: TestStorage | null
   signal?: AbortSignal
-  /** The realtime bridge's key; left out: `TRANSCRIPTION_REALTIME_BRIDGE_KEY`. */
-  bridgeKey?: string
 }
 
 /**
  * Checks one upstream with the typed values, else the saved ones, by doing what the module does
- * with it: a second of audio recognised or diarised, a chat answer, the bridge running, the
- * gateway taking key and realtime model (else why not: `realtimeUnavailable`) and a usable SDP
- * answer to a browser-like offer, an unexpired ephemeral key from OpenAI (withheld), a stored
- * object read back through signed URLs and deleted. A 2xx answer of another shape fails. Model lists are reported besides, never as proof (section 5). `checks` names each
- * step; nothing in the answer is a key.
+ * with it: a second of audio recognised or diarised, a chat answer, the realtime WebSocket of the
+ * gateway or of OpenAI opened with key and model and its session set up, as a live session does
+ * (else why not: `realtimeUnavailable`, with the handshake's status), a stored object read back
+ * through signed URLs and deleted. A 2xx answer of another shape fails. Model lists are reported
+ * besides, never as proof (section 5). `checks` names each step; nothing in the answer is a key.
  */
 export async function testConnection(
   input: TranscriptionConnectionTestRequest,
-  { runtime, storage, signal, bridgeKey = env.TRANSCRIPTION_REALTIME_BRIDGE_KEY }: ConnectionContext
+  { runtime, storage, signal }: ConnectionContext
 ): Promise<TranscriptionConnectionTest> {
   const { config, secrets } = runtime
   const keyOf = (saved: string | null): string | null =>
     input.apiKey === undefined ? saved : input.apiKey
-  const keys = [input.apiKey, bridgeKey, ...Object.values(secrets)]
+  const keys = [input.apiKey, ...Object.values(secrets)]
   const started = Date.now()
   const checks: Finding[] = []
   const finish = (outcome: Outcome): TranscriptionConnectionTest => ({
@@ -492,72 +481,25 @@ export async function testConnection(
         checks.push({ kind: 'diarized', turns })
         return passed(response.status)
       }
-      case 'realtimeOnprem': {
-        const target = onpremTarget(config, secrets, bridgeKey, {
-          bridgeUrl: input.bridgeUrl ?? input.url,
-          gatewayUrl: input.gatewayUrl,
+      case 'realtimeOnprem':
+      case 'realtimeOpenai': {
+        const mode = input.target === 'realtimeOnprem' ? 'onprem' : 'openai'
+        const target = realtimeTarget(mode, config, secrets, {
+          url: mode === 'onprem' ? input.gatewayUrl : input.url,
           apiKey: input.apiKey,
           model: input.model
         })
         if (!target) return notSetUp()
-        const unavailable = (error: unknown): never => {
-          if (error instanceof OnpremUnavailable) {
-            throw new CheckFailed(
-              { kind: 'realtimeUnavailable', reason: error.reason, model: target.model },
-              error.status
-            )
-          }
-          throw error
-        }
-        // The bridge runs, then the gateway takes key and model, then the bridge answers an offer.
-        try {
-          await answer(bridgeEndpoints(target.bridgeUrl).health, { method: 'GET' }, signal)
-        } catch (error) {
-          if (error instanceof UpstreamError && error.status === null && !signal?.aborted) {
-            unavailable(new OnpremUnavailable('bridgeUnreachable', target.model, null))
-          }
-          throw error
-        }
-        checks.push({ kind: 'bridgeReachable' })
-        await probeOnprem(target, signal, TEST_TIMEOUT_MS).catch(unavailable)
-        checks.push({ kind: 'realtimeModelAccepted', model: target.model })
-        try {
-          await onpremSignaling(target, probeOffer(), signal)
-        } catch (error) {
-          if (error instanceof UpstreamError && error.kind === 'invalidAnswer') {
-            throw new CheckFailed({ kind: 'invalidAnswer', expected: 'sdpAnswer' }, 200)
-          }
-          unavailable(error)
-        }
-        checks.push({ kind: 'sdpAnswered' })
-        return passed(200)
-      }
-      case 'realtimeOpenai': {
-        const apiKey = keyOf(secrets.openaiRealtimeApiKey)
-        if (!apiKey) return notSetUp()
-        const base = input.url ?? config.openaiRealtimeUrl
-        const model = input.model ?? config.openaiRealtimeModel
-        const { clientSecretsUrl } = openaiRealtimeEndpoints({ ...config, openaiRealtimeUrl: base })
-        const response = await answer(
-          clientSecretsUrl,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...bearer(apiKey) },
-            body: JSON.stringify(clientSecretRequest(model))
-          },
-          signal
-        )
-        try {
-          // The ephemeral key issued for the test is checked, not passed on.
-          parseClientSecret(await response.json())
-        } catch {
+        // What a live session does first: the WebSocket with key and model, the session set up.
+        const result = await probeGateway(target, signal, { timeoutMs: TEST_TIMEOUT_MS })
+        if (!result.ok) {
           throw new CheckFailed(
-            { kind: 'invalidAnswer', expected: 'clientSecret' },
-            response.status
+            { kind: 'realtimeUnavailable', reason: result.reason, model: target.model },
+            result.status
           )
         }
-        checks.push({ kind: 'keyIssued', model })
-        return passed(response.status)
+        checks.push({ kind: 'realtimeModelAccepted', model: target.model })
+        return passed(101)
       }
       case 'storage': {
         if (!storage) return notSetUp()

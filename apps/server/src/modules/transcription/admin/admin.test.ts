@@ -254,7 +254,7 @@ describe('connection tests', () => {
       llmBaseUrl: `${mock.origin}/llm/v1`,
       llmModels: [{ id: 'mock-chat', label: 'Mock Chat' }],
       defaultSummaryModel: 'mock-chat',
-      onpremSignalingUrl: `${mock.origin}/realtime/bridge`,
+      onpremGatewayUrl: `${mock.origin}/realtime/v1`,
       onpremRealtimeModel: 'voxtral-mini-realtime',
       openaiRealtimeUrl: `${mock.origin}/realtime/openai/v1`,
       openaiRealtimeModel: 'gpt-realtime-whisper',
@@ -401,24 +401,13 @@ describe('connection tests', () => {
     expect(
       await testConnection({ target: 'diarization', url: 'https://diarize.example/d' }, context())
     ).toMatchObject(invalid('diarization'))
-    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject(
-      invalid('sdpAnswer')
-    )
-    expect(await testConnection({ target: 'realtimeOpenai' }, context())).toMatchObject(
-      invalid('clientSecret')
-    )
   })
 
   it('rejects 2xx answers that parse but are no result of the operation', async () => {
     // The review's counterexamples: each answered 200 and passed before.
     const answers: Record<string, () => Response> = {
       'audio/transcriptions': () => Response.json({ error: 'operation failed' }),
-      'chat/completions': () => Response.json({ choices: [{ message: {} }] }),
-      '/health': () => new Response('ok'),
-      '/probe': () => Response.json({ ok: true }),
-      '/bridge/realtime': () =>
-        new Response('v=0\r\n', { headers: { 'Content-Type': 'application/sdp' } }),
-      client_secrets: () => Response.json({ value: 'expired-key', expires_at: 1 })
+      'chat/completions': () => Response.json({ choices: [{ message: {} }] })
     }
     const fetchMock = vi.fn(async (url: string | URL) => {
       const path = String(url)
@@ -438,12 +427,6 @@ describe('connection tests', () => {
     expect(
       await testConnection({ target: 'llm', model: 'jlu/whisper-1' }, context())
     ).toMatchObject(invalid('chat'))
-    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject(
-      invalid('sdpAnswer')
-    )
-    const openai = await testConnection({ target: 'realtimeOpenai' }, context())
-    expect(openai).toMatchObject(invalid('clientSecret'))
-    expect(JSON.stringify(openai)).not.toMatch(/expired-key|sk-openai/)
 
     // Empty or thinking-only chat content is no answer either; unrelated JSON no transcription.
     answers['chat/completions'] = () =>
@@ -465,155 +448,80 @@ describe('connection tests', () => {
     })
   })
 
-  it('offers the bridge what a browser offers and checks its answer against it', async () => {
-    const fetchMock = vi.fn(async () =>
-      Response.json({
-        sdp: 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=ice-ufrag:abcd\r\na=ice-pwd:abcdefghijklmnopqrstuvwx\r\na=fingerprint:sha-256 00:11\r\n'
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    // One media section for the offer's audio and data channel.
-    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
-      ok: false,
-      finding: { kind: 'invalidAnswer', expected: 'sdpAnswer' }
-    })
-    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>
-    expect(calls.map(([url]) => String(url))).toEqual([
-      `${mock.origin}/realtime/bridge/health`,
-      `${mock.origin}/realtime/bridge/probe`,
-      `${mock.origin}/realtime/bridge/realtime`
-    ])
-    const init = calls[2]![1]
-    const headers = new Headers(init.headers)
-    // The bridge protocol: the offer as SDP, the gateway per request in headers.
-    expect(headers.get('content-type')).toBe('application/sdp')
-    expect(headers.get('x-gateway-base')).toBe(`${mock.origin}/asr`)
-    expect(headers.get('x-gateway-key')).toBe('sk-speech-secret')
-    expect(headers.get('x-model')).toBe('voxtral-mini-realtime')
-    const sdp = String(init.body)
-    for (const line of [
-      /^m=audio 9 UDP\/TLS\/RTP\/SAVPF 111$/m,
-      /^m=application 9 UDP\/DTLS\/SCTP webrtc-datachannel$/m,
-      /^a=ice-ufrag:/m,
-      /^a=ice-pwd:/m,
-      /^a=fingerprint:sha-256 /m,
-      /^a=setup:actpass$/m
-    ]) {
-      expect(sdp).toMatch(line)
-    }
-  })
-
-  it('fails a bridge whose answer has every transport attribute but no usable value', async () => {
-    const section = (media: string, mid: number): string[] => [
-      media,
-      'c=IN IP4 0.0.0.0',
-      `a=mid:${mid}`,
-      'a=ice-ufrag:',
-      'a=ice-pwd:',
-      'a=fingerprint:',
-      'a=setup:passive'
-    ]
-    const sdp = [
-      'v=0',
-      'o=- 1 1 IN IP4 127.0.0.1',
-      's=-',
-      't=0 0',
-      ...section('m=audio 9 UDP/TLS/RTP/SAVPF 111', 0),
-      ...section('m=application 9 UDP/DTLS/SCTP webrtc-datachannel', 1),
-      ''
-    ].join('\r\n')
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => Response.json({ sdp }))
-    )
-    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
-      ok: false,
-      status: 200,
-      finding: { kind: 'invalidAnswer', expected: 'sdpAnswer' }
-    })
-  })
-
-  it('tests the bridge with an offer and OpenAI with a key request, never echoing keys', async () => {
+  it('opens the realtime WebSocket of either mode with key and model, never echoing keys', async () => {
     const onprem = await testConnection({ target: 'realtimeOnprem' }, context())
     expect(onprem).toMatchObject({
       ok: true,
-      finding: { kind: 'sdpAnswered' },
-      checks: [
-        { kind: 'bridgeReachable' },
-        { kind: 'realtimeModelAccepted', model: 'voxtral-mini-realtime' },
-        { kind: 'sdpAnswered' }
-      ]
+      status: 101,
+      finding: { kind: 'realtimeModelAccepted', model: 'voxtral-mini-realtime' },
+      checks: [{ kind: 'realtimeModelAccepted', model: 'voxtral-mini-realtime' }],
+      message: null
     })
     expect(JSON.stringify(onprem)).not.toContain('sk-speech-secret')
     const openai = await testConnection({ target: 'realtimeOpenai' }, context())
     expect(openai).toMatchObject({
       ok: true,
-      status: 200,
-      finding: { kind: 'keyIssued', model: 'gpt-realtime-whisper' },
-      message: null
+      finding: { kind: 'realtimeModelAccepted', model: 'gpt-realtime-whisper' }
     })
-    expect(JSON.stringify(openai)).not.toMatch(/ek_mock|sk-openai/)
+    expect(JSON.stringify(openai)).not.toContain('sk-openai')
     const typedKeyOnly = await testConnection({ target: 'realtimeOpenai', apiKey: null }, context())
     expect(typedKeyOnly).toMatchObject({ ok: false, finding: { kind: 'notSetUp' } })
   })
 
-  it('says precisely why the on-prem path cannot run', async () => {
-    // The mock gateway refuses `denied` models with 403, as the HRZ gateway refuses a realtime
-    // model the key may not use; its model list works and lacks the model.
+  it('says precisely why a live mode cannot run', async () => {
+    // The mock gateway refuses `denied` models with 403 at the handshake, as the HRZ gateway
+    // refuses a realtime model the key may not use; its model list works and lacks the model.
     const denied = await testConnection(
       { target: 'realtimeOnprem', model: 'voxtral-denied' },
       context()
     )
     expect(denied).toMatchObject({
       ok: false,
-      status: 502,
+      status: 403,
       finding: { kind: 'realtimeUnavailable', reason: 'modelNotAllowed', model: 'voxtral-denied' },
-      checks: [{ kind: 'bridgeReachable' }, { kind: 'realtimeUnavailable' }]
+      checks: [{ kind: 'realtimeUnavailable' }]
     })
     expect(JSON.stringify(denied)).not.toContain('sk-speech-secret')
 
-    // The same refusal while the model list refuses the key too: the key is wrong.
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string | URL) => {
-        const path = String(url)
-        if (path.endsWith('/health')) return new Response('ok')
-        if (path.endsWith('/models')) return new Response('Unauthorized', { status: 401 })
-        return Response.json(
-          { error: 'upstream_rejected', message: 'refused', upstream_status: 403 },
-          { status: 502 }
-        )
+    // A key the gateway refuses at the handshake and at the model list.
+    vi.stubEnv('TRANSCRIPTION_MOCK_REALTIME_KEY', 'the-right-key')
+    try {
+      expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
+        ok: false,
+        status: 401,
+        finding: { kind: 'realtimeUnavailable', reason: 'gatewayKeyRejected' }
       })
-    )
-    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
-      ok: false,
-      finding: { kind: 'realtimeUnavailable', reason: 'gatewayKeyRejected' }
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string | URL) =>
-        String(url).endsWith('/health')
-          ? new Response('ok')
-          : Response.json({ error: 'unauthorized', message: 'wrong key' }, { status: 401 })
-      )
-    )
-    expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
-      finding: { kind: 'realtimeUnavailable', reason: 'bridgeKeyRejected' }
-    })
-    vi.unstubAllGlobals()
+      expect(
+        await testConnection({ target: 'realtimeOnprem', apiKey: 'the-right-key' }, context())
+      ).toMatchObject({ ok: true })
+    } finally {
+      vi.unstubAllEnvs()
+    }
 
+    // A session refused after the handshake, and a gateway nobody answers at.
     expect(
-      await testConnection({ target: 'realtimeOnprem', bridgeUrl: 'http://127.0.0.1:9' }, context())
+      await testConnection({ target: 'realtimeOnprem', model: 'mock-realtime-refused' }, context())
     ).toMatchObject({
       ok: false,
-      finding: { kind: 'realtimeUnavailable', reason: 'bridgeUnreachable' }
+      status: null,
+      finding: { kind: 'realtimeUnavailable', reason: 'gatewayRefused' }
     })
-    // Without a bridge, or without a gateway (no speech endpoint either), nothing to test.
     expect(
-      await testConnection({ target: 'realtimeOnprem' }, context({ onpremSignalingUrl: null }))
-    ).toMatchObject({ finding: { kind: 'notSetUp' } })
+      await testConnection(
+        { target: 'realtimeOnprem', gatewayUrl: 'http://127.0.0.1:9/v1' },
+        context()
+      )
+    ).toMatchObject({
+      ok: false,
+      status: null,
+      finding: { kind: 'realtimeUnavailable', reason: 'gatewayUnreachable' }
+    })
+    // Without a gateway (no speech endpoint either), nothing to test.
     expect(
-      await testConnection({ target: 'realtimeOnprem' }, context({ asrBaseUrl: null }))
+      await testConnection(
+        { target: 'realtimeOnprem' },
+        context({ asrBaseUrl: null, onpremGatewayUrl: null })
+      )
     ).toMatchObject({ finding: { kind: 'notSetUp' } })
   })
 

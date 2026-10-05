@@ -98,15 +98,13 @@ export function onpremGatewayUrl(
   return config.onpremGatewayUrl ?? (config.asrBaseUrl?.split(',')[0]?.trim() || null)
 }
 
-/** The live modes that are set up: on-prem needs its bridge and a gateway, OpenAI its key. */
+/** The live modes that are set up: on-prem needs a gateway, OpenAI its key. */
 export function realtimeModes(
   config: TranscriptionComponentConfig,
   secrets: TranscriptionSecrets
 ): TranscriptionRealtimeMode[] {
   return config.realtimeModes.filter((mode) =>
-    mode === 'onprem'
-      ? config.onpremSignalingUrl !== null && onpremGatewayUrl(config) !== null
-      : secrets.openaiRealtimeApiKey !== null
+    mode === 'onprem' ? onpremGatewayUrl(config) !== null : secrets.openaiRealtimeApiKey !== null
   )
 }
 
@@ -117,15 +115,6 @@ export function defaultRealtimeMode(
   return config.defaultRealtimeMode && modes.includes(config.defaultRealtimeMode)
     ? config.defaultRealtimeMode
     : (modes[0] ?? null)
-}
-
-/** Where the server asks OpenAI for ephemeral keys, and where browsers send their SDP offer. */
-export function openaiRealtimeEndpoints(config: TranscriptionComponentConfig): {
-  clientSecretsUrl: string
-  callsUrl: string
-} {
-  const base = config.openaiRealtimeUrl.replace(/\/+$/, '')
-  return { clientSecretsUrl: `${base}/realtime/client_secrets`, callsUrl: `${base}/realtime/calls` }
 }
 
 /**

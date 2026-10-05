@@ -65,8 +65,7 @@ const contractRoutes: Array<[method: string, path: string]> = [
   ['POST', TRANSCRIPTION_API.summaryPreview],
   ['POST', TRANSCRIPTION_API.speakerOptimization],
   ['GET', TRANSCRIPTION_API.realtimeConfig],
-  ['POST', TRANSCRIPTION_API.realtimeOnpremSignaling],
-  ['POST', TRANSCRIPTION_API.realtimeSession],
+  ['GET', TRANSCRIPTION_API.realtimeLive],
   ['POST', TRANSCRIPTION_API.adminModels],
   ['POST', TRANSCRIPTION_API.adminTest]
 ]

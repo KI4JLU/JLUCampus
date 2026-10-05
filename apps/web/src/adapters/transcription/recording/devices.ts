@@ -43,7 +43,13 @@ export function keepSelectedDevice(selected: string, choices: readonly Microphon
   return choices.some((choice) => choice.deviceId === selected) ? selected : DEFAULT_DEVICE_ID
 }
 
-/** The `audio` constraint of `getUserMedia` for a selection. */
-export function audioConstraint(deviceId: string): MediaTrackConstraints | true {
-  return deviceId === DEFAULT_DEVICE_ID ? true : { deviceId: { exact: deviceId } }
+/**
+ * The `audio` constraint of `getUserMedia` for a selection: with the browser's echo cancellation,
+ * noise suppression and gain control asked for explicitly, as live transcription hears the room.
+ */
+export function audioConstraint(deviceId: string): MediaTrackConstraints {
+  const processing = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+  return deviceId === DEFAULT_DEVICE_ID
+    ? processing
+    : { ...processing, deviceId: { exact: deviceId } }
 }

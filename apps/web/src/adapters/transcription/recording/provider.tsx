@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { TRANSCRIPTION_LIVE_FONT_SIZE, type TranscriptionRealtimeMode } from '@justcampus/shared'
-import { meQuery } from '@/lib/queries'
 import {
-  createRealtimeSession,
-  fetchRealtimeIceServers,
-  onpremSignaling,
-  useRealtimeConfig
-} from '../api'
-import { isLiveBridgeErrorCode } from '../live/events'
+  isTranscriptionLiveErrorCode,
+  TRANSCRIPTION_LIVE_FONT_SIZE,
+  type TranscriptionRealtimeMode
+} from '@justcampus/shared'
+import { meQuery } from '@/lib/queries'
+import { liveSocketUrl, useRealtimeConfig } from '../api'
+import { startPcmCapture } from '../live/audio'
 import { RealtimeError, RealtimeSession, type RealtimeDependencies } from '../live/session'
 import { useMemoryCell } from '../page-memory'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -33,13 +32,10 @@ const DEFAULT_APPEARANCE: LiveAppearance = {
   maximized: false
 }
 
-/** The browser's WebRTC and the module's realtime endpoints. */
+/** The server's live WebSocket and the browser's audio worklet. */
 const browserRealtime: RealtimeDependencies = {
-  createPeer: (configuration) => new RTCPeerConnection(configuration),
-  onpremSignaling: async (sdp) => (await onpremSignaling({ sdp })).sdp,
-  onpremIceServers: async () => (await fetchRealtimeIceServers()).iceServers,
-  openaiSession: () => createRealtimeSession(),
-  fetch: (input, init) => fetch(input, init)
+  openSocket: (mode) => new WebSocket(liveSocketUrl(mode)),
+  capture: startPcmCapture
 }
 
 /** What runs: the microphone stream, its local recorder and, live, the realtime session. */
@@ -155,11 +151,10 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     (error: unknown): string => {
       if (!(error instanceof RealtimeError))
         return errorText(error) || t('transcription.recording.errors.connectionFailed')
-      // The server's own message where it gave one, as kiChat shows it.
-      if ((error.code === 'sessionFailed' || error.code === 'bridgeError') && error.detail)
-        return error.detail
-      if (error.code === 'openaiError')
-        return t('transcription.recording.errors.openaiError', { detail: error.detail ?? '' })
+      // Why the server did not take the session, in the app's words.
+      if (error.code === 'refused' && error.detail)
+        return t(`transcription.recording.liveErrors.${error.detail}`)
+      if (error.code === 'refused') return t('transcription.recording.errors.connectionFailed')
       return t(`transcription.recording.errors.${error.code}`)
     },
     [t]
@@ -283,8 +278,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
             onText: (chunk) => setText((current) => current + chunk),
             onServiceError: (message) =>
               setServiceError(
-                isLiveBridgeErrorCode(message)
-                  ? t(`transcription.recording.liveBridgeErrors.${message}`)
+                isTranscriptionLiveErrorCode(message)
+                  ? t(`transcription.recording.liveErrors.${message}`)
                   : t('transcription.recording.liveServiceError', { message })
               ),
             onConnectionLost: (code) =>
@@ -294,12 +289,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         )
         sessionRef.current = { kind, stream, recorder: null, realtime, startedAt: Date.now() }
         try {
-          await realtime.start({
-            stream,
-            mode,
-            iceServers: config?.iceServers ?? [],
-            openaiModel: config?.openaiModel ?? null
-          })
+          await realtime.start({ stream, mode })
         } catch (error) {
           releaseStream(stream)
           if (sessionRef.current?.realtime === realtime) sessionRef.current = null
@@ -328,7 +318,6 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     },
     [
       busyRef,
-      config,
       dispatch,
       fail,
       finishRef,

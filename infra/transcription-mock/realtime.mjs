@@ -1,191 +1,275 @@
-import { readBody, sendJson, sendText } from './http.mjs'
-import { answerWithPeer, OfferRefused } from './realtime-peer.mjs'
+import { WebSocketServer } from 'ws'
+
+import { sendJson } from './http.mjs'
 
 /**
- * Live transcription, below `/realtime`: the on-prem realtime bridge (`infra/realtime-bridge`)
- * below `/bridge` with its protocol, and OpenAI Realtime below `/openai/v1`:
- * `POST /realtime/client_secrets` (ephemeral key) and `POST /realtime/calls` (SDP with that key).
+ * Live transcription, below `/realtime`: the gateway's realtime WebSocket as vLLM speaks it behind
+ * the HRZ LiteLLM gateway (`/realtime/v1/realtime?model=…`, gateway address
+ * `http://localhost:9200/realtime/v1`), and OpenAI Realtime's
+ * (`/realtime/openai/v1/realtime?intent=transcription`, API address
+ * `http://localhost:9200/realtime/openai/v1`), each with its model list (`GET …/models`) for the
+ * server's diagnosis of a refusal.
  *
- * The bridge's `POST /realtime` takes the SDP offer as `application/sdp` with the gateway headers
- * the Campus server sends (`X-Gateway-Base`, `X-Model`, `X-Gateway-Key`) and answers with SDP;
- * `POST /probe` checks the same headers, `GET /health` answers `ok`. A model whose id contains
- * `denied` is refused as the gateway refuses a model the key may not use: `502` with
- * `upstream_status: 403`. With `TRANSCRIPTION_MOCK_BRIDGE_KEY` set, the bridge wants it as bearer.
+ * Nothing is recognised. Every `ITEM_SECONDS` of audio the next sentence of a fixed German script
+ * comes word by word as a delta, as both protocols send it:
+ * - vLLM: `session.update {model}` first; decoding starts with `input_audio_buffer.commit
+ *   {final: false}`, then `transcription.delta` per word; `{final: true}` ends the stream with
+ *   `transcription.done` and the whole text.
+ * - OpenAI: a transcription session; every item comes as `input_audio_buffer.committed`, deltas
+ *   and `conversation.item.input_audio_transcription.completed`; a commit ends the current item,
+ *   or answers `input_audio_buffer_commit_empty` without audio since the last.
  *
- * Both modes answer with a real WebRTC peer (`realtime-peer.mjs`, on werift) that receives the
- * audio and sends a deterministic transcript over the `oai-events` data channel, so either live
- * mode can be tried end to end. An offer the peer cannot negotiate is refused with 400, as by the
- * bridge. Only without werift does an offer get a well-formed stub answer derived from it, with
- * which no media or data channel connects. Ephemeral keys are `ek_mock_<n>` and work for
- * `/realtime/calls` only; any other bearer there answers 401.
- *
- * @param {import('node:http').IncomingMessage} request
- * @param {import('node:http').ServerResponse} response
- * @param {string} path the path below `/realtime`, e.g. `/bridge/realtime`
- * @returns {Promise<boolean>} whether the request was handled
+ * Any bearer works, unless `TRANSCRIPTION_MOCK_REALTIME_KEY` is set: then another one gets 401 at
+ * the handshake and at the model list. A model whose id contains `denied` is refused with 403 at
+ * the handshake and missing from the model list, as the HRZ gateway refuses a model the key may
+ * not use; one with `refused` gets an `error` event and a close after `session.update`; one with
+ * `leak` repeats the bearer in an `error` event (the server must not pass it on).
  */
-export async function handle(request, response, path) {
-  if (path.startsWith('/bridge/')) return handleBridge(request, response, path.slice(7))
-  if (request.method !== 'POST') return false
-  if (path === '/openai/v1/realtime/client_secrets') {
-    if (!bearerOf(request)) {
-      sendJson(response, 401, {
-        error: { message: 'Missing bearer token', type: 'invalid_request_error' }
-      })
-      return true
-    }
-    await readBody(request)
-    issued += 1
-    const value = `ek_mock_${issued}`
-    keys.add(value)
-    sendJson(response, 200, {
-      value,
-      expires_at: Math.floor(Date.now() / 1000) + 600,
-      session: { type: 'transcription', object: 'realtime.transcription_session' }
-    })
-    return true
-  }
-  if (path === '/openai/v1/realtime/calls') {
-    if (!keys.has(bearerOf(request) ?? '')) {
-      sendJson(response, 401, {
-        error: { message: 'Invalid ephemeral key', type: 'invalid_request_error' }
-      })
-      return true
-    }
-    const offer = (await readBody(request)).toString('utf8')
-    if (!isSdp(offer)) {
-      sendJson(response, 400, { error: { message: 'Expected an SDP offer' } })
-      return true
-    }
-    const answer = await answerOrRefusal(offer)
-    if (answer.refused) {
-      sendJson(response, 400, { error: { message: answer.refused } })
-      return true
-    }
-    response.setHeader('Location', `/v1/realtime/calls/rtc_mock_${issued}`)
-    sendText(response, 201, answer.sdp, 'application/sdp')
-    return true
-  }
-  return false
+
+/** Seconds of received audio per sentence. */
+export const ITEM_SECONDS = 3
+/** Pause between two deltas. */
+const DELTA_MS = 80
+/** A stream without any message for this long is closed. */
+const IDLE_MS = 120_000
+
+const RATES = { onprem: 16_000, openai: 24_000 }
+
+/** The script, one sentence per item, then from the start again. */
+export const SCRIPT = [
+  'Guten Morgen und willkommen zur Live-Transkription.',
+  'Dies ist ein Test des lokalen Mocks.',
+  'Jede dritte Sekunde Audio ergibt einen Satz.',
+  'Die Wörter kommen einzeln an, der Satz zum Schluss vollständig.',
+  'Beim Beenden wird der letzte Abschnitt abgeschlossen.'
+]
+
+/** The deltas of a sentence: its first word, then each further word with its leading space. */
+export function sentenceDeltas(sentence) {
+  return sentence.split(' ').map((word, index) => (index === 0 ? word : ` ${word}`))
 }
 
-/**
- * The bridge's API (`bridge.py`): errors as `{ error, message, upstream_status? }`.
- *
- * @returns {Promise<boolean>}
- */
-async function handleBridge(request, response, path) {
-  if (request.method === 'GET' && path === '/health') {
-    sendText(response, 200, 'ok')
-    return true
-  }
-  if (request.method !== 'POST' || (path !== '/realtime' && path !== '/probe')) return false
-  const key = process.env.TRANSCRIPTION_MOCK_BRIDGE_KEY
-  if (key && request.headers.authorization !== `Bearer ${key}`) {
-    await readBody(request)
-    sendJson(response, 401, { error: 'unauthorized', message: 'missing or wrong bridge API key' })
-    return true
-  }
-  const base = String(request.headers['x-gateway-base'] ?? '').trim()
-  const model = String(request.headers['x-model'] ?? '').trim()
-  const body = (await readBody(request)).toString('utf8')
-  if (!base || !model) {
-    sendJson(response, 400, {
-      error: 'bad_request',
-      message: 'X-Gateway-Base and X-Model are required'
-    })
-    return true
-  }
-  if (model.includes('denied')) {
-    sendJson(response, 502, {
-      error: 'upstream_rejected',
-      message: 'the gateway refused the realtime connection with status 403',
-      upstream_status: 403,
-      model
-    })
-    return true
-  }
-  if (path === '/probe') {
-    sendJson(response, 200, { ok: true, model })
-    return true
-  }
-  if (!body.startsWith('v=')) {
-    sendJson(response, 400, { error: 'bad_request', message: 'body must be an SDP offer' })
-    return true
-  }
-  const answer = await answerOrRefusal(body)
-  if (answer.refused) sendJson(response, 400, { error: 'bad_offer', message: answer.refused })
-  else sendText(response, 200, answer.sdp, 'application/sdp')
-  return true
+/** The models each mock lists. */
+const MODELS = {
+  onprem: ['voxtral-mini-realtime', 'mock-realtime-refused', 'mock-realtime-leak'],
+  openai: ['gpt-realtime-whisper', 'gpt-4o-transcribe']
 }
 
-/**
- * The peer's answer to an offer, the stub's without werift, or why the offer is refused.
- *
- * @param {string} offer
- * @returns {Promise<{ sdp: string, refused?: undefined } | { refused: string }>}
- */
-async function answerOrRefusal(offer) {
-  try {
-    return { sdp: (await answerWithPeer(offer)) ?? answerSdp(offer) }
-  } catch (error) {
-    if (error instanceof OfferRefused) return { refused: error.message }
-    throw error
-  }
-}
+const sockets = new WebSocketServer({ noServer: true })
 
-let issued = 0
-/** Ephemeral keys handed out by this process. */
-const keys = new Set()
+function modeOf(path) {
+  if (path === '/v1/realtime') return 'onprem'
+  if (path === '/openai/v1/realtime') return 'openai'
+  return null
+}
 
 function bearerOf(request) {
   const match = /^Bearer\s+(.+)$/i.exec(request.headers.authorization ?? '')
   return match ? match[1].trim() : null
 }
 
-function isSdp(text) {
-  return /^v=0\r?\n/.test(text.trimStart())
+function keyAccepted(request) {
+  const key = process.env.TRANSCRIPTION_MOCK_REALTIME_KEY
+  return !key || bearerOf(request) === key
 }
 
 /**
- * An answer to an offer: its media sections in order with their `mid`s, receiving where the offer
- * sends, with fixed ICE credentials and fingerprint.
+ * The model lists, the only HTTP endpoints below `/realtime`.
+ *
+ * @returns {Promise<boolean>} whether the request was handled
  */
-export function answerSdp(offer) {
-  const lines = offer.split(/\r?\n/)
-  const sections = []
-  for (const line of lines) {
-    if (line.startsWith('m=')) sections.push({ media: line, attributes: [] })
-    else if (sections.length > 0) sections.at(-1).attributes.push(line)
+export async function handle(request, response, path) {
+  const mode = path === '/v1/models' ? 'onprem' : path === '/openai/v1/models' ? 'openai' : null
+  if (request.method !== 'GET' || !mode) return false
+  if (!keyAccepted(request)) {
+    sendJson(response, 401, { error: { message: 'Invalid API key', type: 'auth_error' } })
+    return true
   }
-  const mids = sections.map(
-    (section, index) =>
-      section.attributes.find((line) => line.startsWith('a=mid:'))?.slice(6) ?? String(index)
+  sendJson(response, 200, { object: 'list', data: MODELS[mode].map((id) => ({ id })) })
+  return true
+}
+
+/** Refuses an upgrade with an HTTP status, as a gateway does. */
+function refuse(socket, status, text) {
+  socket.end(
+    `HTTP/1.1 ${status} ${text}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n` +
+      JSON.stringify({ error: { message: text } })
   )
-  const answer = [
-    'v=0',
-    'o=mock-bridge 1 1 IN IP4 127.0.0.1',
-    's=-',
-    't=0 0',
-    `a=group:BUNDLE ${mids.join(' ')}`
-  ]
-  sections.forEach((section, index) => {
-    const direction = section.attributes.some(
-      (line) => line === 'a=sendonly' || line === 'a=sendrecv'
-    )
-      ? 'a=recvonly'
-      : 'a=inactive'
-    answer.push(
-      section.media.replace(/^(m=\w+) \d+/, '$1 9'),
-      'c=IN IP4 0.0.0.0',
-      `a=mid:${mids[index]}`,
-      'a=ice-ufrag:mock',
-      'a=ice-pwd:mockmockmockmockmockmock',
-      'a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF',
-      'a=setup:passive',
-      ...section.attributes.filter((line) => /^a=(rtpmap|fmtp|max-message-size):/.test(line)),
-      section.media.startsWith('m=application') ? 'a=sctp-port:5000' : direction
-    )
+}
+
+/**
+ * A WebSocket upgrade below `/realtime`; returns whether it was one of the mock's.
+ *
+ * @param {import('node:http').IncomingMessage} request
+ * @param {import('node:stream').Duplex} socket
+ * @param {Buffer} head
+ * @param {string} path the path below `/realtime`
+ */
+export function upgrade(request, socket, head, path) {
+  const mode = modeOf(path)
+  if (!mode) return false
+  const url = new URL(request.url ?? '/', 'http://mock')
+  const model = url.searchParams.get('model') ?? ''
+  if (!keyAccepted(request)) {
+    refuse(socket, 401, 'Unauthorized')
+    return true
+  }
+  if (model.includes('denied')) {
+    refuse(socket, 403, 'Forbidden')
+    return true
+  }
+  sockets.handleUpgrade(request, socket, head, (ws) => {
+    new MockStream(ws, mode, bearerOf(request) ?? '')
   })
-  return `${answer.join('\r\n')}\r\n`
+  return true
+}
+
+/** One gateway stream: counts its audio and sends the script. */
+class MockStream {
+  constructor(ws, mode, key) {
+    this.ws = ws
+    this.mode = mode
+    this.key = key
+    this.model = null
+    this.audio = 0
+    this.sentence = 0
+    this.item = 0
+    this.decoding = false
+    this.text = ''
+    this.sending = Promise.resolve()
+    this.lastMessage = Date.now()
+    ws.on('message', (data, binary) => {
+      if (!binary) this.receive(data.toString())
+    })
+    ws.on('error', () => ws.terminate())
+    this.timer = setInterval(() => {
+      if (Date.now() - this.lastMessage > IDLE_MS) ws.close(1000)
+    }, 5000)
+    this.timer.unref?.()
+    ws.on('close', () => clearInterval(this.timer))
+    if (mode === 'openai')
+      this.send({ type: 'session.created', session: { type: 'transcription' } })
+  }
+
+  get itemBytes() {
+    return RATES[this.mode] * 2 * ITEM_SECONDS
+  }
+
+  receive(text) {
+    this.lastMessage = Date.now()
+    let event
+    try {
+      event = JSON.parse(text)
+    } catch {
+      return
+    }
+    switch (event?.type) {
+      case 'session.update':
+        this.sessionUpdate(event)
+        return
+      case 'input_audio_buffer.append':
+        this.append(Buffer.from(String(event.audio ?? ''), 'base64').length)
+        return
+      case 'input_audio_buffer.commit':
+        if (this.mode === 'onprem') this.vllmCommit(event.final === true)
+        else this.openaiCommit()
+        return
+      default:
+        return
+    }
+  }
+
+  sessionUpdate(event) {
+    this.model =
+      this.mode === 'onprem' ? event.model : event.session?.audio?.input?.transcription?.model
+    if (typeof this.model !== 'string') this.model = ''
+    if (this.model.includes('refused')) {
+      this.send({ type: 'error', error: { message: 'model not served', code: 'model_not_found' } })
+      this.ws.close(1008, 'model not served')
+      return
+    }
+    if (this.model.includes('leak')) {
+      this.send({
+        type: 'error',
+        error: { message: `invalid credentials: Bearer ${this.key}`, code: this.key }
+      })
+      return
+    }
+    this.send({ type: 'session.updated' })
+  }
+
+  append(bytes) {
+    this.audio += bytes
+    if (this.mode === 'onprem' && !this.decoding) return
+    while (this.audio >= this.itemBytes) {
+      this.audio -= this.itemBytes
+      this.queueSentence()
+    }
+  }
+
+  vllmCommit(final) {
+    if (!final) {
+      this.decoding = true
+      this.append(0)
+      return
+    }
+    if (this.audio > 0) this.queueSentence()
+    this.audio = 0
+    this.sending = this.sending.then(() =>
+      this.send({ type: 'transcription.done', text: this.text })
+    )
+  }
+
+  openaiCommit() {
+    if (this.audio < RATES.openai * 2 * 0.1) {
+      this.send({
+        type: 'error',
+        error: { type: 'invalid_request_error', code: 'input_audio_buffer_commit_empty' }
+      })
+      return
+    }
+    this.audio = 0
+    this.queueSentence()
+  }
+
+  /** The next sentence, after those already on their way. */
+  queueSentence() {
+    const sentence = SCRIPT[this.sentence % SCRIPT.length]
+    this.sentence += 1
+    const itemId = `item_mock_${++this.item}`
+    this.sending = this.sending.then(() => this.sendSentence(itemId, sentence)).catch(() => {})
+  }
+
+  async sendSentence(itemId, sentence) {
+    if (this.mode === 'openai') this.send({ type: 'input_audio_buffer.committed', item_id: itemId })
+    const deltas = sentenceDeltas(sentence)
+    // vLLM streams one text per stream: a further sentence starts with its space.
+    if (this.mode === 'onprem' && this.text) deltas[0] = ` ${deltas[0]}`
+    for (const delta of deltas) {
+      this.send(
+        this.mode === 'onprem'
+          ? { type: 'transcription.delta', delta }
+          : { type: 'conversation.item.input_audio_transcription.delta', item_id: itemId, delta }
+      )
+      await new Promise((resolve) => setTimeout(resolve, DELTA_MS))
+    }
+    if (this.mode === 'onprem') {
+      this.text += deltas.join('')
+      return
+    }
+    this.send({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: itemId,
+      transcript: sentence
+    })
+  }
+
+  send(event) {
+    if (this.ws.readyState === this.ws.OPEN) this.ws.send(JSON.stringify(event))
+  }
+}
+
+/** Closes every stream, e.g. when the mock stops. */
+export function closeStreams() {
+  for (const ws of sockets.clients) ws.terminate()
 }

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchAdminModels, mediaUrlExpiresSoon, SignedUploadError, uploadToSignedUrl } from './api'
+import {
+  fetchAdminModels,
+  liveSocketUrl,
+  mediaUrlExpiresSoon,
+  SignedUploadError,
+  uploadToSignedUrl
+} from './api'
 
 /** A stand-in for `XMLHttpRequest` that finishes as `outcome` says when sent. */
 function stubXhr(outcome: { status?: number; error?: boolean }): {
@@ -101,5 +107,19 @@ describe('fetchAdminModels', () => {
       models: [],
       leftOut: 0
     })
+  })
+})
+
+describe('liveSocketUrl', () => {
+  it('opens the live socket on the API origin, else the page’s, over ws or wss', () => {
+    expect(liveSocketUrl('onprem', '', 'https://campus.example/transcription')).toBe(
+      'wss://campus.example/api/modules/transcription/live?mode=onprem'
+    )
+    expect(liveSocketUrl('openai', 'http://localhost:3000', 'http://localhost:5173/')).toBe(
+      'ws://localhost:3000/api/modules/transcription/live?mode=openai'
+    )
+    expect(liveSocketUrl('onprem', 'https://api.campus.example', 'app://-/index.html')).toBe(
+      'wss://api.campus.example/api/modules/transcription/live?mode=onprem'
+    )
   })
 })

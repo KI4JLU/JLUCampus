@@ -80,7 +80,7 @@ function toFieldErrors(issues: readonly Issue[], type: ComponentType, t: TFuncti
     'config.llmBaseUrl': t('admin.form.errors.url'),
     'config.asrBaseUrl': t('admin.form.errors.url'),
     'config.diarizationUrl': t('admin.form.errors.url'),
-    'config.onpremSignalingUrl': t('admin.form.errors.url'),
+    'config.onpremGatewayUrl': t('admin.form.errors.url'),
     'config.openaiRealtimeUrl': t('admin.form.errors.url'),
     'config.llmModels': t('component.translator.configErrors.models', {
       max: TRANSLATOR_LLM_MODELS_MAX

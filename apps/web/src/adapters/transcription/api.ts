@@ -24,9 +24,6 @@ import {
   transcriptionMediaUrlSchema,
   transcriptionModelListSchema,
   transcriptionRealtimeConfigSchema,
-  transcriptionRealtimeIceSchema,
-  transcriptionRealtimeSessionSchema,
-  transcriptionSignalingResponseSchema,
   transcriptionSpeakerOptimizationSchema,
   transcriptionSummaryPreviewSchema,
   transcriptionSummaryResponseSchema,
@@ -49,10 +46,7 @@ import {
   type TranscriptionModelList,
   type TranscriptionModelsRequest,
   type TranscriptionRealtimeConfig,
-  type TranscriptionRealtimeIce,
-  type TranscriptionRealtimeSession,
-  type TranscriptionSignalingRequest,
-  type TranscriptionSignalingResponse,
+  type TranscriptionRealtimeMode,
   type TranscriptionSpeakerOptimization,
   type TranscriptionSpeakerOptimizationRequest,
   type TranscriptionSummaryPreview,
@@ -67,7 +61,7 @@ import {
   type TranscriptionTranscriptSummary,
   type TranscriptionUploadTarget
 } from '@justcampus/shared'
-import { ApiRequestError, apiFetch } from '@/lib/api'
+import { ApiRequestError, apiBase, apiFetch } from '@/lib/api'
 import { withParsedSegments } from './segments/payload'
 
 /**
@@ -348,36 +342,19 @@ export async function getRealtimeConfig(
   )
 }
 
-/** Sends the SDP offer to the on-prem bridge through the server and returns its answer (T-60). */
-export async function onpremSignaling(
-  input: TranscriptionSignalingRequest,
-  signal?: AbortSignal
-): Promise<TranscriptionSignalingResponse> {
-  return transcriptionSignalingResponseSchema.parse(
-    await apiFetch<unknown>(TRANSCRIPTION_API.realtimeOnpremSignaling, {
-      ...post,
-      json: input,
-      signal
-    })
-  )
-}
-
-/** The on-prem ICE servers for one live session, TURN ones with short-lived credentials (T-60). */
-export async function fetchRealtimeIceServers(
-  signal?: AbortSignal
-): Promise<TranscriptionRealtimeIce> {
-  return transcriptionRealtimeIceSchema.parse(
-    await apiFetch<unknown>(TRANSCRIPTION_API.realtimeIceServers, { ...post, signal })
-  )
-}
-
-/** An ephemeral OpenAI Realtime key (T-59, T-60). */
-export async function createRealtimeSession(
-  signal?: AbortSignal
-): Promise<TranscriptionRealtimeSession> {
-  return transcriptionRealtimeSessionSchema.parse(
-    await apiFetch<unknown>(TRANSCRIPTION_API.realtimeSession, { ...post, signal })
-  )
+/**
+ * The live WebSocket for a mode (T-60): the API origin with `ws:`/`wss:`, the page's own when the
+ * API has none. The browser sends the session cookie with the upgrade.
+ */
+export function liveSocketUrl(
+  mode: TranscriptionRealtimeMode,
+  base: string = apiBase(),
+  page: string = window.location.href
+): string {
+  const url = new URL(`${base}${TRANSCRIPTION_API.realtimeLive}`, page)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  url.searchParams.set('mode', mode)
+  return url.toString()
 }
 
 /** Admin only: the models of a speech or chat endpoint, for the admin form. */
@@ -808,28 +785,6 @@ export function useOptimizeSpeakers(): UseMutationResult<
   return useMutation({
     networkMode: NETWORK_MODE,
     mutationFn: (input: TranscriptionSpeakerOptimizationRequest) => optimizeSpeakers(input)
-  })
-}
-
-export function useOnpremSignaling(): UseMutationResult<
-  TranscriptionSignalingResponse,
-  Error,
-  TranscriptionSignalingRequest
-> {
-  return useMutation({
-    networkMode: NETWORK_MODE,
-    mutationFn: (input: TranscriptionSignalingRequest) => onpremSignaling(input)
-  })
-}
-
-export function useCreateRealtimeSession(): UseMutationResult<
-  TranscriptionRealtimeSession,
-  Error,
-  void
-> {
-  return useMutation({
-    networkMode: NETWORK_MODE,
-    mutationFn: () => createRealtimeSession()
   })
 }
 

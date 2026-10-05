@@ -42,8 +42,9 @@ describe('keepSelectedDevice', () => {
 })
 
 describe('audioConstraint', () => {
-  it('asks for exactly the chosen device, or any for the default', () => {
-    expect(audioConstraint(DEFAULT_DEVICE_ID)).toBe(true)
-    expect(audioConstraint('a')).toEqual({ deviceId: { exact: 'a' } })
+  it('asks for exactly the chosen device, or any for the default, with the browser’s processing', () => {
+    const processing = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    expect(audioConstraint(DEFAULT_DEVICE_ID)).toEqual(processing)
+    expect(audioConstraint('a')).toEqual({ ...processing, deviceId: { exact: 'a' } })
   })
 })

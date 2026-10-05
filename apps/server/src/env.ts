@@ -79,13 +79,10 @@ const envSchema = z
     TRANSCRIPTION_FFMPEG: z.string().min(1).default('ffmpeg'),
     TRANSCRIPTION_FFPROBE: z.string().min(1).default('ffprobe'),
     TRANSCRIPTION_WORK_DIR: z.string().min(1).optional(),
-    // The TURN servers' shared secret (coturn `static-auth-secret`), from which the server makes
-    // short-lived credentials for each live session when the module's TURN auth is `ephemeral`.
-    // It never leaves the server.
-    TRANSCRIPTION_TURN_SECRET: z.string().min(16).optional(),
-    // The realtime bridge's BRIDGE_API_KEY (infra/realtime-bridge), sent as a bearer with every
-    // request to it. Deployment-wide like the TURN secret: compose hands both containers the same.
-    TRANSCRIPTION_REALTIME_BRIDGE_KEY: z.string().min(16).optional()
+    // Live transcription sessions this server relays at once, and per person (each holds a
+    // WebSocket to the browser and one to the gateway).
+    TRANSCRIPTION_LIVE_MAX_SESSIONS: z.coerce.number().int().min(1).max(10_000).default(20),
+    TRANSCRIPTION_LIVE_MAX_SESSIONS_PER_USER: z.coerce.number().int().min(1).max(100).default(2)
   })
   .transform((value) => ({
     ...value,
@@ -182,8 +179,8 @@ export function reachedThroughProxy(
 
 /**
  * What the server warns about at start: proxy variables Node ignores without
- * `NODE_USE_ENV_PROXY=1`, and `internalUrls` (object storage, Keycloak, the server itself, the
- * realtime bridge) that the proxy would get. Never names the proxy, whose URL may hold
+ * `NODE_USE_ENV_PROXY=1`, and `internalUrls` (object storage, Keycloak, the server itself) that the
+ * proxy would get. Never names the proxy, whose URL may hold
  * credentials.
  */
 export function outboundProxyWarnings(
@@ -206,20 +203,13 @@ export function outboundProxyWarnings(
   )
 }
 
-/**
- * Where the production app container reaches the realtime bridge on the host
- * (`docker-compose.prod.yml`, host networking); checked at start once the bridge has a key.
- */
-export const PRODUCTION_BRIDGE_URL = 'http://host.docker.internal:8089'
-
 for (const warning of outboundProxyWarnings(
   process.env,
   [
     `http://127.0.0.1:${env.PORT}`,
     `http://localhost:${env.PORT}`,
     env.KEYCLOAK_ISSUER,
-    env.TRANSCRIPTION_S3_ENDPOINT,
-    env.TRANSCRIPTION_REALTIME_BRIDGE_KEY ? PRODUCTION_BRIDGE_URL : undefined
+    env.TRANSCRIPTION_S3_ENDPOINT
   ].filter((url): url is string => Boolean(url)),
   process.execArgv
 )) {
