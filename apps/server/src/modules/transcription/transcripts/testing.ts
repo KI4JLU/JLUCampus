@@ -94,6 +94,7 @@ export function mockChatConfig(origin: string): Partial<TranscriptionComponentCo
     llmModels: [
       { id: 'mock-chat', label: 'Mock Chat' },
       { id: 'mock-prose', label: 'Mock Prose' },
+      { id: 'mock-think', label: 'Mock Think' },
       { id: 'mock-fail', label: 'Mock Fail' }
     ],
     defaultSummaryModel: 'mock-chat',

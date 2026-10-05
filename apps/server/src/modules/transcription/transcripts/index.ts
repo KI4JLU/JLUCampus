@@ -11,7 +11,7 @@ import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { upstream } from '../http.js'
 import { requireChatTarget } from '../summaries/chat.js'
-import { generateMetadata, generateMetadataAfterSave } from './metadata.js'
+import { generateMetadataAfterSave, generateSubtitle } from './metadata.js'
 import { buildNewTranscript } from './save.js'
 import {
   deleteTranscripts,
@@ -152,9 +152,9 @@ transcriptsRouter.post('/transcripts/:id/subtitle', async (context) => {
   const { componentId, userId, retentionHours } = owner(context)
   const row = await findTranscript(componentId, userId, id)
   if (!row) throw new ApiError(404, 'not_found', 'Transcript not found')
-  const target = requireChatTarget(runtime, 'summary')
-  const { subtitle } = await upstream('The chat model did not write a subtitle', () =>
-    generateMetadata(target, row.segments, false, context.req.raw.signal)
+  const target = requireChatTarget(runtime, 'correction')
+  const subtitle = await upstream('The chat model did not write a subtitle', () =>
+    generateSubtitle(target, row.segments, context.req.raw.signal)
   )
   if (!subtitle) throw new ApiError(502, 'module_unavailable', 'The chat model wrote no subtitle')
   const updated = await setGeneratedSubtitle(componentId, userId, id, subtitle)

@@ -16,6 +16,7 @@ import { bearer, listModels, upstreamFetch, UpstreamError, upstreamUrl } from '.
 import { parseVerboseJson } from '../jobs/asr.js'
 import { parseDiarization } from '../jobs/diarization.js'
 import { probeOffer } from '../realtime/sdp.js'
+import { completionBody, withoutThinking } from '../summaries/chat.js'
 import {
   clientSecretRequest,
   parseClientSecret,
@@ -201,12 +202,16 @@ const transcriptionAnswerSchema = z
   .looseObject({ text: z.string(), segments: z.array(z.unknown()).optional() })
   .refine((body) => !('error' in body))
 
-/** A one-word chat completion with `model`. */
+/**
+ * A one-word chat completion with `model`, sent as the module's requests are (thinking off when
+ * `disableThinking`), so a refused `chat_template_kwargs` shows here.
+ */
 async function checkChat(
   checks: Finding[],
   baseUrl: string,
   apiKey: string | null,
   model: string,
+  disableThinking: boolean,
   signal?: AbortSignal
 ): Promise<number> {
   const response = await answer(
@@ -218,14 +223,17 @@ async function checkChat(
         Accept: 'application/json',
         ...bearer(apiKey)
       },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: 'Antworte nur mit: OK' }],
-        temperature: 0,
-        // Room for reasoning models, which think before they answer.
-        max_tokens: 256,
-        stream: false
-      })
+      body: JSON.stringify(
+        completionBody(
+          { model, disableThinking },
+          [{ role: 'user', content: 'Antworte nur mit: OK' }],
+          {
+            temperature: 0,
+            // Room for reasoning models, which think before they answer.
+            maxTokens: 256
+          }
+        )
+      )
     },
     signal,
     OPERATION_TIMEOUT_MS
@@ -243,9 +251,7 @@ const chatAnswerSchema = z.object({
     .array(
       z.object({
         message: z.object({
-          content: z
-            .string()
-            .refine((content) => content.replace(/<think>[^]*?<\/think>/gi, '').trim() !== '')
+          content: z.string().refine((content) => withoutThinking(content) !== '')
         })
       })
     )
@@ -370,7 +376,8 @@ export async function testConnection(
         const model = input.model ?? config.defaultSummaryModel ?? config.llmModels[0]?.id ?? null
         await listedModels(checks, url, apiKey, model, 'llm', signal)
         if (!model) return noModel()
-        return passed(await checkChat(checks, url, apiKey, model, signal))
+        const disableThinking = input.disableThinking ?? config.llmDisableThinking
+        return passed(await checkChat(checks, url, apiKey, model, disableThinking, signal))
       }
       case 'diarization': {
         const url = input.url ?? config.diarizationUrl

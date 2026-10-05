@@ -129,21 +129,26 @@
     },
     "llmBaseUrl": {
       "label": "Adresse des KI-Endpunkts",
-      "hint": "OpenAI-kompatibler Chat-Endpunkt bis /v1 für Korrektur, Zusammenfassungen, Unterzeilen und Sprecheroptimierung."
+      "hint": "OpenAI-kompatibler Chat-Endpunkt bis /v1 für Korrektur, Titel, Unterzeilen, Zusammenfassungen und Sprecheroptimierung. Voreingestellt ist das KI-Gateway des HRZ; den API-Schlüssel tragen Sie unten ein."
     },
     "llmModels": {
       "label": "KI-Modelle",
-      "hint": "Höchstens {{max}}. Die Liste lässt sich vom Endpunkt abrufen; vergebene Anzeigenamen bleiben. Nur gelistete Modelle werden verwendet."
+      "hint": "Höchstens {{max}}. Die Liste lässt sich vom Endpunkt abrufen; vergebene Anzeigenamen bleiben. Nur gelistete Modelle werden verwendet, ohne Modelle bleibt die KI aus."
     },
     "defaultCorrectionModel": {
-      "label": "Modell der Korrektur",
-      "hint": "Ohne Auswahl das erste der Liste."
+      "label": "Modell für kurze Aufgaben",
+      "hint": "KI-Korrektur, Sprecheroptimierung, Titel und Unterzeile. Voreingestellt ist jlu/qwen3.8-27b-fast; es gilt, sobald es in der Liste steht, sonst das erste der Liste."
     },
     "defaultSummaryModel": {
       "label": "Modell der Zusammenfassungen",
-      "hint": "Ohne Auswahl das erste der Liste."
+      "hint": "Zusammenfassungen und Vorschauen der Vorlagen. Voreingestellt ist jlu/qwen3.8-27b; es gilt, sobald es in der Liste steht, sonst das erste der Liste."
+    },
+    "llmDisableThinking": {
+      "label": "Denkphase der Modelle abschalten",
+      "hint": "Sendet chat_template_kwargs.enable_thinking = false, das vLLM-Server mit Qwen3-Modellen verstehen (HRZ-Gateway): Die Modelle antworten sofort, statt erst nachzudenken. Ausschalten für Endpunkte, die unbekannte Parameter ablehnen, etwa OpenAI."
     },
     "firstModel": "Erstes Modell der Liste",
+    "unlistedModel": "{{id}} (nicht in der Liste)",
     "modelId": "Modell-ID",
     "modelLabel": "Anzeigename",
     "modelActions": "Aktionen",

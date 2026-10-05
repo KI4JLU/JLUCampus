@@ -420,8 +420,8 @@ describe('AI subtitle and title', () => {
     expect(body.subtitle).toBeNull()
     await vi.waitFor(() => {
       const row = fake.rows.find((candidate) => candidate.id === body.id)
-      expect(row?.subtitle).toBe('Gespräch mit Anna, Ben über „Guten Tag, wir planen das Treffen“')
-      expect(row?.title).toBe('Gespräch: Guten Tag, wir planen')
+      expect(row?.subtitle).toBe('Gespräch von Anna, Ben: Guten Tag, wir planen das Treffen')
+      expect(row?.title).toBe('Guten Tag, wir')
     })
     const detail = (await (
       await app.request(relative(TRANSCRIPTION_API.transcript(String(body.id))))
@@ -454,8 +454,14 @@ describe('AI subtitle and title', () => {
     const response = await app.request(path, { method: 'POST' })
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
-      subtitle: 'Gespräch mit Anna, Ben über „Guten Tag, wir planen das Treffen“',
+      subtitle: 'Gespräch von Anna, Ben: Guten Tag, wir planen das Treffen',
       subtitleSource: 'ai'
+    })
+    const thinking = testApp(transcriptsRouter, {
+      config: { ...mockChatConfig(mock.origin), defaultCorrectionModel: 'mock-think' }
+    })
+    expect(await (await thinking.request(path, { method: 'POST' })).json()).toMatchObject({
+      subtitle: 'Gespräch von Anna, Ben: Guten Tag, wir planen das Treffen'
     })
     const bob = testApp(transcriptsRouter, { userId: 'bob', config: mockChatConfig(mock.origin) })
     expect((await bob.request(path, { method: 'POST' })).status).toBe(404)

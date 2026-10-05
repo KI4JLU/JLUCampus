@@ -129,21 +129,26 @@
     },
     "llmBaseUrl": {
       "label": "AI endpoint address",
-      "hint": "OpenAI-compatible chat endpoint up to /v1 for correction, summaries, subtitles and speaker optimisation."
+      "hint": "OpenAI-compatible chat endpoint up to /v1 for correction, titles, subtitles, summaries and speaker optimisation. The HRZ AI gateway is preset; enter its API key below."
     },
     "llmModels": {
       "label": "AI models",
-      "hint": "At most {{max}}. The list can be fetched from the endpoint; display names you gave stay. Only listed models are used."
+      "hint": "At most {{max}}. The list can be fetched from the endpoint; display names you gave stay. Only listed models are used; without models the AI stays off."
     },
     "defaultCorrectionModel": {
-      "label": "Correction model",
-      "hint": "Without a choice, the first of the list."
+      "label": "Model for quick tasks",
+      "hint": "AI correction, speaker optimisation, title and subtitle. jlu/qwen3.8-27b-fast is preset; it applies once it is in the list, else the first of the list."
     },
     "defaultSummaryModel": {
       "label": "Summary model",
-      "hint": "Without a choice, the first of the list."
+      "hint": "Summaries and template previews. jlu/qwen3.8-27b is preset; it applies once it is in the list, else the first of the list."
+    },
+    "llmDisableThinking": {
+      "label": "Turn off the models’ thinking",
+      "hint": "Sends chat_template_kwargs.enable_thinking = false, which vLLM servers with Qwen3 models understand (HRZ gateway): the models answer at once instead of reasoning first. Turn it off for endpoints that refuse unknown parameters, such as OpenAI."
     },
     "firstModel": "First model of the list",
+    "unlistedModel": "{{id}} (not in the list)",
     "modelId": "Model ID",
     "modelLabel": "Display name",
     "modelActions": "Actions",

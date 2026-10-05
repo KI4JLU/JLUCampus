@@ -2,12 +2,14 @@ import { readJson, sendJson } from './http.mjs'
 
 /**
  * OpenAI-compatible chat completions, below `/llm/v1`: `GET /models` and `POST /chat/completions`
- * for text correction, subtitles, speaker optimisation, summaries and section previews.
+ * for text correction, titles, subtitles, speaker optimisation, summaries and section previews.
+ * For automated tests and offline development only; the module runs against the HRZ gateway.
  *
- * Answers are deterministic and derived from the request only: the task is recognised by its
- * system prompt, and the answer has the JSON shape the server's prompt asks for. The model
- * `mock-fail` answers 500, `mock-prose` answers plain prose instead of JSON (to exercise the
- * server's lenient parsing).
+ * Answers are deterministic and derived from the request only: the task is recognised by the
+ * system prompt the server sends (kiChat's prompts), and the answer has the shape that prompt asks
+ * for. The model `mock-fail` answers 500, `mock-prose` answers plain prose (to exercise the
+ * server's lenient parsing), `mock-think` (not listed) puts a `<think>` block before its answer and the
+ * thinking into `reasoning_content` as Qwen3 behind vLLM does.
  *
  * @param {import('node:http').IncomingMessage} request
  * @param {import('node:http').ServerResponse} response
@@ -37,14 +39,22 @@ export async function handle(request, response, path) {
     }
     const system = messages.find((message) => message?.role === 'system')?.content ?? ''
     const user = messages.findLast((message) => message?.role === 'user')?.content ?? ''
-    const content =
-      model === 'mock-prose' ? prose(String(user)) : answer(String(system), String(user))
+    const text = model === 'mock-prose' ? prose(String(user)) : answer(String(system), String(user))
+    const thinking = 'Ich lese die Anfrage und überlege, was verlangt ist.'
+    const message =
+      model === 'mock-think'
+        ? {
+            role: 'assistant',
+            content: `<think>${thinking}</think>\n\n${text}`,
+            reasoning_content: thinking
+          }
+        : { role: 'assistant', content: text }
     sendJson(response, 200, {
       id: 'chatcmpl-mock',
       object: 'chat.completion',
       created: 0,
       model,
-      choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+      choices: [{ index: 0, message, finish_reason: 'stop' }],
       usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
     })
     return true
@@ -57,10 +67,10 @@ export function answer(system, user) {
   if (system.includes('speech recognition') || isStringArray(parse(user))) {
     return JSON.stringify({ text: correct(parse(user)) })
   }
-  if (system.includes('Sprecherzuordnung')) return JSON.stringify(reassign(parse(user)))
-  if (system.includes('Unterzeile')) return JSON.stringify(metadata(system, user))
-  if (system.includes('Ergebnisdokument'))
-    return JSON.stringify({ markdown: section(system, user) })
+  if (system.includes('Sprecherzuordnungen')) return JSON.stringify(reassign(user))
+  if (system.includes('Titel zuweist') || system.includes('three-word title')) return title(user)
+  if (system.includes('Unterzeile')) return subtitle(user)
+  if (system.includes('Transkripte präzise')) return summary(user)
   const parsed = parse(user)
   return JSON.stringify(parsed === undefined ? { text: user } : parsed)
 }
@@ -108,47 +118,66 @@ function firstWords(transcript, count) {
     .replace(/[.,;:!?]+$/, '')
 }
 
-function metadata(system, user) {
-  const speakers = speakersOf(user)
-  const subject = firstWords(user, 6) || 'eine Aufnahme'
-  const result = {
-    subtitle: `Gespräch mit ${speakers.join(', ') || 'unbekannten Personen'} über „${subject}“`
-  }
-  if (system.includes('"title"')) result.title = `Gespräch: ${firstWords(user, 4) || 'Aufnahme'}`
-  return result
+/** The text after a label line such as `TRANSKRIPT:`, else all of it. */
+function after(user, label) {
+  const index = user.indexOf(`${label}\n`)
+  return index < 0 ? user : user.slice(index + label.length + 1)
 }
 
-/** A section's content: how many turns, by whom, and the first one quoted. */
-function section(system, user) {
-  const heading = /Abschnitt "([^"]*)"/.exec(system)?.[1] ?? ''
-  const all = turns(user)
-  const speakers = speakersOf(user)
+/** The first three words of the text, as the name prompt asks. */
+function title(user) {
+  return (
+    user
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(' ')
+      .replace(/[.,;:!?]+$/, '') || 'Aufnahme'
+  )
+}
+
+function subtitle(user) {
+  const transcript = after(user, 'TRANSKRIPT-ANFANG:')
+  const speakers = speakersOf(transcript)
+  return `Gespräch von ${speakers.join(', ') || 'unbekannten Personen'}: ${firstWords(transcript, 6) || 'eine Aufnahme'}`
+}
+
+/**
+ * A section's content: how many turns, by whom, and the first one quoted. An instruction asking
+ * for a whole protocol (the standard template) gets a document with its own headings.
+ */
+function summary(user) {
+  const instruction = user.split('\n\nTRANSKRIPT:\n')[0] ?? ''
+  const transcript = after(user, 'TRANSKRIPT:')
+  const all = turns(transcript)
+  const speakers = speakersOf(transcript)
   const first = all[0] ? `„${all[0][1].slice(0, 120)}“ (${all[0][0]})` : 'kein Text'
   const lines = [
     `- ${all.length} Redebeiträge von ${speakers.join(', ') || 'niemandem'}.`,
     `- Erster Beitrag: ${first}`
   ]
-  if (heading) return lines.join('\n')
+  if (!instruction.includes('Ergebnisprotokoll')) return lines.join('\n')
   return ['## Zusammenfassung', '', ...lines, '', '## Beschlüsse', '', '- Keine erkennbar.'].join(
     '\n'
   )
 }
 
 /**
- * The speaker optimisation: a segment without speaker gets its predecessor's (else the first
- * speaker's), all others stay. Answers one entry per segment.
+ * The speaker optimisation as kiChat's prompt asks: one entry per `Segment [X] (Name): text`
+ * line. A segment of `Unbekannt` gets its predecessor's speaker (else the first named one), all
+ * others stay, texts unchanged.
  */
-function reassign(input) {
-  const speakers = Array.isArray(input?.speakers) ? input.speakers : []
-  const segments = Array.isArray(input?.segments) ? input.segments : []
-  let previous = speakers[0] ?? null
-  return {
-    segments: segments.map((segment) => {
-      const speaker = segment.speaker ?? previous
-      previous = speaker
-      return { id: segment.id, speaker }
-    })
-  }
+function reassign(user) {
+  const segments = [...user.matchAll(/^Segment \[(\d+)\] \(([^)\n]*)\): ?(.*)$/gm)].map(
+    (match) => ({ index: Number(match[1]), speaker: match[2], text: match[3] })
+  )
+  const named = segments.map((segment) => segment.speaker).filter((name) => name !== 'Unbekannt')
+  let previous = named[0] ?? 'Unbekannt'
+  return segments.map((segment) => {
+    const speaker = segment.speaker === 'Unbekannt' ? previous : segment.speaker
+    previous = speaker
+    return { original_index: segment.index, text: segment.text, speaker }
+  })
 }
 
 /** What `mock-prose` says: no JSON, just text. */

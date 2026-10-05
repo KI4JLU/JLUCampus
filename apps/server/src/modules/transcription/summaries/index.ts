@@ -21,15 +21,17 @@ import {
   participants,
   participantsOfText,
   placeholderValues,
+  redactedText,
   speakerText,
+  UNKNOWN_SPEAKER,
   type PlaceholderValues
 } from '../transcripts/text.js'
 import { chatTarget, requireChatTarget } from './chat.js'
 import {
   generatePreviews,
   generateSummary,
-  PREVIEW_EXCERPT_MAX,
   previewKey,
+  reducedTranscriptSample,
   summarySettingsHash
 } from './generate.js'
 import { findPreviews, findSummary, storePreviews, storeSummary } from './store.js'
@@ -40,6 +42,8 @@ export const summariesRouter = new Hono<AppEnvironment>()
 /** What a summary is made of: the text the model reads and the placeholder values. */
 interface SummarySource {
   text: string
+  /** One `Name: text` line per segment, which previews sample (kiChat's segment lines). */
+  lines: string[]
   values: PlaceholderValues
   /** The saved transcript, if one was named; only those are stored. */
   transcript: TranscriptRow | null
@@ -67,6 +71,9 @@ async function summarySource(
     if (!row) throw new ApiError(404, 'not_found', 'Transcript not found')
     source = {
       text: speakerText(row.segments),
+      lines: row.segments.map(
+        (segment) => `${segment.speaker?.trim() || UNKNOWN_SPEAKER}: ${redactedText(segment)}`
+      ),
       values: placeholderValues({
         title: row.title,
         date: row.createdAt,
@@ -79,6 +86,7 @@ async function summarySource(
     const text = input.transcriptText ?? ''
     source = {
       text,
+      lines: text.split('\n').filter((line) => line.trim()),
       values: placeholderValues({
         title: UNSAVED_TITLE,
         date: new Date(),
@@ -167,7 +175,7 @@ summariesRouter.post('/summaries', async (context) => {
 })
 
 /**
- * Previews of a template's AI sections on an excerpt of the transcript (T-53). With
+ * Previews of a template's AI sections on kiChat's reduced sample of the transcript (T-53). With
  * `staleSectionIds` only those are generated anew and answered; without, every section sent is
  * answered, from the store where its heading and instruction were previewed before. Sections
  * that fail appear in `errors`.
@@ -202,8 +210,7 @@ summariesRouter.post('/summaries/preview', async (context) => {
   const generated = await generatePreviews(
     target,
     missing,
-    input.sections.map((section) => section.heading),
-    source.text.slice(0, PREVIEW_EXCERPT_MAX),
+    reducedTranscriptSample(source.lines),
     source.values,
     context.req.raw.signal
   )

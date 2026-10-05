@@ -1191,6 +1191,13 @@ const modelListSchema = z
 
 const modelIdSchema = z.string().trim().min(1).max(200).nullable().default(null)
 
+/** The HRZ's LiteLLM gateway (KI@JLU), up to `/v1`: speech and chat models of the university. */
+export const TRANSCRIPTION_HRZ_API_URL = 'https://api.hrz.uni-giessen.de/v1'
+/** The gateway's chat model for summaries and section previews. */
+export const TRANSCRIPTION_DEFAULT_SUMMARY_MODEL = 'jlu/qwen3.8-27b'
+/** The gateway's quicker chat model for correction, speaker optimisation, title and subtitle. */
+export const TRANSCRIPTION_DEFAULT_FAST_MODEL = 'jlu/qwen3.8-27b-fast'
+
 /**
  * The module's settings. Every upstream is optional, so a stored config of an older release
  * parses; what is missing turns the matching capability off (`transcriptionCapabilitiesSchema`).
@@ -1208,11 +1215,37 @@ export const transcriptionComponentConfigSchema = z.object({
   /** The diarisation endpoint itself (multipart audio in, speaker turns out). */
   diarizationUrl: httpsUrlSchema.nullable().default(null),
   diarizationModel: modelIdSchema,
-  /** OpenAI-compatible chat endpoint up to `/v1`, for correction, summaries and optimisation. */
-  llmBaseUrl: httpsUrlSchema.nullable().default(null),
+  /**
+   * OpenAI-compatible chat endpoint up to `/v1`, for correction, summaries and optimisation; the
+   * HRZ gateway unless the admin names another. Chat stays off until `llmModels` lists a model.
+   */
+  llmBaseUrl: httpsUrlSchema.nullable().default(TRANSCRIPTION_HRZ_API_URL),
   llmModels: modelListSchema,
-  defaultCorrectionModel: modelIdSchema,
-  defaultSummaryModel: modelIdSchema,
+  /**
+   * The model of the quick tasks: LLM correction, speaker optimisation, title and subtitle. Used
+   * once `llmModels` lists it (`Modelle abrufen`).
+   */
+  defaultCorrectionModel: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .nullable()
+    .default(TRANSCRIPTION_DEFAULT_FAST_MODEL),
+  /** The model of summaries and section previews, once `llmModels` lists it. */
+  defaultSummaryModel: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .nullable()
+    .default(TRANSCRIPTION_DEFAULT_SUMMARY_MODEL),
+  /**
+   * Sends `chat_template_kwargs: {enable_thinking: false}`, which vLLM servers with Qwen3 models
+   * (the HRZ gateway) understand: they answer at once instead of reasoning first. Off for endpoints
+   * that refuse unknown parameters, such as OpenAI's.
+   */
+  llmDisableThinking: z.boolean().default(true),
   defaultLanguage: transcriptionLanguageSchema.default('auto'),
   defaultSpeakerCount: transcriptionSpeakerCountSchema.default('auto'),
   defaultLlmCorrection: z.boolean().default(true),
@@ -1364,7 +1397,9 @@ export const transcriptionConnectionTestRequestSchema = z.object({
   target: z.enum(TRANSCRIPTION_CONNECTION_TARGETS),
   url: httpsUrlSchema.optional(),
   apiKey: z.string().trim().min(1).max(SECRET_VALUE_MAX).nullable().optional(),
-  model: z.string().trim().min(1).max(200).optional()
+  model: z.string().trim().min(1).max(200).optional(),
+  /** `llm` only: `llmDisableThinking` as set in the form; left out uses the saved one. */
+  disableThinking: z.boolean().optional()
 })
 export type TranscriptionConnectionTestRequest = z.infer<
   typeof transcriptionConnectionTestRequestSchema

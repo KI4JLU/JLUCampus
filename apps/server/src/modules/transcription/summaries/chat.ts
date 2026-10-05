@@ -5,9 +5,9 @@ import { llmModel, type TranscriptionRuntime } from '../config.js'
 import { bearer, ensureOk, readJson, upstreamFetch, upstreamUrl } from '../http.js'
 
 /**
- * The OpenAI-compatible chat endpoint that writes summaries, section previews, subtitles and
- * speaker optimisations. Prompts ask for JSON, which is parsed leniently as in the translator: past
- * thinking blocks and code fences, falling back to the raw answer where that still makes sense.
+ * The OpenAI-compatible chat endpoint (the HRZ gateway by default) that writes titles, subtitles,
+ * summaries, section previews and speaker optimisations with kiChat's prompts. Answers are read
+ * leniently: past thinking blocks (Qwen3 models reason before they answer) and code fences.
  */
 
 export interface ChatTarget {
@@ -15,7 +15,12 @@ export interface ChatTarget {
   apiKey: string | null
   model: string
   timeoutMs: number
+  /** Asks vLLM to skip the model's thinking (`llmDisableThinking`). */
+  disableThinking: boolean
 }
+
+/** Which default model a task uses: `correction` for the quick tasks, `summary` for summaries. */
+export type ChatPurpose = 'correction' | 'summary'
 
 /**
  * The chat endpoint and model for a purpose, `requested` only if the admin listed it; `null` while
@@ -23,7 +28,7 @@ export interface ChatTarget {
  */
 export function chatTarget(
   runtime: Pick<TranscriptionRuntime, 'config' | 'secrets'>,
-  purpose: 'correction' | 'summary',
+  purpose: ChatPurpose,
   requested: string | null = null
 ): ChatTarget | null {
   const { config, secrets } = runtime
@@ -33,14 +38,15 @@ export function chatTarget(
     baseUrl: config.llmBaseUrl,
     apiKey: secrets.llmApiKey,
     model,
-    timeoutMs: config.upstreamTimeoutSeconds * 1000
+    timeoutMs: config.upstreamTimeoutSeconds * 1000,
+    disableThinking: config.llmDisableThinking
   }
 }
 
 /** `chatTarget`, or `502 module_unavailable` for a route while none is set up. */
 export function requireChatTarget(
   runtime: Pick<TranscriptionRuntime, 'config' | 'secrets'>,
-  purpose: 'correction' | 'summary',
+  purpose: ChatPurpose,
   requested: string | null = null
 ): ChatTarget {
   const target = chatTarget(runtime, purpose, requested)
@@ -48,9 +54,19 @@ export function requireChatTarget(
   return target
 }
 
+/**
+ * A completion. vLLM's reasoning parser puts the thinking into `reasoning_content` and leaves
+ * `content` `null` when the token budget ran out while thinking; other servers keep it inline as
+ * `<think>…</think>`.
+ */
 const chatCompletionSchema = z.object({
   choices: z
-    .array(z.object({ message: z.object({ content: z.string().nullable().optional() }) }))
+    .array(
+      z.object({
+        message: z.object({ content: z.string().nullable().optional() }),
+        finish_reason: z.string().nullable().optional()
+      })
+    )
     .min(1)
 })
 
@@ -59,11 +75,35 @@ export interface ChatMessage {
   content: string
 }
 
-/** One chat completion; its text, or an `UpstreamError`. */
+export interface ChatOptions {
+  /** Left out as kiChat does, so the endpoint's default applies. */
+  temperature?: number
+  /** kiChat's budgets for title and subtitle; left out elsewhere. */
+  maxTokens?: number
+  signal?: AbortSignal
+}
+
+/** The request body of one completion, without streaming, as kiChat's `AiService` sends it. */
+export function completionBody(
+  target: Pick<ChatTarget, 'model' | 'disableThinking'>,
+  messages: readonly ChatMessage[],
+  options: Pick<ChatOptions, 'temperature' | 'maxTokens'> = {}
+): Record<string, unknown> {
+  return {
+    model: target.model,
+    messages,
+    stream: false,
+    ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+    ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+    ...(target.disableThinking ? { chat_template_kwargs: { enable_thinking: false } } : {})
+  }
+}
+
+/** One chat completion; its text without thinking, or an `UpstreamError`. */
 export async function complete(
   target: ChatTarget,
   messages: readonly ChatMessage[],
-  options: { temperature?: number; signal?: AbortSignal } = {}
+  options: ChatOptions = {}
 ): Promise<string> {
   const response = await ensureOk(
     await upstreamFetch(upstreamUrl(target.baseUrl, 'chat/completions'), {
@@ -73,25 +113,33 @@ export async function complete(
         Accept: 'application/json',
         ...bearer(target.apiKey)
       },
-      body: JSON.stringify({
-        model: target.model,
-        messages,
-        temperature: options.temperature ?? 0.2,
-        stream: false
-      }),
+      body: JSON.stringify(completionBody(target, messages, options)),
       timeoutMs: target.timeoutMs,
       signal: options.signal
     }),
     'The chat model'
   )
   const completion = await readJson(response, chatCompletionSchema, 'The chat model')
-  return completion.choices[0]!.message.content ?? ''
+  return withoutThinking(completion.choices[0]!.message.content ?? '')
+}
+
+/**
+ * The answer without the model's thinking: whole `<think>…</think>` blocks, everything before a
+ * lone `</think>` (templates that open the block in the prompt) and an unclosed `<think>` to the
+ * end (the budget ran out while thinking).
+ */
+export function withoutThinking(content: string): string {
+  let text = content.replace(/<think>[^]*?<\/think>/gi, '')
+  const closing = text.toLowerCase().lastIndexOf('</think>')
+  if (closing >= 0) text = text.slice(closing + '</think>'.length)
+  const opening = text.toLowerCase().indexOf('<think>')
+  if (opening >= 0) text = text.slice(0, opening)
+  return text.trim()
 }
 
 /** The answer without thinking blocks and with code fences unwrapped. */
 export function stripModelFormatting(content: string): string {
-  return content
-    .replace(/<think>[^]*?<\/think>/gi, '')
+  return withoutThinking(content)
     .replace(/```(?:json)?\s*([^]*?)```/gi, '$1')
     .trim()
 }
@@ -120,14 +168,9 @@ function firstJsonObject(content: string): string | null {
 
 /** The first JSON object in a model's answer, past thinking and code fences; `null` if none. */
 export function parseJsonObject(content: string): Record<string, unknown> | null {
-  const withoutThinking = content.replace(/<think>[^]*?<\/think>/gi, '').trim()
+  const answer = withoutThinking(content)
   const cleaned = stripModelFormatting(content)
-  for (const candidate of [
-    withoutThinking,
-    cleaned,
-    firstJsonObject(withoutThinking),
-    firstJsonObject(cleaned)
-  ]) {
+  for (const candidate of [answer, cleaned, firstJsonObject(answer), firstJsonObject(cleaned)]) {
     if (candidate === null) continue
     try {
       const value: unknown = JSON.parse(candidate)
@@ -148,9 +191,9 @@ export function parseJsonObject(content: string): Record<string, unknown> | null
 export function parseMarkdownAnswer(content: string): string {
   const value = parseJsonObject(content)?.markdown
   if (typeof value === 'string') return value.trim()
-  const withoutThinking = content.replace(/<think>[^]*?<\/think>/gi, '').trim()
-  const fenced = /^```(?:markdown|md)?\s*\n([^]*?)\n```$/i.exec(withoutThinking)
-  return (fenced ? fenced[1]! : withoutThinking).trim()
+  const answer = withoutThinking(content)
+  const fenced = /^```(?:markdown|md)?\s*\n([^]*?)\n```$/i.exec(answer)
+  return (fenced ? fenced[1]! : answer).trim()
 }
 
 /** Runs `run` over `items` with at most `limit` at once, keeping their order. */

@@ -1,5 +1,5 @@
 import { TRANSCRIPTION_API, type TranscriptionSegment } from '@justcampus/shared'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
   json,
@@ -11,9 +11,15 @@ import {
 import { optimizeRouter } from './index.js'
 import {
   applyAssignments,
-  optimizationInput,
+  buildOptimizationPrompt,
+  formatSegments,
+  mergeSpeakerRuns,
+  OPTIMIZATION_SYSTEM_PROMPT,
   optimizeSpeakers,
-  parseAssignments,
+  optimizeTranscriptSpeakers,
+  parseCorrections,
+  restructureBatch,
+  speakerAssignments,
   UnusableOptimizationError
 } from './speakers.js'
 
@@ -49,41 +55,111 @@ const segments: TranscriptionSegment[] = [
   { id: 3, start: 8, end: 9, text: 'Schön.', speaker: 'Ben', redactions: [] }
 ]
 
-describe('assignments', () => {
-  it('reads every answer shape and only takes known speakers, in any case', () => {
-    const speakers = ['Anna', 'Ben']
-    expect([
-      ...parseAssignments(
-        '{"segments": [{"id": 1, "speaker": "ben"}, {"id": "2", "speaker": "Eve"}]}',
-        speakers
-      )
-    ]).toEqual([[1, 'Ben']])
-    expect([...parseAssignments('```json\n[{"id": 3, "speaker": "Anna"}]\n```', speakers)]).toEqual(
-      [[3, 'Anna']]
+const target = {
+  baseUrl: 'https://llm.example/v1',
+  apiKey: null,
+  model: 'm',
+  timeoutMs: 5000,
+  disableThinking: true
+}
+
+/** Answers every chat request with `content`, as vLLM behind LiteLLM does; the bodies sent. */
+function answerWith(...contents: string[]): { bodies: Array<Record<string, unknown>> } {
+  const bodies: Array<Record<string, unknown>> = []
+  let call = 0
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    const content = contents[Math.min(call++, contents.length - 1)]
+    return new Response(
+      JSON.stringify({
+        model: 'jlu/qwen3.8-27b-fast',
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: { role: 'assistant', content, reasoning_content: null }
+          }
+        ]
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
     )
-    expect([...parseAssignments('{"1": "Anna", "x": "Ben"}', speakers)]).toEqual([[1, 'Anna']])
-    expect([...parseAssignments('keine Ahnung', speakers)]).toEqual([])
+  })
+  return { bodies }
+}
+
+describe('kiChat’s prompt', () => {
+  it('lists the segments as kiChat does, redacted, and asks for the JSON array', () => {
+    const listed = formatSegments(segments)
+    expect(listed).toBe(
+      'Segment [0] (Anna): Wie war dein Wochenende?\n' +
+        'Segment [1] (Unbekannt): Gut, ich war in [AUSGEBLENDET].\n' +
+        'Segment [2] (Ben): Schön.\n'
+    )
+    const prompt = buildOptimizationPrompt(listed)
+    expect(prompt).toContain('Hier ist das Transkript:\n' + listed + '\n')
+    expect(prompt).toContain('"original_index"')
+    expect(prompt.endsWith('kein Markdown-Fencing (kein ```json).')).toBe(true)
+  })
+
+  it('reads the array past thinking, fences, prose and wrapping objects', () => {
+    const entry = { original_index: 1, text: 'Gut.', speaker: 'Ben' }
+    for (const content of [
+      JSON.stringify([entry]),
+      `<think>Segment 1 ist die Antwort auf die Frage.</think>\n\n\`\`\`json\n${JSON.stringify([entry])}\n\`\`\``,
+      `Hier ist das Ergebnis:\n${JSON.stringify([entry])}\nFertig.`,
+      JSON.stringify({ segments: [{ ...entry, original_index: '1' }] })
+    ]) {
+      expect(parseCorrections(content)).toEqual([
+        { originalIndex: 1, text: 'Gut.', speaker: 'Ben' }
+      ])
+    }
+    expect(parseCorrections('keine Ahnung')).toEqual([])
+    expect(parseCorrections('[{"original_index": -1, "speaker": "Ben"}, {"text": "x"}]')).toEqual(
+      []
+    )
+  })
+})
+
+describe('speakers only (the route)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('takes the speaker of most of each segment’s text and nothing else', async () => {
+    const { bodies } = answerWith(
+      '<think>\nAnna fragt, Ben antwortet.\n</think>\n[' +
+        '{"original_index": 0, "text": "Wie war dein Wochenende?", "speaker": "Anna"},' +
+        '{"original_index": 1, "text": "Gut,", "speaker": "Anna"},' +
+        '{"original_index": 1, "text": "ich war in [AUSGEBLENDET].", "speaker": "ben"},' +
+        '{"original_index": 2, "text": "Schön.", "speaker": "Eve"}]'
+    )
+    const optimized = await optimizeSpeakers(target, segments)
+    expect(optimized.map((segment) => segment.speaker)).toEqual(['Anna', 'Ben', 'Ben'])
+    expect(optimized[0]).toBe(segments[0])
+    expect(optimized[1]).toEqual({ ...segments[1], speaker: 'Ben' })
+    expect(bodies[0]).toMatchObject({
+      model: 'm',
+      stream: false,
+      chat_template_kwargs: { enable_thinking: false }
+    })
+    expect(bodies[0]).not.toHaveProperty('temperature')
+    const messages = bodies[0]!.messages as Array<{ role: string; content: string }>
+    expect(messages[0]).toEqual({ role: 'system', content: OPTIMIZATION_SYSTEM_PROMPT })
+  })
+
+  it('lets Unbekannt take no name away', () => {
+    const grouped = new Map([[0, [{ text: 'Wie war dein Wochenende?', resolved: null }]]])
+    expect(speakerAssignments(segments.slice(0, 1), grouped)).toEqual(new Map([[1, 'Anna']]))
   })
 
   it('fails a batch the model answered without a usable assignment', async () => {
-    const answers = [
+    for (const content of [
       'I cannot provide an assignment',
-      '{"segments": [{"id": 99, "speaker": "Anna"}]}'
-    ]
-    for (const content of answers) {
-      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-        new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        })
+      '[{"original_index": 99, "text": "x", "speaker": "Anna"}]',
+      '[{"original_index": 0, "text": "x", "speaker": "Eve"}]'
+    ]) {
+      answerWith(content)
+      await expect(optimizeSpeakers(target, segments)).rejects.toBeInstanceOf(
+        UnusableOptimizationError
       )
-      await expect(
-        optimizeSpeakers(
-          { baseUrl: 'https://llm.example/v1', apiKey: null, model: 'm', timeoutMs: 5000 },
-          segments
-        )
-      ).rejects.toBeInstanceOf(UnusableOptimizationError)
-      fetchMock.mockRestore()
+      vi.restoreAllMocks()
     }
   })
 
@@ -92,19 +168,79 @@ describe('assignments', () => {
     expect(changed[0]).toBe(segments[0])
     expect(changed[1]).toEqual({ ...segments[1], speaker: 'Ben' })
   })
+})
 
-  it('shows the model no redacted text and no decoder fields', () => {
-    const input = JSON.parse(optimizationInput(segments, ['Anna', 'Ben'])) as {
-      segments: Array<Record<string, unknown>>
-    }
-    expect(input.segments[1]).toEqual({
-      id: 2,
-      start: 4.2,
-      end: 8,
-      speaker: null,
-      text: 'Gut, ich war in [AUSGEBLENDET].'
-    })
-    expect(input.segments[0]).not.toHaveProperty('tokens')
+describe('restructuring (after recognition)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const long: TranscriptionSegment[] = [
+    {
+      id: 4,
+      start: 10,
+      end: 14,
+      text: ' Ich habe mir die Zahlen angeschaut. Oh Mann! Aber wir warten.',
+      speaker: 'Anna',
+      redactions: [],
+      tokens: [7, 8],
+      avgLogprob: -0.1,
+      words: [
+        { start: 10, end: 11, word: 'Ich' },
+        { start: 12.4, end: 12.6, word: 'Oh' },
+        { start: 13.5, end: 13.9, word: 'warten' }
+      ]
+    },
+    { id: 9, start: 14.5, end: 16, text: 'Das passt so.', speaker: 'Ben', redactions: [] }
+  ]
+
+  it('splits by text length, assigns words by their middle, strips labels and merges', async () => {
+    answerWith(
+      JSON.stringify([
+        { original_index: 0, text: 'Ich habe mir die Zahlen angeschaut.', speaker: 'Anna' },
+        { original_index: 0, text: 'Ben: Oh Mann!', speaker: 'Ben' },
+        { original_index: 0, text: 'Aber wir warten.', speaker: 'Anna' },
+        { original_index: 1, text: 'Das passt so.', speaker: 'Anna' }
+      ])
+    )
+    const result = await optimizeTranscriptSpeakers(target, long)
+    expect(result.map(({ id, speaker, text }) => ({ id, speaker, text }))).toEqual([
+      { id: 4, speaker: 'Anna', text: 'Ich habe mir die Zahlen angeschaut.' },
+      { id: 10, speaker: 'Ben', text: 'Oh Mann!' },
+      { id: 11, speaker: 'Anna', text: 'Aber wir warten. Das passt so.' }
+    ])
+    // 35 + 8 + 16 characters over four seconds.
+    expect(result[0]).toMatchObject({ start: 10, end: 12.37, avgLogprob: -0.1 })
+    expect(result[0]).not.toHaveProperty('tokens')
+    expect(result[0]!.words!.map((word) => word.word)).toEqual(['Ich'])
+    expect(result[1]!.words!.map((word) => word.word)).toEqual(['Oh'])
+    expect(result[2]).toMatchObject({ start: 12.92, end: 16 })
+  })
+
+  it('keeps redacted text, untrusted rewrites and segments the model left out', () => {
+    const grouped = new Map([
+      [
+        0,
+        [{ text: 'Ein ganz anderer Text, viel länger als das Original davor.', resolved: 'Ben' }]
+      ],
+      [1, [{ text: 'Gut, ich war in Berlin.', resolved: 'Ben' }]]
+    ])
+    let next = 100
+    const result = restructureBatch(segments, grouped, ['Anna', 'Ben'], () => next++)
+    expect(result[0]).toEqual({ ...segments[0], speaker: 'Ben' })
+    expect(result[1]).toEqual({ ...segments[1], speaker: 'Ben' })
+    expect(result[2]).toBe(segments[2])
+    expect(
+      restructureBatch(
+        long.slice(0, 1),
+        new Map([[0, [{ text: 'Ja.', resolved: 'Ben' }]]]),
+        ['Anna', 'Ben'],
+        () => next++
+      )[0]
+    ).toEqual({ ...long[0], speaker: 'Ben' })
+  })
+
+  it('does not merge redacted segments', () => {
+    const redacted = { ...segments[1]!, speaker: 'Anna', start: 4.2 }
+    expect(mergeSpeakerRuns([segments[0]!, redacted])).toHaveLength(2)
   })
 })
 

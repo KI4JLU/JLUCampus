@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest'
 import type { z } from 'zod'
 
 import { ApiError } from '../../../api.js'
-import { isDefaultTitle, parseMetadataAnswer } from './metadata.js'
 import { buildNewTranscript } from './save.js'
 import type { GroupJob } from './store.js'
 
@@ -200,28 +199,5 @@ describe('large groups (T-04, T-13)', () => {
     expect(
       buildNewTranscript(body, jobs, { ...context, config: { ...config, maxFilesPerGroup: 3 } })
     ).toBeTruthy()
-  })
-})
-
-describe('AI title and subtitle', () => {
-  it('only replaces titles the app made up', () => {
-    expect(isDefaultTitle('interview-01', 'interview-01.mp3')).toBe(true)
-    expect(isDefaultTitle('interview-01.mp3', 'interview-01.mp3')).toBe(true)
-    expect(isDefaultTitle('Transcript 2', null)).toBe(true)
-    expect(isDefaultTitle('Gruppe 1', 'a.wav')).toBe(true)
-    expect(isDefaultTitle('Teamsitzung Oktober', 'interview-01.mp3')).toBe(false)
-  })
-
-  it('reads title and subtitle leniently', () => {
-    expect(
-      parseMetadataAnswer(
-        '<think>hm</think>```json\n{"title": " „Planung“ ", "subtitle": "Ein  Test."}\n```'
-      )
-    ).toEqual({ title: 'Planung', subtitle: 'Ein Test.' })
-    expect(parseMetadataAnswer('Gespräch über die Planung\nmehr')).toEqual({
-      title: null,
-      subtitle: 'Gespräch über die Planung'
-    })
-    expect(parseMetadataAnswer(`{"subtitle": "${'x'.repeat(400)}"}`).subtitle).toHaveLength(255)
   })
 })

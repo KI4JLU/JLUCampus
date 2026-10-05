@@ -84,20 +84,27 @@ function draftKey(draft: SecretDraft | undefined): string | null | undefined {
 
 /**
  * The config with `models` as the list. A default follows its model through a changed id
- * (`renamed`) and falls back to the first model when its model is gone.
+ * (`renamed`) and falls back to the first model when its model is gone. A default that was not
+ * listed before (a fresh module's HRZ models before `Modelle abrufen`) stays while the list is
+ * edited by hand; a fetched list keeps it only if the endpoint has it (`fetched`).
  */
 function withModels(
   config: Config,
   field: ModelField,
   models: TranscriptionModel[],
-  renamed?: { from: string; to: string }
+  renamed?: { from: string; to: string },
+  fetched = false
 ): Config {
   const next: Config = { ...config, [field]: models }
+  const listed = (list: readonly TranscriptionModel[], id: string): boolean =>
+    list.some((model) => model.id.trim() === id)
   for (const key of DEFAULTS_OF[field]) {
     const current = config[key]
     if (current === null) continue
     if (renamed && current === renamed.from) next[key] = renamed.to.trim() || null
-    else if (!models.some((model) => model.id.trim() === current)) next[key] = null
+    else if ((fetched || listed(config[field], current)) && !listed(models, current)) {
+      next[key] = null
+    }
   }
   return next
 }
@@ -117,7 +124,7 @@ function withFetchedModels(
     .slice(0, TRANSCRIPTION_MODELS_MAX)
     .map((model) => ({ id: model.id, label: labels.get(model.id) ?? model.label }))
   return {
-    config: withModels(config, field, models),
+    config: withModels(config, field, models, undefined, true),
     omitted: Math.max(0, fetched.length - TRANSCRIPTION_MODELS_MAX)
   }
 }
@@ -299,6 +306,12 @@ export function TranscriptionConfigFields({
             error={errors.defaultSummaryModel}
             onChange={(defaultSummaryModel) => update({ defaultSummaryModel })}
           />
+          <SwitchField
+            id={id('llm-disable-thinking')}
+            name="llmDisableThinking"
+            checked={config.llmDisableThinking}
+            onChange={(llmDisableThinking) => update({ llmDisableThinking })}
+          />
           <ConnectionTest
             target="llm"
             disabled={!config.llmBaseUrl}
@@ -306,7 +319,8 @@ export function TranscriptionConfigFields({
               target: 'llm',
               url: config.llmBaseUrl ?? undefined,
               apiKey: draftKey(secrets.llmApiKey),
-              model: config.defaultCorrectionModel ?? firstModel(config.llmModels)
+              model: config.defaultCorrectionModel ?? firstModel(config.llmModels),
+              disableThinking: config.llmDisableThinking
             })}
           />
         </div>
@@ -678,7 +692,7 @@ function SwitchField({
   onChange
 }: {
   id: string
-  name: 'diarizationEnabled' | 'defaultLlmCorrection'
+  name: 'diarizationEnabled' | 'defaultLlmCorrection' | 'llmDisableThinking'
   checked: boolean
   onChange: (checked: boolean) => void
 }): React.JSX.Element {
@@ -1046,6 +1060,11 @@ function DefaultModelSelect({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={AUTO}>{t('transcription.recording.admin.firstModel')}</SelectItem>
+            {value !== null && !models.some((model) => model.id.trim() === value) ? (
+              <SelectItem value={value}>
+                {t('transcription.recording.admin.unlistedModel', { id: value })}
+              </SelectItem>
+            ) : null}
             {models.map((model, index) =>
               model.id.trim() ? (
                 <SelectItem key={index} value={model.id.trim()}>
