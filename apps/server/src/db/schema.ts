@@ -72,7 +72,11 @@ export const session = pgTable(
     userAgent: text('user_agent'),
     userId: text('user_id')
       .notNull()
-      .references(() => user.id, { onDelete: 'cascade' })
+      .references(() => user.id, { onDelete: 'cascade' }),
+    // The Keycloak session this session was signed in with (`keycloak-session.ts`). Not a
+    // Better-Auth field, so it never reaches the client.
+    keycloakRefreshToken: text('keycloak_refresh_token'),
+    keycloakCheckedAt: timestamp('keycloak_checked_at')
   },
   (table) => [
     uniqueIndex('session_token_uidx').on(table.token),

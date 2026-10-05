@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { db } from './db/index.js'
 import * as schema from './db/schema.js'
 import { env } from './env.js'
+import { createKeycloakSessionKeeper, keycloakTokenRefresher } from './keycloak-session.js'
 import {
   filterLayout,
   freshDashboardIds,
@@ -165,6 +166,55 @@ async function initializeLayout(
   })
 }
 
+const keycloakSessions = createKeycloakSessionKeeper({
+  refresh: keycloakTokenRefresher({
+    issuer: env.KEYCLOAK_ISSUER,
+    clientId: env.KEYCLOAK_CLIENT_ID,
+    clientSecret: env.KEYCLOAK_CLIENT_SECRET
+  }),
+  store: {
+    async read(sessionId) {
+      const [record] = await db
+        .select({
+          refreshToken: schema.session.keycloakRefreshToken,
+          checkedAt: schema.session.keycloakCheckedAt
+        })
+        .from(schema.session)
+        .where(eq(schema.session.id, sessionId))
+        .limit(1)
+      return record ?? null
+    },
+    async save(sessionId, refreshToken, checkedAt) {
+      await db
+        .update(schema.session)
+        .set({ keycloakRefreshToken: refreshToken, keycloakCheckedAt: checkedAt })
+        .where(eq(schema.session.id, sessionId))
+    },
+    async end(sessionId) {
+      await db.delete(schema.session).where(eq(schema.session.id, sessionId))
+    }
+  }
+})
+
+/**
+ * Hands a new session the Keycloak refresh token of the sign-in that created it. Better-Auth has
+ * stored that sign-in's tokens on the account just before and runs this hook after its commit.
+ */
+async function bindKeycloakSession(session: { id: string; userId: string }): Promise<void> {
+  const [record] = await db
+    .select({ refreshToken: schema.account.refreshToken })
+    .from(schema.account)
+    .where(
+      and(eq(schema.account.userId, session.userId), eq(schema.account.providerId, 'keycloak'))
+    )
+    .limit(1)
+  if (!record?.refreshToken) return
+  await db
+    .update(schema.session)
+    .set({ keycloakRefreshToken: record.refreshToken, keycloakCheckedAt: new Date() })
+    .where(eq(schema.session.id, session.id))
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: 'pg', schema }),
   baseURL: env.BETTER_AUTH_URL,
@@ -181,6 +231,9 @@ export const auth = betterAuth({
     account: {
       create: { after: (account) => syncKeycloakAccount(account) },
       update: { after: (account) => syncKeycloakAccount(account) }
+    },
+    session: {
+      create: { after: (session) => bindKeycloakSession(session) }
     }
   },
   advanced: {
@@ -190,11 +243,14 @@ export const auth = betterAuth({
   plugins: [genericOAuth({ config: [keycloakConfig] })]
 })
 
-export function getSession(context: Context): ReturnType<typeof auth.api.getSession> {
-  return auth.api.getSession({
+export type AuthSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>
+
+/** The request's session, `null` when there is none or its Keycloak session has ended. */
+export async function getSession(context: Context): Promise<AuthSession | null> {
+  const session = await auth.api.getSession({
     headers: context.req.raw.headers,
     query: { disableCookieCache: true }
   })
+  if (!session) return null
+  return (await keycloakSessions.check(session.session.id)) ? session : null
 }
-
-export type AuthSession = NonNullable<Awaited<ReturnType<typeof getSession>>>
