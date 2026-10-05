@@ -14,6 +14,7 @@ import { Hono } from 'hono'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import WebSocket, { WebSocketServer } from 'ws'
 
+import { LiveEventProcessor } from '../../../../../web/src/adapters/transcription/live/events.js'
 import { createWebSocketServer } from '../../../websocket.js'
 import type { AppEnvironment } from '../../types.js'
 import { forgetKeys } from '../http.js'
@@ -37,6 +38,7 @@ import {
   type RealtimeTarget
 } from './gateway.js'
 import { realtimeRouter } from './index.js'
+import { LiveItems } from './items.js'
 import {
   base64Bytes,
   openaiTurnDetection,
@@ -1008,7 +1010,7 @@ function inside<T>(live: LiveSession, field: string): T {
   return (live as unknown as Record<string, T>)[field]!
 }
 
-describe('live sessions against a scripted gateway (review W-1 … W-8)', () => {
+describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 … X-5)', () => {
   let logged: string[]
 
   beforeEach(() => {
@@ -1079,6 +1081,25 @@ describe('live sessions against a scripted gateway (review W-1 … W-8)', () => 
     type: 'error',
     error: { code: 'input_audio_buffer_commit_empty', event_id: eventId }
   })
+  const delta = (itemId: string, text: string): unknown => ({
+    type: 'conversation.item.input_audio_transcription.delta',
+    item_id: itemId,
+    delta: text
+  })
+  const failed = (itemId: string): unknown => ({
+    type: 'conversation.item.input_audio_transcription.failed',
+    item_id: itemId,
+    error: { code: 'server_error', message: 'x' }
+  })
+  const tick = (ms = 5): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  /** What the web app shows of the events the browser got. */
+  function shown(client: FakeClient): { text: string; browser: LiveEventProcessor } {
+    const browser = new LiveEventProcessor()
+    let text = ''
+    for (const event of client.events) text += browser.handle(event).text ?? ''
+    return { text, browser }
+  }
 
   it('W-1: commits gpt-realtime-whisper’s audio at a quiet frame or after the longest turn', async () => {
     const { live, streams } = scripted('openai')
@@ -1329,7 +1350,7 @@ describe('live sessions against a scripted gateway (review W-1 … W-8)', () => 
     expect(client.of('conversation.item.input_audio_transcription.failed')).toHaveLength(
       announced.length
     )
-    expect(inside<Map<string, number>>(live, 'pending').size).toBe(0)
+    expect(inside<LiveItems>(live, 'items').size).toBe(0)
   })
 
   it('W-6: an item without its transcript in time fails, and the session goes on', async () => {
@@ -1414,6 +1435,212 @@ describe('live sessions against a scripted gateway (review W-1 … W-8)', () => 
     live.receive(append(100))
     expect(streams[1]!.of('input_audio_buffer.append')).toHaveLength(1)
     live.close()
+  })
+  it('X-1: stop confirms its own end however many commits of voice detection arrive late', async () => {
+    const { client, live, streams } = scripted('openai', {
+      model: 'gpt-4o-transcribe',
+      limits: { doneTimeoutMs: 2000 }
+    })
+    await live.start()
+    const [stream] = streams
+    const commits = (): number => stream!.of('input_audio_buffer.commit').length
+    live.receive(append(100, 24_000))
+    live.receive(COMMIT)
+    await waitFor(() => commits() === 1)
+    // Four earlier turns of voice detection, answered before the server's final commits.
+    for (let turn = 1; turn <= 4; turn += 1) {
+      stream!.deliver(committed(`item_vad_${turn}`))
+      stream!.deliver(completed(`item_vad_${turn}`))
+      await waitFor(() => commits() === turn + 1)
+    }
+    await tick(50)
+    expect(client.closed).toBeNull()
+    // The answer to final_1 is the last audio's item, to final_2 an empty buffer.
+    stream!.deliver(committed('item_last'))
+    await waitFor(() => commits() === 6)
+    stream!.deliver(empty('final_2'))
+    await tick(50)
+    expect(client.closed).toBeNull()
+    stream!.deliver(completed('item_last', 'Ende'))
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.normal)
+    expect(client.errorCodes).toEqual([])
+    expect(client.of('conversation.item.input_audio_transcription.completed')).toHaveLength(5)
+  })
+
+  it('X-1: final commits that never meet an empty buffer end the stop as an error', async () => {
+    const { client, live, streams } = scripted('openai', {
+      model: 'gpt-4o-transcribe',
+      limits: { doneTimeoutMs: 2000, pendingMax: 4 }
+    })
+    await live.start()
+    const [stream] = streams
+    live.receive(append(100, 24_000))
+    live.receive(COMMIT)
+    await waitFor(() => stream!.of('input_audio_buffer.commit').length === 1)
+    for (let turn = 0; turn < 20 && client.closed === null; turn += 1) {
+      stream!.deliver(committed(`item_vad_${turn}`))
+      stream!.deliver(completed(`item_vad_${turn}`))
+      // An empty buffer for a commit that is not a final one of the server's confirms nothing.
+      stream!.deliver(empty(null))
+      stream!.deliver(empty('rotate_1'))
+      await tick()
+    }
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.error)
+    expect(client.errorCodes).toEqual(['upstream_error'])
+    expect(stream!.of('input_audio_buffer.commit')).toHaveLength(6)
+  })
+
+  it('X-2: a last commit the gateway never answers ends the stop as an error, items failed once', async () => {
+    const { client, live, streams } = scripted('openai', { limits: { doneTimeoutMs: 15 } })
+    await live.start()
+    const [stream] = streams
+    stream!.deliver(committed('item_old'))
+    live.receive(append(100, 24_000))
+    live.receive(COMMIT)
+    await waitFor(() => client.closed !== null)
+    expect(stream!.of('input_audio_buffer.commit')).toEqual([
+      { type: 'input_audio_buffer.commit', event_id: 'final_1' }
+    ])
+    expect(client.closed?.code).toBe(CLOSE.error)
+    expect(client.errorCodes).toEqual(['upstream_error'])
+    expect(
+      client.of('conversation.item.input_audio_transcription.failed').map((e) => e.item_id)
+    ).toEqual(['item_old'])
+  })
+
+  it('X-2: a stream that closes before answering the last commit is no drain either', async () => {
+    const { client, live, streams } = scripted('openai', { limits: { doneTimeoutMs: 2000 } })
+    await live.start()
+    const [stream] = streams
+    live.receive(append(100, 24_000))
+    live.receive(COMMIT)
+    await waitFor(() => stream!.of('input_audio_buffer.commit').length === 1)
+    stream!.finish(1000)
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.error)
+    expect(client.errorCodes).toEqual(['upstream_error'])
+  })
+
+  it('X-3: what the gateway sends for an item after it expired changes nothing in the browser', async () => {
+    const { client, live, streams } = scripted('openai', {
+      limits: { itemTimeoutMs: 15, watchIntervalMs: 5 }
+    })
+    await live.start()
+    const [stream] = streams
+    stream!.deliver(committed('slow'))
+    stream!.deliver(delta('slow', 'Hallo'))
+    await waitFor(() => client.of('conversation.item.input_audio_transcription.failed').length > 0)
+    // Late: its transcript, its failure, a delta, its commit again and once more its transcript.
+    stream!.deliver(completed('slow', 'Hallo Welt'))
+    stream!.deliver(failed('slow'))
+    stream!.deliver(delta('slow', ' nochmal'))
+    stream!.deliver(committed('slow'))
+    stream!.deliver(completed('slow', 'Hallo Welt'))
+    await tick(30)
+    expect(live.closed).toBe(false)
+    const { text, browser } = shown(client)
+    expect(text).toBe('Hallo')
+    expect(browser.pending.size).toBe(0)
+    expect(client.of('input_audio_buffer.committed')).toHaveLength(1)
+    expect(client.of('conversation.item.input_audio_transcription.failed')).toHaveLength(1)
+    expect(client.of('conversation.item.input_audio_transcription.completed')).toEqual([])
+    live.close()
+  })
+
+  it('X-4: deltas of ids the gateway never committed keep no state, within its budget too', async () => {
+    let clock = Date.now()
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    try {
+      const { client, live, streams } = scripted('openai')
+      await live.start()
+      const [stream] = streams
+      // A hundred a second for 100 s, below the gateway's budget of 200.
+      for (let index = 0; index < 10_000; index += 1) {
+        clock += 10
+        stream!.deliver(delta(`ghost_${index}`, 'x'))
+      }
+      expect(live.closed).toBe(false)
+      expect(client.of('conversation.item.input_audio_transcription.delta')).toEqual([])
+      const { browser } = shown(client)
+      expect(inside<Map<string, string>>(browser as unknown as LiveSession, 'delivered').size).toBe(
+        0
+      )
+      expect(inside<LiveItems>(live, 'items').size).toBe(0)
+      live.close()
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('X-5: an item whose stream is closing before its decoding started fails on stop', async () => {
+    const { client, live, streams } = scripted('onprem')
+    await live.start()
+    const [stream] = streams
+    live.receive(append(100))
+    expect(stream!.of('input_audio_buffer.append')).toHaveLength(1)
+    stream!.readyState = WebSocket.CLOSING
+    live.receive(COMMIT)
+    await tick()
+    stream!.finish(1011)
+    await waitFor(() => client.closed !== null)
+    expect(stream!.of('input_audio_buffer.commit')).toEqual([])
+    expect(client.of('conversation.item.input_audio_transcription.failed')).toEqual([
+      expect.objectContaining({ item_id: `item_${live.id}` })
+    ])
+    expect(client.of('conversation.item.input_audio_transcription.completed')).toEqual([])
+  })
+
+  it('X-5: … and on a rotation, which goes on with the next item', async () => {
+    const { client, live, streams } = scripted('onprem', { limits: { rotateMinIntervalMs: 10 } })
+    await live.start()
+    const [old] = streams
+    live.receive(append(100))
+    old!.readyState = WebSocket.CLOSING
+    live.receive(KEEP_OPEN)
+    await tick()
+    old!.finish(1011)
+    await waitFor(() => inside<Item | null>(live, 'item') !== null && streams.length === 2)
+    expect(client.of('conversation.item.input_audio_transcription.failed')).toEqual([
+      expect.objectContaining({ item_id: `item_${live.id}` })
+    ])
+    expect(live.closed).toBe(false)
+    live.receive(append(100))
+    expect(streams[1]!.of('input_audio_buffer.append')).toHaveLength(1)
+    live.close()
+  })
+})
+
+describe('the items of a live session', () => {
+  it('end once, retired ids stay quiet, and the retired ids remembered are bounded', () => {
+    const sent: Record<string, unknown>[] = []
+    const items = new LiveItems((event) => sent.push(event as Record<string, unknown>), 2)
+    expect(items.track('a', 100)).toBe('opened')
+    expect(items.track('a', 100)).toBe('known')
+    items.announce('a')
+    items.announce('a')
+    expect(items.track('b')).toBe('opened')
+    expect(items.track('c')).toBe('full')
+    items.delta('c', 'x')
+    expect(items.expire(99)).toEqual([])
+    expect(items.expire(100)).toEqual(['a'])
+    expect(items.complete('a', 'late')).toBe(false)
+    expect(items.fail('a')).toBe(false)
+    expect(items.track('a')).toBe('known')
+    items.delta('a', 'late')
+    expect(items.complete('b', 'Hallo')).toBe(true)
+    expect(items.size).toBe(0)
+    expect(sent.map((event) => `${event.type} ${event.item_id}`)).toEqual([
+      'input_audio_buffer.committed a',
+      'conversation.item.input_audio_transcription.failed a',
+      'conversation.item.input_audio_transcription.completed b'
+    ])
+    for (let index = 0; index < 100; index += 1) {
+      items.track(`x${index}`)
+      items.fail(`x${index}`)
+    }
+    expect(inside<Set<string>>(items as unknown as LiveSession, 'retired').size).toBe(16)
   })
 })
 

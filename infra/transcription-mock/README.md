@@ -42,8 +42,8 @@ built yet answer `501`.
 The realtime WebSockets speak what the Campus server's live relay talks to: vLLM's protocol as
 the HRZ gateway serves Voxtral (`session.update {model}`, appends, `input_audio_buffer.commit
 {final: false}` to start decoding, `{final: true}` to end the stream with `transcription.done`)
-and OpenAI's transcription sessions (items as `input_audio_buffer.committed`, deltas and
-`…completed`; a commit without audio since the last item answers
+and OpenAI's transcription sessions (items as `input_audio_buffer.committed` at once when the
+buffer is committed, then deltas and `…completed`; a commit without audio since the last item answers
 `input_audio_buffer_commit_empty` with the commit's `event_id`). With `turn_detection:
 server_vad` the mock ends an item every three seconds of audio itself; without, as
 `gpt-realtime-whisper` wants it (which refuses voice detection with an `error`), only the

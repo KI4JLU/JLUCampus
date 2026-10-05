@@ -16,6 +16,7 @@ import {
   unavailableReason,
   type RealtimeTarget
 } from './gateway.js'
+import { LiveItems } from './items.js'
 import {
   appendEvent,
   bytesPerSecond,
@@ -39,23 +40,29 @@ import {
  * at a time, every message either side sends counts against a budget before it is parsed, and
  * nothing the gateway says reaches a log or the browser.
  *
+ * What the browser hears of an item, in either mode, `LiveItems` decides (`items.ts`): an item is
+ * open from its first audio or commit until it ends, once, with its transcript or as failed; of a
+ * retired item and of ids the gateway never opened nothing reaches the browser, and open items
+ * are `pendingMax` at most.
+ *
  * vLLM (`onprem`) streams one item per gateway stream: decoding starts after 300 ms of audio
  * (`input_audio_buffer.committed` tells the browser what it may wait for), a final commit ends the
  * stream with `transcription.done`. A `keep_open` commit seals the item and opens the next stream
- * at once; audio meanwhile is held and goes to the next item. A stream that closes before its
- * transcript came reports its item as failed.
+ * at once; audio meanwhile is held and goes to the next item. An item with audio whose stream
+ * closes before its transcript came, decoding or not, is reported as failed.
  *
  * OpenAI (`openai`) runs one stream. A model with voice detection finds the items itself; for one
  * without (`gpt-realtime-whisper`) the server commits the audio itself, at a quiet frame after
  * `openaiCommitMinMs` and at the latest after `openaiCommitMaxMs`, and counts the answers to its
- * commits. Stopping commits what is left and waits for the answer to that commit itself, not for
- * any: with voice detection until the gateway answers a commit of the server's with an empty
- * buffer. Items awaiting their transcript are bounded in number (`pendingMax`) and age
- * (`itemTimeoutMs`).
+ * commits. Committed items fail after `itemTimeoutMs` without their transcript.
  *
  * Stopping (a commit without `keep_open`) seals what is open, waits up to `doneTimeoutMs` for its
- * transcript and closes the browser's socket normally (1000). Errors go to the browser as `error`
- * events with the server's codes before the socket closes.
+ * transcript and closes the browser's socket normally (1000); an item without its transcript by
+ * then is reported as failed. For OpenAI the drain is complete only once the gateway confirmed
+ * the end of the audio: without voice detection by answering every commit of the server's, with
+ * it by answering a final commit of the server's (its `event_id`) with an empty buffer. Without
+ * that confirmation in time the browser gets `upstream_error` and the socket closes with 1011.
+ * Errors go to the browser as `error` events with the server's codes before the socket closes.
  */
 
 /** The browser's socket as the session uses it. */
@@ -147,8 +154,12 @@ const OPENAI_COMMIT_MIN_MS = 100
 /** A frame whose last 100 ms stay below this level (RMS of PCM16, about -40 dBFS) is quiet. */
 const QUIET_RMS = 330
 const QUIET_TAIL_MS = 100
-/** OpenAI with voice detection: final commits until the gateway answers one with an empty buffer. */
-const FINAL_COMMIT_ROUNDS = 4
+/**
+ * OpenAI with voice detection: final commits beyond `pendingMax` plus this many confirm nothing.
+ * Each further one follows an `input_audio_buffer.committed`, and beyond `pendingMax` new items
+ * the session ends anyway.
+ */
+const FINAL_COMMIT_SPARE_ROUNDS = 2
 /** What a message costs on the wire beyond its base64 audio, for the browser's byte budget. */
 const WIRE_OVERHEAD = 256
 
@@ -188,9 +199,7 @@ interface Item {
   bytes: number
   decoding: boolean
   sealing: boolean
-  /** Its transcript or the gateway's error for it came (the browser got completed or failed). */
-  terminal: boolean
-  /** Resolves once it is terminal or its stream closed. */
+  /** Resolves once its transcript or error came or its stream closed. */
   done: Promise<void>
   resolve: () => void
 }
@@ -305,8 +314,8 @@ export class LiveSession {
   private stream: WebSocket | null = null
   private streamGone = false
   private readonly vad: boolean
-  /** Items awaiting their transcript, with when they were committed. */
-  private readonly pending = new Map<string, number>()
+  /** The items of either mode, as the browser hears of them. */
+  private readonly items: LiveItems
   /** Audio sent since the server's last commit. */
   private uncommitted = 0
   private commitSeq = 0
@@ -314,7 +323,7 @@ export class LiveSession {
   private commitsInFlight = 0
   /** `input_audio_buffer.committed` events so far. */
   private committedCount = 0
-  /** With voice detection: the final commits, and whether one was answered with an empty buffer. */
+  /** With voice detection: the final commits, and whether one of them got an empty buffer. */
   private readonly finalCommits = new Set<string>()
   private finalEmpty = false
   /** Wakes `until` when something of the OpenAI stream changed. */
@@ -337,6 +346,7 @@ export class LiveSession {
     )
     this.upstreamMessages = new Budget(limits.upstreamMessageBurst, limits.upstreamMessageRate)
     this.upstreamBytes = new Budget(limits.upstreamByteBurst, limits.upstreamByteRate)
+    this.items = new LiveItems((event) => this.send(event), limits.pendingMax)
   }
 
   get closed(): boolean {
@@ -481,6 +491,8 @@ export class LiveSession {
     const item = this.item
     if (!item || !this.upstreamSend(item.socket, appendEvent(frame.audio))) return
     item.bytes += frame.bytes
+    // An item with audio has an outcome from now on, whether its decoding starts or not.
+    if (!this.openItem(item.id, null)) return
     if (!item.decoding && item.bytes >= (this.rate * START_DECODING_MS) / 1000) {
       this.startDecoding(item)
     }
@@ -490,7 +502,19 @@ export class LiveSession {
   private startDecoding(item: Item): void {
     item.decoding = true
     this.upstreamSend(item.socket, commitEvent(false))
-    this.send(clientEvents.committed(item.id))
+    if (this.openItem(item.id, null)) this.items.announce(item.id)
+  }
+
+  /**
+   * Opens an item (a known one stays as it is); beyond `pendingMax` open items the gateway
+   * leaves too many open, and the session ends.
+   */
+  private openItem(id: string, deadline: number | null): boolean {
+    if (this.items.track(id, deadline) !== 'full') return true
+    this.log('gateway leaves too many items open', { items: this.items.size })
+    this.items.failAll()
+    this.end(CLOSE.error, 'upstream_error')
+    return false
   }
 
   /** OpenAI without voice detection: a turn ends at a quiet frame, or after the longest turn. */
@@ -568,7 +592,6 @@ export class LiveSession {
       bytes: 0,
       decoding: false,
       sealing: false,
-      terminal: false,
       done: promise,
       resolve
     }
@@ -578,7 +601,7 @@ export class LiveSession {
       }
     })
     socket.once('close', (code: number) => {
-      // Not terminal: `seal` reports an item whose stream closed before its transcript.
+      // No outcome yet: `seal` reports an item whose stream closed before its transcript.
       resolve()
       // A stream that ends while its item still takes audio ends the session.
       if (!item.sealing && this.item === item) this.streamClosed(code)
@@ -591,7 +614,7 @@ export class LiveSession {
     if (this.closed) return false
     if (this.upstreamMessages.take(1) && this.upstreamBytes.take(rawLength(data))) return true
     this.log('gateway sends beyond the budget')
-    this.failPending()
+    this.items.failAll()
     this.end(CLOSE.error, 'upstream_error')
     return false
   }
@@ -630,21 +653,17 @@ export class LiveSession {
     if (!event || this.closed) return
     switch (event.type) {
       case 'delta':
-        if (event.delta && !item.terminal) this.send(clientEvents.delta(item.id, event.delta))
+        this.items.delta(item.id, event.delta)
         return
       case 'completed':
-        if (item.terminal) return
-        item.terminal = true
-        this.send(clientEvents.completed(item.id, event.transcript))
+        this.items.complete(item.id, event.transcript)
         item.resolve()
         return
       case 'error':
-        if (item.terminal) return
         // Of the gateway's error only that there was one; the item is resolved for the browser,
         // so a stop does not wait for a transcript that will not come.
-        this.log('gateway error event', { item: item.id })
-        item.terminal = true
-        this.send(clientEvents.failed(item.id))
+        this.items.track(item.id)
+        if (this.items.fail(item.id)) this.log('gateway error event', { item: item.id })
         item.resolve()
         return
       default:
@@ -658,40 +677,30 @@ export class LiveSession {
       case 'committed':
         this.committedCount += 1
         if (!this.vad && this.commitsInFlight > 0) this.commitsInFlight -= 1
-        if (!this.pending.has(event.itemId)) {
-          if (this.pending.size >= this.limits.pendingMax) {
-            this.log('gateway leaves too many items open', { items: this.pending.size })
-            this.failPending()
-            this.end(CLOSE.error, 'upstream_error')
-            return
-          }
-          this.pending.set(event.itemId, Date.now())
-          this.send(clientEvents.committed(event.itemId))
-        }
+        // A repeated or retired id changes nothing.
+        if (!this.openItem(event.itemId, Date.now() + this.limits.itemTimeoutMs)) return
+        this.items.announce(event.itemId)
         this.notify()
         return
       case 'delta':
-        if (event.itemId && event.delta) this.send(clientEvents.delta(event.itemId, event.delta))
+        // Only for an open item: ids the gateway never committed, or that are retired, keep no
+        // state anywhere.
+        if (event.itemId) this.items.delta(event.itemId, event.delta)
         return
       case 'completed':
-        if (!event.itemId) return
-        this.pending.delete(event.itemId)
-        this.send(clientEvents.completed(event.itemId, event.transcript))
+        if (event.itemId) this.items.complete(event.itemId, event.transcript)
         this.notify()
         return
       case 'failed':
-        if (!event.itemId) return
-        this.pending.delete(event.itemId)
-        this.send(clientEvents.failed(event.itemId))
+        if (event.itemId) this.items.fail(event.itemId)
         this.notify()
         return
       case 'error':
         if (event.code === OPENAI_COMMIT_EMPTY) {
           // The answer to a commit of the server's without audio left; nothing went wrong.
           if (!this.vad && this.commitsInFlight > 0) this.commitsInFlight -= 1
-          if (event.eventId === null || this.finalCommits.has(event.eventId)) {
-            this.finalEmpty = this.finalCommits.size > 0
-          }
+          // Only the answer to a final commit (its `event_id`) confirms the end of the audio.
+          if (event.eventId !== null && this.finalCommits.has(event.eventId)) this.finalEmpty = true
           this.notify()
           return
         }
@@ -703,19 +712,10 @@ export class LiveSession {
     }
   }
 
-  /** Reports every OpenAI item still awaiting its transcript as failed. */
-  private failPending(): void {
-    for (const itemId of this.pending.keys()) this.send(clientEvents.failed(itemId))
-    this.pending.clear()
-  }
-
   /** OpenAI items that waited longer than `itemTimeoutMs` for their transcript fail. */
   private expireItems(now: number): void {
-    for (const [itemId, committedAt] of this.pending) {
-      if (now - committedAt < this.limits.itemTimeoutMs) continue
+    for (const itemId of this.items.expire(now)) {
       this.log('no transcript in time', { item: itemId })
-      this.pending.delete(itemId)
-      this.send(clientEvents.failed(itemId))
     }
   }
 
@@ -742,7 +742,7 @@ export class LiveSession {
   private streamClosed(code: number): void {
     if (this.closed || this.phase === 'finalizing') return
     this.log('gateway closed the stream', { code })
-    this.failPending()
+    this.items.failAll()
     this.end(CLOSE.error, 'upstream_closed')
   }
 
@@ -808,7 +808,8 @@ export class LiveSession {
     } catch (error) {
       if (this.closed) return
       this.log('next stream failed', { failure: failureText(error) })
-      this.send(clientEvents.failed(nextId))
+      this.items.track(nextId)
+      this.items.fail(nextId)
       this.end(CLOSE.error, 'upstream_error')
       return
     }
@@ -826,7 +827,8 @@ export class LiveSession {
 
   /**
    * Ends an item: its last audio, the final commit, its transcript within `doneTimeoutMs`. An item
-   * whose stream closed, or that got nothing in time, is reported as failed, once.
+   * still open then, its stream closed or nothing in time, is reported as failed, once; also one
+   * whose stream was closing already, so that its decoding never started.
    */
   private async seal(item: Item): Promise<void> {
     item.sealing = true
@@ -835,12 +837,11 @@ export class LiveSession {
       this.upstreamSend(item.socket, commitEvent(true))
     }
     const finished = await this.within(item.done, this.limits.doneTimeoutMs)
-    if (!item.terminal && item.decoding && !this.closed) {
+    if (!this.closed && this.items.isOpen(item.id)) {
       this.log(finished ? 'stream closed before its transcript' : 'no transcript in time', {
         item: item.id
       })
-      item.terminal = true
-      this.send(clientEvents.failed(item.id))
+      this.items.fail(item.id)
     }
     this.retire(item.socket)
   }
@@ -875,6 +876,8 @@ export class LiveSession {
         const item = this.item
         const held = this.takeHold()
         if (item) {
+          // Held audio is the item's, sent or not: it has an outcome.
+          if (held.length > 0 && !this.openItem(item.id, null)) return
           for (const frame of held) {
             if (this.upstreamSend(item.socket, appendEvent(frame.audio))) item.bytes += frame.bytes
           }
@@ -890,41 +893,57 @@ export class LiveSession {
   }
 
   /**
-   * OpenAI: commits what has not become an item yet and waits for the answer to that commit and
-   * every transcript pending. Without voice detection the server knows its commits and counts
-   * their answers; with it, a commit of the gateway's may cross the server's, so the server
-   * commits again until one is answered with an empty buffer: then all audio is in items.
+   * OpenAI: commits what has not become an item yet, waits until the gateway confirmed that all
+   * audio is in items (`audioCommitted`) and then for every open item's transcript. Open items
+   * without one by `doneTimeoutMs` fail; audio whose end was not confirmed by then ends the session
+   * with `upstream_error` (1011) instead of the normal close.
    */
   private async drainOpenai(): Promise<void> {
     const stream = this.stream
     if (!stream) return
     for (const frame of this.takeHold()) this.forward(frame)
     const deadline = Date.now() + this.limits.doneTimeoutMs
+    const committed = await this.audioCommitted(deadline)
+    if (committed) await this.until(() => this.streamGone || this.items.size === 0, deadline)
+    if (this.closed) return
+    if (this.items.size > 0) {
+      this.log(this.streamGone ? 'stream closed before its transcripts' : 'no transcript in time', {
+        items: this.items.size
+      })
+      this.items.failAll()
+    }
+    if (committed || this.closed) return
+    this.log(this.streamGone ? 'stream closed before its last commit' : 'last commit not answered')
+    this.end(CLOSE.error, 'upstream_error')
+  }
+
+  /**
+   * Whether the gateway confirmed in time that all audio sent is in items. Without voice
+   * detection the server commits what is left and counts the answers to its commits; with it, a
+   * commit of the gateway's may cross the server's, so the server commits again after every
+   * `input_audio_buffer.committed` until a final commit of its own is answered with an empty
+   * buffer. The answer of a commit of the gateway's, however many, confirms nothing.
+   */
+  private async audioCommitted(deadline: number): Promise<boolean> {
     if (!this.vad) {
-      if (this.uncommitted > 0) this.openaiCommit('final')
-      await this.until(
-        () => this.streamGone || (this.commitsInFlight === 0 && this.pending.size === 0),
+      if (this.uncommitted > 0 && !this.openaiCommit('final')) return false
+      await this.until(() => this.streamGone || this.commitsInFlight === 0, deadline)
+      return !this.closed && this.commitsInFlight === 0
+    }
+    const rounds = this.limits.pendingMax + FINAL_COMMIT_SPARE_ROUNDS
+    for (let round = 0; !this.finalEmpty; round += 1) {
+      if (this.closed || this.streamGone || round >= rounds) return false
+      const before = this.committedCount
+      const eventId = this.openaiCommit('final')
+      if (!eventId) return false
+      this.finalCommits.add(eventId)
+      const answered = await this.until(
+        () => this.streamGone || this.finalEmpty || this.committedCount > before,
         deadline
       )
-    } else {
-      for (let round = 0; round < FINAL_COMMIT_ROUNDS && !this.streamGone; round += 1) {
-        const before = this.committedCount
-        const eventId = this.openaiCommit('final')
-        if (!eventId) break
-        this.finalCommits.add(eventId)
-        const answered = await this.until(
-          () => this.streamGone || this.finalEmpty || this.committedCount > before,
-          deadline
-        )
-        if (!answered || this.finalEmpty) break
-      }
-      await this.until(() => this.streamGone || this.pending.size === 0, deadline)
+      if (!answered) return false
     }
-    if (this.closed || this.pending.size === 0) return
-    this.log(this.streamGone ? 'stream closed before its transcripts' : 'no transcript in time', {
-      items: this.pending.size
-    })
-    this.failPending()
+    return !this.closed
   }
 
   /** The watchdog: sessions without audio or beyond their lifetime are finalized. */
@@ -979,7 +998,7 @@ export class LiveSession {
     this.notify()
     this.hold = []
     this.holdBytes = 0
-    this.pending.clear()
+    this.items.clear()
     const client = this.options.client
     try {
       client.close(closeCode, reason)

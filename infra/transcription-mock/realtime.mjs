@@ -256,16 +256,19 @@ class MockStream {
     this.queueSentence()
   }
 
-  /** The next sentence, after those already on their way. */
+  /**
+   * The next sentence, after those already on their way. OpenAI announces the item at once, as
+   * it commits the buffer before it answers the next event; its transcript follows.
+   */
   queueSentence() {
     const sentence = SCRIPT[this.sentence % SCRIPT.length]
     this.sentence += 1
     const itemId = `item_mock_${++this.item}`
+    if (this.mode === 'openai') this.send({ type: 'input_audio_buffer.committed', item_id: itemId })
     this.sending = this.sending.then(() => this.sendSentence(itemId, sentence)).catch(() => {})
   }
 
   async sendSentence(itemId, sentence) {
-    if (this.mode === 'openai') this.send({ type: 'input_audio_buffer.committed', item_id: itemId })
     const deltas = sentenceDeltas(sentence)
     // vLLM streams one text per stream: a further sentence starts with its space.
     if (this.mode === 'onprem' && this.text) deltas[0] = ` ${deltas[0]}`

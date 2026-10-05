@@ -461,12 +461,18 @@ protocol and lifecycle in the server itself.
   and a session that ends meanwhile, or before, creates or keeps nothing of it. A refused handshake with 401/403 asks the gateway's model list with the same key:
   without the model it is `model_not_allowed` (the HRZ key's `403` for `voxtral-mini-realtime`),
   a failing list `gateway_key_rejected`. Stop (a commit) seals the open item, waits up to 15 s for
-  its transcript and closes the socket with 1000; the browser waits for that at most 20 s. An item
-  whose stream closes before its transcript, or without it in time, comes as `…failed`. For OpenAI
-  stop commits what is left and waits for the answer to that commit itself: with voice detection,
-  where a commit of the gateway's may cross it, it commits again until one is answered with an
-  empty buffer. OpenAI items awaiting their transcript are 32 at most (beyond, the session ends
-  with `upstream_error`) and fail after 30 s. A
+  its transcript and closes the socket with 1000; the browser waits for that at most 20 s. One
+  item model serves both modes (`realtime/items.ts`): an item is open from its first audio or
+  commit until it ends once, with its transcript or as `…failed`; deltas reach the browser only for
+  open items, nothing of a retired one or of an id the gateway never committed. An item with audio
+  whose stream closes before its transcript, decoding or not, or without it in time, comes as
+  `…failed`. For OpenAI stop commits what is left and waits for the answer to that commit itself:
+  without voice detection for the answer to every commit of the server's, with it, where commits
+  of the gateway's may cross it, it commits again after each `…committed` until one of its final
+  commits (by `event_id`) is answered with an empty buffer. Without that confirmation in 15 s the
+  browser gets `upstream_error` and 1011, not a normal close. OpenAI items awaiting their
+  transcript are 32 at most (beyond, the session ends with `upstream_error`) and fail after 30 s;
+  what the gateway sends for them afterwards is dropped. A
   `keep_open` commit seals the item and opens the next stream at once, holding the audio
   meanwhile; commits during a rotation fold into one more, at most one per second. A session
   without audio for 60 s or longer than 4 h is finalized like a stop (`session_idle`,
