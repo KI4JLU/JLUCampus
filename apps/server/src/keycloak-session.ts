@@ -64,10 +64,20 @@ export function createKeycloakSessionKeeper(options: {
 
     const result = await refresh(record.refreshToken)
     if (result.status === 'ended') {
+      // Another server process may have spent the same token a moment earlier; where Keycloak
+      // revokes used tokens, this one is then refused although the session lives on.
+      const latest = await store.read(sessionId)
+      if (latest?.refreshToken && latest.refreshToken !== record.refreshToken) return true
       await store.end(sessionId)
       return false
     }
-    if (result.status === 'active') await store.save(sessionId, result.refreshToken, time)
+    // Without an answer the old token stays, and the next try waits an interval as well, so an
+    // outage neither ends sessions nor slows every request down.
+    await store.save(
+      sessionId,
+      result.status === 'active' ? result.refreshToken : record.refreshToken,
+      time
+    )
     return true
   }
 

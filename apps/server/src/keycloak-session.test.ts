@@ -81,16 +81,34 @@ describe('Keycloak session keeper', () => {
     expect(ended).toEqual(['s1'])
   })
 
-  it('keeps the session and checks again next time when Keycloak cannot answer', async () => {
-    const { keeper, refresh, ended, record } = setup(
+  it('keeps the session when Keycloak cannot answer and tries again an interval later', async () => {
+    const { keeper, refresh, ended, record, advance } = setup(
       { refreshToken: 'r1', checkedAt: null },
       { status: 'unavailable' }
     )
     await expect(keeper.check('s1')).resolves.toBe(true)
     await expect(keeper.check('s1')).resolves.toBe(true)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(record()).toEqual({ refreshToken: 'r1', checkedAt: start })
+    advance(5 * minute)
+    await expect(keeper.check('s1')).resolves.toBe(true)
     expect(refresh).toHaveBeenCalledTimes(2)
     expect(ended).toEqual([])
-    expect(record()).toEqual({ refreshToken: 'r1', checkedAt: null })
+  })
+
+  it('keeps a session whose token another process has just refreshed', async () => {
+    const reads = ['r1', 'r2']
+    const end = vi.fn(async () => {})
+    const keeper = createKeycloakSessionKeeper({
+      refresh: async () => ({ status: 'ended' }),
+      store: {
+        read: async () => ({ refreshToken: reads.shift() ?? 'r2', checkedAt: null }),
+        save: async () => {},
+        end
+      }
+    })
+    await expect(keeper.check('s1')).resolves.toBe(true)
+    expect(end).not.toHaveBeenCalled()
   })
 
   it('ends a session without a Keycloak token', async () => {

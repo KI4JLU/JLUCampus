@@ -197,21 +197,28 @@ const keycloakSessions = createKeycloakSessionKeeper({
 })
 
 /**
- * Hands a new session the Keycloak refresh token of the sign-in that created it. Better-Auth has
- * stored that sign-in's tokens on the account just before and runs this hook after its commit.
+ * The Keycloak refresh token of each sign-in request, by Better-Auth's endpoint context: the
+ * account hook stores it and the session hook of the same request takes it. Reading it back from
+ * the account row instead could pick up the token of another device signing in at the same time.
  */
-async function bindKeycloakSession(session: { id: string; userId: string }): Promise<void> {
-  const [record] = await db
-    .select({ refreshToken: schema.account.refreshToken })
-    .from(schema.account)
-    .where(
-      and(eq(schema.account.userId, session.userId), eq(schema.account.providerId, 'keycloak'))
-    )
-    .limit(1)
-  if (!record?.refreshToken) return
+const signInRefreshTokens = new WeakMap<object, string>()
+
+function rememberSignInToken(
+  account: { providerId: string; refreshToken?: string | null },
+  context: object | null
+): void {
+  if (context && account.providerId === 'keycloak' && account.refreshToken) {
+    signInRefreshTokens.set(context, account.refreshToken)
+  }
+}
+
+/** Hands a new session the Keycloak refresh token of the sign-in that created it. */
+async function bindKeycloakSession(session: { id: string }, context: object | null): Promise<void> {
+  const refreshToken = context ? signInRefreshTokens.get(context) : undefined
+  if (!refreshToken) return
   await db
     .update(schema.session)
-    .set({ keycloakRefreshToken: record.refreshToken, keycloakCheckedAt: new Date() })
+    .set({ keycloakRefreshToken: refreshToken, keycloakCheckedAt: new Date() })
     .where(eq(schema.session.id, session.id))
 }
 
@@ -229,13 +236,26 @@ export const auth = betterAuth({
   },
   databaseHooks: {
     account: {
-      create: { after: (account) => syncKeycloakAccount(account) },
-      update: { after: (account) => syncKeycloakAccount(account) }
+      create: {
+        after: async (account, context) => {
+          rememberSignInToken(account, context)
+          await syncKeycloakAccount(account)
+        }
+      },
+      update: {
+        after: async (account, context) => {
+          rememberSignInToken(account, context)
+          await syncKeycloakAccount(account)
+        }
+      }
     },
     session: {
-      create: { after: (session) => bindKeycloakSession(session) }
+      create: { after: (session, context) => bindKeycloakSession(session, context) }
     }
   },
+  // Nothing uses the account's Keycloak tokens; refreshing them here would compete with the
+  // session's own refresh token (`keycloak-session.ts`) where Keycloak revokes used tokens.
+  disabledPaths: ['/refresh-token', '/get-access-token'],
   advanced: {
     useSecureCookies: true,
     defaultCookieAttributes: { sameSite: 'none', secure: true }

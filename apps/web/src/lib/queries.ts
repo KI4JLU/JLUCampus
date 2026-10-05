@@ -116,10 +116,17 @@ export const queryKeys = {
   translatorGlossaries: ['translator', 'glossaries'] as const
 }
 
+/**
+ * The app shell keeps this query mounted, so it doubles as a heartbeat: each request lets the
+ * server keep the Keycloak session alive that embedded sites sign in with (`keycloak-session.ts`
+ * on the server), also while the user works inside an embedded site, records or transcribes.
+ */
 export const meQuery = queryOptions({
   queryKey: queryKeys.me,
   queryFn: () => apiFetch<Me>(API.me),
-  staleTime: 5 * 60_000
+  staleTime: 5 * 60_000,
+  refetchInterval: 4 * 60_000,
+  refetchIntervalInBackground: true
 })
 
 /**

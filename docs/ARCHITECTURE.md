@@ -80,15 +80,18 @@ Copy `.env.example` to `.env` at the repo root. The server loads the root
   the same Keycloak sign in silently through the Keycloak session of the app's sign-in, as
   long as it lives. Keycloak ends idle sessions after 30 minutes by default while an app
   session lasts a week, and its login page refuses to be framed (`X-Frame-Options` and
-  `frame-ancestors 'self'`). So each app session is tied to its Keycloak session: a session
-  create hook copies the sign-in's refresh token into `session.keycloak_refresh_token`; at
-  most every five minutes of API use the server refreshes it at Keycloak's token endpoint,
-  which keeps the Keycloak session from idling out. When Keycloak answers `invalid_grant`
-  (idle or maximum lifetime reached, signed out elsewhere, user disabled), the app session
-  is deleted and the request gets `401`; other failures keep the session. Sessions without
-  a token (older than this check) end on their next request. The IFrame page asks `/api/me`
-  before it loads the site, so an ended session shows the login page rather than a frame
-  Keycloak refuses to fill. Embedded sites must allow framing by the app's origin, and in
+  `frame-ancestors 'self'`). So each app session is tied to its Keycloak session: the
+  account hook of a sign-in passes its refresh token, by request context, to the session
+  hook, which stores it in `session.keycloak_refresh_token`. At most every five minutes of
+  API use the server refreshes it at Keycloak's token endpoint, which keeps the Keycloak
+  session from idling out; the web app's `meQuery` refetches every four minutes as a
+  heartbeat while it is open. When Keycloak answers `invalid_grant` (idle or maximum
+  lifetime reached, signed out elsewhere, user disabled), the app session is deleted and the
+  request gets `401`. Other failures keep the session and wait an interval before trying
+  again. Sessions without a token (older than this check) end on their next request.
+  Better-Auth's `/refresh-token` and `/get-access-token` are disabled so nothing else spends
+  Keycloak tokens. The IFrame page asks `/api/me` before it loads the site, so an ended
+  session shows the login page rather than a frame Keycloak refuses to fill. Embedded sites must allow framing by the app's origin, and in
   the desktop app (`app://-`, cross-site to every site) their own session cookie must be
   `SameSite=None; Secure`.
 - Sign-in from the client: Better-Auth 1.7 registers generic OAuth providers as
