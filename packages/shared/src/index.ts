@@ -5,6 +5,15 @@
  * clients type their responses from them.
  */
 import { z } from 'zod'
+import { httpsUrlSchema, SECRET_VALUE_MAX } from './common'
+import {
+  TRANSCRIPTION_SECRET_KEYS,
+  transcriptionComponentConfigSchema,
+  type TranscriptionComponentConfig
+} from './transcription'
+
+export { httpsUrlSchema, SECRET_VALUE_MAX } from './common'
+export * from './transcription'
 
 // ---------------------------------------------------------------------------
 // Languages
@@ -92,14 +101,21 @@ export const TILE_DEFAULT_H = 6
 
 /**
  * Component adapters: `iframe` embeds a site, `rss` shows a feed, `link` is a
- * shortcut that opens its URL outside the app, `translator` is a module (see
+ * shortcut that opens its URL outside the app, `translator` and `transcription` are modules (see
  * `SINGLETON_COMPONENT_TYPES`), `files` a desktop component (see
  * `DESKTOP_COMPONENT_TYPES`). The type decides the page and the widgets a
  * component adds (see `COMPONENT_WIDGETS`). A future adapter (Stud.IP, …) adds
  * a literal here, a config schema, its widgets, and a renderer in the web
  * app's adapter registry.
  */
-export const COMPONENT_TYPES = ['iframe', 'rss', 'link', 'translator', 'files'] as const
+export const COMPONENT_TYPES = [
+  'iframe',
+  'rss',
+  'link',
+  'translator',
+  'transcription',
+  'files'
+] as const
 export const componentTypeSchema = z.enum(COMPONENT_TYPES)
 export type ComponentType = z.infer<typeof componentTypeSchema>
 
@@ -111,7 +127,10 @@ export type ComponentType = z.infer<typeof componentTypeSchema>
  * `API.module(type)`, may keep secrets (API keys, see `COMPONENT_SECRETS`)
  * and may own database tables that reference its component.
  */
-export const SINGLETON_COMPONENT_TYPES = ['translator'] as const satisfies readonly ComponentType[]
+export const SINGLETON_COMPONENT_TYPES = [
+  'translator',
+  'transcription'
+] as const satisfies readonly ComponentType[]
 export type SingletonComponentType = (typeof SINGLETON_COMPONENT_TYPES)[number]
 
 export function isSingletonType(type: ComponentType): type is SingletonComponentType {
@@ -140,27 +159,6 @@ export function isDesktopComponentType(type: ComponentType): type is DesktopComp
 export function isBuiltInType(type: ComponentType): boolean {
   return isSingletonType(type) || isDesktopComponentType(type)
 }
-
-/** `https:` anywhere, `http:` only for loopback hosts in development. */
-export const httpsUrlSchema = z
-  .string()
-  .trim()
-  .max(2048)
-  .url()
-  .refine(
-    (value) => {
-      // Zod 4 still runs refinements after `.url()` failed, so parsing must not throw.
-      let url: URL
-      try {
-        url = new URL(value)
-      } catch {
-        return false
-      }
-      if (url.protocol === 'https:') return true
-      return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-    },
-    { message: 'URL must use https (http is only allowed for localhost)' }
-  )
 
 /**
  * Any `http:` or `https:` URL. Used where nothing is embedded into the app
@@ -309,6 +307,7 @@ export type ComponentConfig =
   | RssComponentConfig
   | LinkComponentConfig
   | TranslatorComponentConfig
+  | TranscriptionComponentConfig
   | DesktopComponentConfig
 
 // ---------------------------------------------------------------------------
@@ -326,14 +325,13 @@ export const COMPONENT_SECRETS = {
   rss: [],
   link: [],
   translator: ['deeplApiKey', 'llmApiKey'],
+  transcription: TRANSCRIPTION_SECRET_KEYS,
   files: []
 } as const satisfies { [T in ComponentType]: readonly string[] }
 
 export type SecretKey<T extends ComponentType = ComponentType> = T extends ComponentType
   ? (typeof COMPONENT_SECRETS)[T][number]
   : never
-
-export const SECRET_VALUE_MAX = 4096
 
 /**
  * A change to one secret: a string sets it, `null` removes it, an absent key
@@ -345,8 +343,23 @@ const translatorSecretsInputSchema = z
   .strictObject({ deeplApiKey: secretChangeSchema, llmApiKey: secretChangeSchema })
   .optional()
 
+const transcriptionSecretsInputSchema = z
+  .strictObject({
+    apiKey: secretChangeSchema,
+    diarizationApiKey: secretChangeSchema,
+    llmApiKey: secretChangeSchema,
+    openaiRealtimeApiKey: secretChangeSchema
+  })
+  .optional()
+
 /** Which of a component's secrets are set, keyed by secret. */
 const translatorSecretsStatusSchema = z.object({ deeplApiKey: z.boolean(), llmApiKey: z.boolean() })
+const transcriptionSecretsStatusSchema = z.object({
+  apiKey: z.boolean(),
+  diarizationApiKey: z.boolean(),
+  llmApiKey: z.boolean(),
+  openaiRealtimeApiKey: z.boolean()
+})
 const noSecretsStatusSchema = z.object({})
 
 /**
@@ -387,6 +400,11 @@ export const componentInputSchema = z.discriminatedUnion('type', [
     config: translatorComponentConfigSchema,
     secrets: translatorSecretsInputSchema
   }),
+  componentBaseSchema.extend({
+    type: z.literal('transcription'),
+    config: transcriptionComponentConfigSchema,
+    secrets: transcriptionSecretsInputSchema
+  }),
   componentBaseSchema.extend({ type: z.literal('files'), config: desktopComponentConfigSchema })
 ])
 export type ComponentInput = z.infer<typeof componentInputSchema>
@@ -407,6 +425,10 @@ export const componentSchema = z.discriminatedUnion('type', [
   storedComponentSchema.extend({
     type: z.literal('translator'),
     config: translatorComponentConfigSchema
+  }),
+  storedComponentSchema.extend({
+    type: z.literal('transcription'),
+    config: transcriptionComponentConfigSchema
   }),
   storedComponentSchema.extend({ type: z.literal('files'), config: desktopComponentConfigSchema })
 ])
@@ -436,6 +458,11 @@ export const adminComponentSchema = z.discriminatedUnion('type', [
     type: z.literal('translator'),
     config: translatorComponentConfigSchema,
     secrets: translatorSecretsStatusSchema
+  }),
+  storedComponentSchema.extend({
+    type: z.literal('transcription'),
+    config: transcriptionComponentConfigSchema,
+    secrets: transcriptionSecretsStatusSchema
   }),
   storedComponentSchema.extend({
     type: z.literal('files'),
@@ -469,13 +496,18 @@ export interface WidgetDefinition {
  * component offers all widgets of its type; there is nothing to configure per
  * widget. `iframe.launcher` opens the page, `rss.feed` lists the newest
  * entries, `link.shortcut` opens the URL outside the app, `translator.quick`
- * translates a short text in place.
+ * translates a short text in place, `transcription.quick` starts a transcription (and counts the
+ * running ones), `transcription.recent` lists the newest saved transcripts.
  */
 export const COMPONENT_WIDGETS = {
   iframe: { launcher: { minW: TILE_MIN_W, minH: TILE_MIN_H } },
   rss: { feed: { minW: TILE_MIN_W, minH: TILE_MIN_H } },
   link: { shortcut: { minW: TILE_MIN_W, minH: TILE_MIN_H } },
   translator: { quick: { minW: 3, minH: 5 } },
+  transcription: {
+    quick: { minW: TILE_MIN_W, minH: TILE_MIN_H },
+    recent: { minW: 3, minH: 4 }
+  },
   files: {}
 } as const satisfies { [T in ComponentType]: Record<string, WidgetDefinition> }
 
@@ -1425,6 +1457,8 @@ export const API_ERROR_CODES = [
   'module_unavailable',
   /** `API.translatorDocuments`: the user has too many running jobs or uploads (429). */
   'rate_limited',
+  /** A route that is declared but not built yet (501). */
+  'not_implemented',
   'internal'
 ] as const
 export const apiErrorCodeSchema = z.enum(API_ERROR_CODES)

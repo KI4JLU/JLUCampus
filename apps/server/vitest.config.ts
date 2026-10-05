@@ -13,7 +13,12 @@ export default defineConfig({
       CORS_ORIGINS: 'http://localhost:5173',
       KEYCLOAK_ISSUER: 'http://localhost:8080/realms/test',
       KEYCLOAK_CLIENT_ID: 'test',
-      KEYCLOAK_CLIENT_SECRET: 'test'
+      KEYCLOAK_CLIENT_SECRET: 'test',
+      TRANSCRIPTION_S3_ENDPOINT: 'http://127.0.0.1:1',
+      TRANSCRIPTION_S3_PUBLIC_ENDPOINT: 'http://storage.test',
+      TRANSCRIPTION_S3_BUCKET: 'test-transcription',
+      TRANSCRIPTION_S3_ACCESS_KEY: 'test',
+      TRANSCRIPTION_S3_SECRET_KEY: 'test'
     }
   }
 })

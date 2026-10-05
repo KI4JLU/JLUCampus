@@ -1,14 +1,14 @@
-import { API, COMPONENT_SECRETS, componentTypeSchema, isSingletonType } from '@justcampus/shared'
-import { and, desc, eq } from 'drizzle-orm'
+import { API, componentTypeSchema, isSingletonType } from '@justcampus/shared'
+import { desc } from 'drizzle-orm'
 import type { Hono, MiddlewareHandler } from 'hono'
+import type { ZodType } from 'zod'
 
 import { ApiError } from '../api.js'
 import { db } from '../db/index.js'
 import { component } from '../db/schema.js'
-import { env } from '../env.js'
-import { decryptSecret } from '../secrets.js'
 import { desktopComponentDefaults, moduleRegistry } from './registry.js'
-import type { AppEnvironment, ModuleConfigMap, ModuleRuntime, ModuleSecretsMap } from './types.js'
+import { loadModuleRuntime } from './runtime.js'
+import type { AnyModuleRuntime, AppEnvironment, ModuleConfigMap } from './types.js'
 
 /** Loads a module's component row with its config and decrypted secrets. */
 function moduleMiddleware(enabledOnly: boolean): MiddlewareHandler<AppEnvironment> {
@@ -19,39 +19,14 @@ function moduleMiddleware(enabledOnly: boolean): MiddlewareHandler<AppEnvironmen
     }
     const type = parsedType.data
 
-    const [record] = await db
-      .select()
-      .from(component)
-      .where(
-        and(
-          eq(component.type, type),
-          eq(component.singleton, true),
-          enabledOnly ? eq(component.enabled, true) : undefined
-        )
-      )
-      .limit(1)
-    if (!record) throw new ApiError(404, 'not_found', 'Module not found')
-
     const serverModule = moduleRegistry[type]
-    const config = serverModule.configSchema.parse(record.config) as ModuleConfigMap[typeof type]
-    const secrets = Object.fromEntries(
-      COMPONENT_SECRETS[type].map((secretKey) => {
-        const encrypted = record.secrets[secretKey]
-        return [
-          secretKey,
-          encrypted
-            ? decryptSecret(encrypted, env.COMPONENT_SECRETS_KEY, record.id, secretKey)
-            : null
-        ]
-      })
-    ) as ModuleSecretsMap[typeof type]
-
-    context.set('module', {
+    const runtime = await loadModuleRuntime(
       type,
-      componentId: record.id,
-      config,
-      secrets
-    } as ModuleRuntime<typeof type>)
+      serverModule.configSchema as ZodType<ModuleConfigMap[typeof type]>,
+      enabledOnly
+    )
+    if (!runtime) throw new ApiError(404, 'not_found', 'Module not found')
+    context.set('module', runtime as AnyModuleRuntime)
     await next()
   }
 }

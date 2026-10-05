@@ -69,7 +69,7 @@ import {
   widgetRefsFromDashboard
 } from './logic.js'
 import { registerModuleRoutes, type AppEnvironment } from './modules/index.js'
-import { isTrustedRequest } from './origin.js'
+import { isTrustedRequest, trustedOrigins as originsOf } from './origin.js'
 import { encryptSecret } from './secrets.js'
 
 function parseId(value: string, label: string): string {
@@ -241,7 +241,7 @@ app.use(
 )
 
 /** The web app's origins, and the API's own when it serves the web app itself. */
-const trustedOrigins = [...env.CORS_ORIGINS, new URL(env.BETTER_AUTH_URL).origin]
+const trustedOrigins = originsOf(env.CORS_ORIGINS, env.BETTER_AUTH_URL)
 
 // CSRF: CORS does not stop simple cross-site requests from arriving (see `isTrustedRequest`).
 app.use('/api/*', async (context, next) => {

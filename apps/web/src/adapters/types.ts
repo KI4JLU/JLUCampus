@@ -1,4 +1,5 @@
 import type { ComponentType as ReactComponentType } from 'react'
+import type { TFunction } from 'i18next'
 import type { Component, ComponentType, DesktopModuleId, WidgetKey } from '@justcampus/shared'
 import type { SecretDrafts } from '@/lib/component-secrets'
 
@@ -24,6 +25,11 @@ export interface ComponentConfigFieldsProps<T extends ComponentType> {
 export interface WidgetView<T extends ComponentType> {
   /** Body of a dashboard tile; fills the whole tile. */
   Tile: ReactComponentType<ComponentViewProps<T>>
+  /**
+   * What the widget shows, beside its component's name where widgets are listed to add; for
+   * types that offer more than one widget.
+   */
+  name?: (t: TFunction) => string
 }
 
 /**

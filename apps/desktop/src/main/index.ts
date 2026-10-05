@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol, session, shell, systemPreferences } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { is } from '@electron-toolkit/utils'
@@ -9,6 +9,7 @@ import {
   type DesktopModuleId
 } from '@justcampus/shared'
 import { initializeLanguage, onLanguageChange, setLanguage, t } from './i18n'
+import { allowPermissionCheck, allowPermissionRequest } from './media-permissions'
 import { modules } from './modules'
 import type { DesktopMainModule } from './modules/types'
 import { resolveStaticFile } from './static'
@@ -37,7 +38,28 @@ function origin(value: string): string {
 const apiOrigin = origin(
   process.env.JUSTCAMPUS_API_URL ?? import.meta.env.MAIN_VITE_API_URL ?? 'http://localhost:3000'
 )
+/** The API's WebSocket origin (live transcription): `ws:`/`wss:` for `http:`/`https:`. */
+const apiSocketOrigin = apiOrigin.replace(/^http/, 'ws')
 const keycloakOrigin = origin(process.env.JUSTCAMPUS_KEYCLOAK_ORIGIN ?? 'http://localhost:8080')
+/**
+ * Origins besides the API the renderer fetches from and plays media of: the transcription
+ * module's object storage (signed upload and playback URLs). Space or comma separated;
+ * `JUSTCAMPUS_CONNECT_ORIGINS` at runtime, else the build's `DESKTOP_CONNECT_ORIGINS`.
+ */
+const connectOrigins = (
+  process.env.JUSTCAMPUS_CONNECT_ORIGINS ??
+  import.meta.env.MAIN_VITE_CONNECT_ORIGINS ??
+  'http://localhost:9100'
+)
+  .split(/[\s,]+/)
+  .flatMap((value) => {
+    try {
+      return value ? [origin(value)] : []
+    } catch {
+      return []
+    }
+  })
+  .join(' ')
 const developmentUrl = process.env.JUSTCAMPUS_WEB_DEV_URL ?? 'http://localhost:5173'
 const rendererDirectory = resolve(__dirname, '../renderer')
 
@@ -78,18 +100,58 @@ function isAllowedNavigation(url: string): boolean {
   }
 }
 
+/**
+ * macOS asks once per app before any process may record; Chromium's own prompt does not cover it.
+ * Resolves with whether the microphone may be used.
+ */
+async function systemMicrophoneAccess(): Promise<boolean> {
+  if (process.platform !== 'darwin') return true
+  const status = systemPreferences.getMediaAccessStatus('microphone')
+  if (status === 'granted') return true
+  if (status !== 'not-determined') return false
+  return systemPreferences.askForMediaAccess('microphone')
+}
+
 function configureSession(): void {
-  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) =>
-    callback(false)
+  // The renderer may record audio (transcription) and show the live transcript in fullscreen;
+  // everything else, and anything an embedded site asks for, stays refused.
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const allowed =
+      contents === mainWindow?.webContents &&
+      allowPermissionRequest(
+        {
+          permission,
+          url: details.requestingUrl,
+          isMainFrame: details.isMainFrame,
+          mediaTypes: 'mediaTypes' in details ? details.mediaTypes : undefined
+        },
+        isRendererUrl
+      )
+    if (!allowed || permission !== 'media') return callback(allowed)
+    systemMicrophoneAccess().then(callback, () => callback(false))
+  })
+  session.defaultSession.setPermissionCheckHandler((contents, permission, origin, details) =>
+    Boolean(
+      contents &&
+      contents === mainWindow?.webContents &&
+      allowPermissionCheck(
+        {
+          permission,
+          url: details.requestingUrl ?? origin,
+          isMainFrame: details.isMainFrame,
+          mediaType: details.mediaType
+        },
+        isRendererUrl
+      )
+    )
   )
-  session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     if (new URL(details.url).protocol !== 'app:')
       return callback({ responseHeaders: details.responseHeaders })
 
     const responseHeaders = { ...details.responseHeaders }
     responseHeaders['Content-Security-Policy'] = [
-      `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${apiOrigin}; frame-src https: http://localhost:*; object-src 'none'; base-uri 'none'`
+      `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${apiOrigin} ${apiSocketOrigin} ${connectOrigins}; media-src 'self' blob: data: ${apiOrigin} ${connectOrigins}; frame-src https: http://localhost:*; object-src 'none'; base-uri 'none'`
     ]
     callback({ responseHeaders })
   })

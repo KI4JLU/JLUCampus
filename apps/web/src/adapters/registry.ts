@@ -1,10 +1,12 @@
 import type { ComponentType as ReactComponentType } from 'react'
+import type { TFunction } from 'i18next'
 import type { Component, ComponentType, DesktopModuleId } from '@justcampus/shared'
 import { desktopModule } from '@/desktop/bridge'
 import { filesAdapter } from './files'
 import { iframeAdapter } from './iframe'
 import { linkAdapter } from './link'
 import { rssAdapter } from './rss'
+import { transcriptionAdapter } from './transcription'
 import { translatorAdapter } from './translator'
 import type { ComponentAdapter, ComponentConfigFieldsProps } from './types'
 
@@ -13,6 +15,7 @@ export const componentAdapters: { [T in ComponentType]: ComponentAdapter<T> } = 
   rss: rssAdapter,
   link: linkAdapter,
   translator: translatorAdapter,
+  transcription: transcriptionAdapter,
   files: filesAdapter
 }
 
@@ -30,7 +33,9 @@ interface AnyComponentAdapter {
   externalUrl?: (component: Component) => string
   feedUrl?: (component: Component) => string
   desktopModule?: DesktopModuleId
-  widgets: Readonly<Partial<Record<string, { Tile: AnyComponentView }>>>
+  widgets: Readonly<
+    Partial<Record<string, { Tile: AnyComponentView; name?: (t: TFunction) => string }>>
+  >
 }
 
 /**
@@ -73,7 +78,7 @@ export function feedUrlOf(component: Component): string | null {
 export function widgetViewOf(
   component: Component,
   widgetKey: string
-): { Tile: AnyComponentView } | undefined {
+): { Tile: AnyComponentView; name?: (t: TFunction) => string } | undefined {
   const { widgets } = adapterOf(component)
   return Object.hasOwn(widgets, widgetKey) ? widgets[widgetKey] : undefined
 }

@@ -1,0 +1,337 @@
+{
+  "defaultMicrophone": "Standardmikrofon",
+  "deleteRecording": "Aufnahme löschen",
+  "downloadRecording": "Aufnahme herunterladen",
+  "fontSize": "Schriftgröße",
+  "grantMicrophone": "Mikrofon freigeben",
+  "invertContrast": "Kontrast umkehren",
+  "livePreviewPlaceholder": "Hier wird der Text stehen.",
+  "livePreviewSample": "Dies ist ein Beispieltext für die Live-Transkription.",
+  "loadingMicrophones": "Mikrofone werden geladen...",
+  "maximizeTextView": "Textansicht maximieren",
+  "microphone": "Mikrofon",
+  "microphoneAccessUnsupported": "Mikrofonzugriff nicht unterstützt",
+  "microphonePermission": "Mikrofonfreigabe",
+  "microphonePermissionDenied": "Mikrofonberechtigung verweigert: ",
+  "microphonePermissionHint": "Bitte erlaube den Mikrofonzugriff in der Browser-Abfrage.",
+  "microphoneReady": "Mikrofon bereit",
+  "microphonesUnavailable": "Mikrofone nicht verfügbar",
+  "minimizeTextView": "Textansicht minimieren",
+  "modeLabel": "Modus",
+  "modeLocal": "Lokal (Standard)",
+  "recordingNotPossible": "Aufnahme nicht möglich",
+  "recordingProcessFailed": "Die Aufnahme konnte nicht verarbeitet werden.",
+  "recordingReady": "Aufnahme bereit",
+  "recordingRunning": "Aufnahme läuft",
+  "recordingRunningHint": "Das ausgewählte Mikrofon wird lokal im Browser aufgenommen.",
+  "recordingStopping": "Aufnahme wird beendet",
+  "recordingStoppingHint": "Die Audiodatei wird vorbereitet.",
+  "recordingsReadyToUpload": "{{count}} Aufnahmen bereit zum Hochladen",
+  "searchingDevices": "Suche Geräte...",
+  "selectInputDeviceHint": "Wählen Sie ein Eingabegerät aus und starten Sie die Aufnahme.",
+  "selectMicrophoneBelow": "Wählen Sie unten ein Mikrofon aus und drücken Sie Aufnahme starten.",
+  "selectMicrophoneHint": "Wählen Sie ein Mikrofon und starten Sie die Aufnahme.",
+  "startRecording": "Aufnahme starten",
+  "startRecordingFailed": "Fehler beim Starten der Aufnahme",
+  "startYourRecording": "Starten Sie Ihre Aufnahme",
+  "stopRecording": "Aufnahme stoppen",
+  "stopRecordingFailed": "Fehler beim Beenden der Aufnahme",
+  "uploadForTranscription": "Zur Transkription hochladen",
+  "modeOpenai": "OpenAI",
+  "microphoneN": "Mikrofon {{n}}",
+  "tabsLabel": "Aufnahmeart",
+  "elapsed": "Laufzeit {{time}}",
+  "takesTitle": "Aufnahmen",
+  "takesHint": "Die Aufnahmen bleiben nur in diesem Browserfenster, bis du sie hochlädst.",
+  "downloadRecordingName": "Aufnahme {{name}} herunterladen",
+  "deleteRecordingName": "Aufnahme {{name}} löschen",
+  "confirmDeleteRecording": "Löschen von {{name}} bestätigen",
+  "cancelDeleteRecording": "Löschen von {{name}} abbrechen",
+  "uploadUnavailable": "Hochladen ist erst möglich, wenn die Spracherkennung eingerichtet ist.",
+  "connecting": "Verbindung wird aufgebaut",
+  "connectingHint": "Die Live-Transkription wird mit dem Dienst verbunden.",
+  "liveRunning": "Live-Transkription läuft",
+  "liveRunningHint": "Das Mikrofon wird live transkribiert und zugleich lokal im Browser aufgenommen.",
+  "liveUnavailable": "Für die Live-Transkription ist noch kein Dienst eingerichtet.",
+  "onpremUnavailable": {
+    "modelNotAllowed": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway gibt das Modell {{model}} für seinen API-Schlüssel nicht frei. Sobald die Freigabe da ist, funktioniert sie ohne weitere Einrichtung.",
+    "gatewayKeyRejected": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt den API-Schlüssel ab.",
+    "gatewayRefused": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
+    "gatewayUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Der Server erreicht das Gateway nicht."
+  },
+  "liveTranscript": "Live-Transkript",
+  "liveServiceError": "Fehler der Live-Transkription: {{message}}",
+  "liveErrors": {
+    "not_set_up": "Dieser Live-Modus ist nicht eingerichtet.",
+    "busy": "Die Live-Transkription ist gerade ausgelastet: Der Server nimmt keine weiteren Sitzungen an. Bitte gleich noch einmal versuchen.",
+    "model_not_allowed": "Die Live-Transkription ist gerade nicht verfügbar: Das Gateway gibt das Live-Modell für seinen API-Schlüssel nicht frei.",
+    "gateway_key_rejected": "Die Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt den API-Schlüssel ab.",
+    "gateway_refused": "Die Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt die Live-Sitzung ab.",
+    "gateway_unreachable": "Die Live-Transkription ist gerade nicht verfügbar: Der Server erreicht das Gateway nicht.",
+    "upstream_error": "Das Gateway hat bei der Live-Transkription einen Fehler gemeldet.",
+    "upstream_closed": "Das Gateway hat die Live-Sitzung beendet.",
+    "session_idle": "Die Live-Transkription wurde beendet, weil zu lange kein Ton ankam.",
+    "session_expired": "Die Live-Transkription hat ihre Höchstdauer erreicht und wurde beendet.",
+    "invalid_event": "Der Server hat eine Nachricht der Live-Transkription abgelehnt.",
+    "audio_rate_exceeded": "Es kam mehr Ton an, als in Echtzeit läuft; die Live-Transkription wurde beendet.",
+    "message_rate_exceeded": "Der Browser hat mehr Nachrichten geschickt, als der Server annimmt; die Live-Transkription wurde beendet."
+  },
+  "appearance": "Darstellung",
+  "fontSizeValue": "{{size}}px",
+  "resetAppearance": "Darstellung zurücksetzen",
+  "clearText": "Text leeren",
+  "errors": {
+    "connectionFailed": "Audio connection failed.",
+    "connectionClosed": "Audio connection closed.",
+    "connectionTimeout": "Audio connection not established within 15s.",
+    "audioFailed": "Die Audioverarbeitung konnte nicht starten.",
+    "aborted": "Audio connection closed."
+  },
+  "widgets": {
+    "quickName": "Neue Transkription",
+    "recentName": "In Bearbeitung und zuletzt gespeichert",
+    "upload": "Datei hochladen",
+    "record": "Audio aufnehmen",
+    "activeJobs_one": "{{count}} Auftrag in Bearbeitung",
+    "activeJobs_other": "{{count}} Aufträge in Bearbeitung",
+    "jobsTitle": "In Bearbeitung",
+    "transcriptsTitle": "Zuletzt gespeichert",
+    "recentEmpty": "Noch keine gespeicherten Transkriptionen.",
+    "jobStatus": {
+      "uploading": "Upload",
+      "analyzing": "Sprecheranalyse",
+      "analyzed": "Sprecher benennen",
+      "processing": "Transkription läuft",
+      "completed": "Nicht gespeichert",
+      "failed": "Fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    }
+  },
+  "admin": {
+    "sections": {
+      "asr": "Spracherkennung",
+      "diarization": "Sprechererkennung",
+      "llm": "KI-Endpunkt",
+      "defaults": "Voreinstellungen für Uploads",
+      "limits": "Grenzen",
+      "retention": "Aufbewahrung",
+      "live": "Live-Transkription",
+      "storage": "Speicher"
+    },
+    "asrBaseUrl": {
+      "label": "Adresse der Spracherkennung",
+      "hint": "OpenAI-kompatibler Endpunkt bis /v1, voreingestellt das KI-Gateway des HRZ mit jlu/whisper-1. Mehrere Speaches-Worker durch Kommas getrennt; die Abschnitte eines Auftrags gehen reihum an sie. Transkribiert wird mit POST /audio/transcriptions (verbose_json, Wortzeiten, soweit der Server sie liefert)."
+    },
+    "asrConcurrency": {
+      "label": "Gleichzeitige Anfragen an die Server",
+      "hint": "Anfragen an Spracherkennung und Sprechererkennung zugleich, über alle Aufträge dieses Serverprozesses (wie kiChats SPEACHES_MAX_CONCURRENCY). So viele, wie die Server Modellinstanzen haben; von 1 bis 32."
+    },
+    "providerName": {
+      "label": "Anbietername",
+      "hint": "Wird mit jeder Transkription gespeichert, etwa KI@JLU."
+    },
+    "asrModels": {
+      "label": "Sprachmodelle",
+      "hint": "Höchstens {{max}}. „Modelle abrufen“ übernimmt die Spracherkennungsmodelle des Endpunkts (bei LiteLLM nach ihrem Modus, sonst nach der ID); vergebene Anzeigenamen bleiben. Andere IDs lassen sich mit „Modell hinzufügen“ eintragen."
+    },
+    "defaultAsrModel": {
+      "label": "Sprachmodell der Aufträge",
+      "hint": "Ohne Auswahl das erste der Liste."
+    },
+    "diarizationEnabled": {
+      "label": "Sprecher erkennen",
+      "hint": "Analysiert die Stimmen vor der Transkription, damit sie benannt werden können, und ordnet die Abschnitte bei der Transkription den Stimmen zu. Ohne, oder wenn der Server nicht erreichbar ist, hat jede Datei eine automatische Stimme."
+    },
+    "diarizationUrl": {
+      "label": "Adresse der Sprechererkennung",
+      "hint": "Speaches-Server bis /v1 mit POST /audio/diarization und /audio/speech/timestamps, etwa https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1. Leer: die Adresse der Spracherkennung (das KI-Gateway des HRZ bietet keine Sprechererkennung). Ohne eigenen API-Schlüssel gilt der der Spracherkennung."
+    },
+    "diarizationModel": {
+      "label": "Modell der Sprechererkennung",
+      "hint": "Leer: pyannote/speaker-diarization-community-1, wie in kiChat."
+    },
+    "llmBaseUrl": {
+      "label": "Adresse des KI-Endpunkts",
+      "hint": "OpenAI-kompatibler Chat-Endpunkt bis /v1 für Korrektur, Titel, Unterzeilen, Zusammenfassungen und Sprecheroptimierung. Voreingestellt ist das KI-Gateway des HRZ; den API-Schlüssel tragen Sie unten ein."
+    },
+    "llmModels": {
+      "label": "KI-Modelle",
+      "hint": "Höchstens {{max}}. Die Liste lässt sich vom Endpunkt abrufen; vergebene Anzeigenamen bleiben. Nur gelistete Modelle werden verwendet, ohne Modelle bleibt die KI aus."
+    },
+    "defaultCorrectionModel": {
+      "label": "Modell für kurze Aufgaben",
+      "hint": "KI-Korrektur, Sprecheroptimierung, Titel und Unterzeile. Voreingestellt ist jlu/qwen3.8-27b-fast; es gilt, sobald es in der Liste steht, sonst das erste der Liste."
+    },
+    "defaultSummaryModel": {
+      "label": "Modell der Zusammenfassungen",
+      "hint": "Zusammenfassungen und Vorschauen der Vorlagen. Voreingestellt ist jlu/qwen3.8-27b; es gilt, sobald es in der Liste steht, sonst das erste der Liste."
+    },
+    "llmDisableThinking": {
+      "label": "Denkphase der Modelle abschalten",
+      "hint": "Sendet chat_template_kwargs.enable_thinking = false, das vLLM-Server mit Qwen3-Modellen verstehen (HRZ-Gateway): Die Modelle antworten sofort, statt erst nachzudenken. Ausschalten für Endpunkte, die unbekannte Parameter ablehnen, etwa OpenAI."
+    },
+    "firstModel": "Erstes Modell der Liste",
+    "firstSpeechModel": "Erstes Spracherkennungsmodell der Liste",
+    "unlistedModel": "{{id}} (nicht in der Liste)",
+    "modelId": "Modell-ID",
+    "modelLabel": "Anzeigename",
+    "modelActions": "Aktionen",
+    "addModel": "Modell hinzufügen",
+    "removeModel": "Modell {{name}} entfernen",
+    "fetchModels": "Modelle abrufen",
+    "fetchingModels": "Modelle werden abgerufen …",
+    "fetchedModels_one": "{{count}} Modell übernommen.",
+    "fetchedModels_other": "{{count}} Modelle übernommen.",
+    "fetchedModelsOmitted_one": "{{count}} weiteres über dem Höchstwert von {{max}} ausgelassen.",
+    "fetchedModelsOmitted_other": "{{count}} weitere über dem Höchstwert von {{max}} ausgelassen.",
+    "fetchedModelsLeftOut": {
+      "asr_one": "{{count}} Modell ohne Spracherkennung (etwa Chat oder Embeddings) ausgelassen.",
+      "asr_other": "{{count}} Modelle ohne Spracherkennung (etwa Chat oder Embeddings) ausgelassen.",
+      "llm_one": "{{count}} Modell, das nicht chattet (Embeddings, Sprache, Bilder), ausgelassen.",
+      "llm_other": "{{count}} Modelle, die nicht chatten (Embeddings, Sprache, Bilder), ausgelassen."
+    },
+    "fetchModelsErrors": {
+      "noneOfKind": {
+        "asr_one": "Der Endpunkt nennt kein Spracherkennungsmodell, nur {{count}} anderes. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen.",
+        "asr_other": "Der Endpunkt nennt kein Spracherkennungsmodell, nur {{count}} andere. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen.",
+        "llm_one": "Der Endpunkt nennt kein Chat-Modell, nur {{count}} anderes. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen.",
+        "llm_other": "Der Endpunkt nennt kein Chat-Modell, nur {{count}} andere. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen."
+      },
+      "empty": "Der Endpunkt nennt keine Modelle.",
+      "invalidUrl": "Die Adresse ist ungültig.",
+      "failed": "Die Modelle konnten nicht abgerufen werden. Prüfen Sie Adresse und API-Schlüssel."
+    },
+    "defaultLanguage": {
+      "label": "Sprache",
+      "hint": "Womit neue Uploads beginnen; die Person kann es ändern."
+    },
+    "languages": {
+      "auto": "Automatisch erkennen",
+      "de": "Deutsch",
+      "en": "Englisch"
+    },
+    "defaultSpeakerCount": {
+      "label": "Anzahl der Sprecher",
+      "hint": "Womit neue Uploads beginnen; die Person kann es ändern."
+    },
+    "speakerCounts": {
+      "auto": "Automatisch",
+      "single": "Einzelne Person",
+      "multi": "Mehrere Personen"
+    },
+    "defaultLlmCorrection": {
+      "label": "KI-Korrektur voreinstellen",
+      "hint": "Nur wirksam, wenn ein KI-Endpunkt mit Modellen eingerichtet ist."
+    },
+    "maxFileMegabytes": {
+      "label": "Größte Datei (MB)",
+      "hint": "Von 1 bis 10240 MB."
+    },
+    "maxDurationMinutes": {
+      "label": "Längste Aufnahme (Minuten)",
+      "hint": "Leer: keine Grenze außer der Dateigröße."
+    },
+    "maxFilesPerGroup": {
+      "label": "Dateien je Transkript",
+      "hint": "Leer: keine Grenze."
+    },
+    "maxActiveJobsPerUser": {
+      "label": "Laufende Aufträge je Person",
+      "hint": "Aufträge, die zugleich hochgeladen, analysiert oder transkribiert werden."
+    },
+    "workerConcurrency": {
+      "label": "Gleichzeitige Aufträge des Servers",
+      "hint": "Je Serverprozess, von 1 bis 16."
+    },
+    "chunkSeconds": {
+      "label": "Abschnittslänge (Sekunden)",
+      "hint": "Lange Aufnahmen werden vor der Erkennung in Abschnitte dieser Länge geteilt."
+    },
+    "upstreamTimeoutSeconds": {
+      "label": "Zeitlimit je Anfrage (Sekunden)",
+      "hint": "So lange darf eine Anfrage an Spracherkennung, Sprechererkennung oder KI-Endpunkt dauern."
+    },
+    "transcriptRetentionHours": {
+      "label": "Gespeicherte Transkripte löschen nach (Stunden)",
+      "hint": "Gezählt ab der letzten Änderung. Leer: Sie bleiben, bis die Person sie löscht."
+    },
+    "unsavedJobRetentionHours": {
+      "label": "Ungespeicherte Aufträge löschen nach (Stunden)",
+      "hint": "Auch fehlgeschlagene und abgebrochene, jeweils mit ihrem Audio."
+    },
+    "realtimeModes": {
+      "label": "Angebotene Modi",
+      "hint": "Lokal braucht ein Gateway (ohne eigenes: die Spracherkennung), OpenAI den API-Schlüssel für OpenAI Realtime. Beide laufen über diesen Server."
+    },
+    "modes": {
+      "onprem": "Lokal (Gateway)",
+      "openai": "OpenAI Realtime"
+    },
+    "defaultRealtimeMode": {
+      "label": "Voreingestellter Modus",
+      "hint": "Ohne Auswahl der erste angebotene.",
+      "auto": "Erster angebotener Modus"
+    },
+    "onpremGatewayUrl": {
+      "label": "Gateway der Live-Transkription",
+      "hint": "Bis /v1; der Server öffnet dort /v1/realtime als WebSocket, mit dem API-Schlüssel der Spracherkennung. Leer: die Adresse der Spracherkennung. Browser bekommen den Schlüssel nie."
+    },
+    "onpremRealtimeModel": {
+      "label": "Live-Modell des Gateways",
+      "hint": "Das Realtime-Modell des Gateways, wie in kiChat voxtral-mini-realtime. Der API-Schlüssel muss es nutzen dürfen."
+    },
+    "openaiRealtimeUrl": {
+      "label": "Adresse der OpenAI-API",
+      "hint": "Bis /v1. Der Server öffnet dort /v1/realtime als WebSocket, mit dem API-Schlüssel für OpenAI Realtime; Browser bekommen ihn nie."
+    },
+    "openaiRealtimeModel": {
+      "label": "Transkriptionsmodell von OpenAI",
+      "hint": "Wird beim Start jeder Sitzung gesetzt."
+    },
+    "storageHint": "Der Speicher wird über die Umgebungsvariablen TRANSCRIPTION_S3_* des Servers eingerichtet. Ohne Speicher sind keine Uploads möglich.",
+    "test": {
+      "running": "Wird getestet …",
+      "ok": "Verbindung erfolgreich.",
+      "failed": "Verbindung fehlgeschlagen.",
+      "status": "HTTP {{status}}",
+      "latency": "{{ms}} ms",
+      "error": "Der Test konnte nicht ausgeführt werden.",
+      "findings": {
+        "models_one": "{{count}} Modell",
+        "models_other": "{{count}} Modelle",
+        "modelMissing": "Der Endpunkt führt das Modell {{model}} nicht.",
+        "notSetUp": "Noch nicht eingerichtet.",
+        "bucketReachable": "Bucket {{bucket}} erreichbar",
+        "modelsUnlisted": "Der Endpunkt führt keine Modelle auf",
+        "noModel": "Es ist kein Modell zum Testen gewählt.",
+        "transcribed": "Ein Testclip wurde mit {{model}} transkribiert",
+        "diarized": "Ein Testclip wurde auf Sprecher untersucht ({{turns}} Abschnitte)",
+        "chatAnswered": "{{model}} hat eine Testfrage beantwortet",
+        "realtimeModelAccepted": "Das Gateway nimmt den Schlüssel und das Live-Modell {{model}} an",
+        "realtimeUnavailable": {
+          "modelNotAllowed": "Das Gateway gibt das Modell {{model}} für diesen API-Schlüssel nicht frei. Der Schlüssel funktioniert sonst; die Freigabe des Modells muss beim Betreiber des Gateways beantragt werden.",
+          "gatewayKeyRejected": "Das Gateway lehnt den API-Schlüssel ab.",
+          "gatewayRefused": "Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
+          "gatewayUnreachable": "Der Server erreicht das Gateway nicht."
+        },
+        "signedRoundTrip": "Eine Testdatei wurde über signierte URLs in Bucket {{bucket}} hochgeladen, zurückgelesen und gelöscht",
+        "serverRoundTrip": "Eine Testdatei wurde vom Server in Bucket {{bucket}} geschrieben, zurückgelesen und gelöscht",
+        "signedUrlsUnreachable": "Dieser Server erreicht die Adresse der signierten URLs nicht; Browser erreichen sie vielleicht trotzdem",
+        "invalidAnswer": {
+          "transcription": "Die Antwort war keine Transkription.",
+          "diarization": "Die Antwort enthielt keine Sprecherabschnitte.",
+          "chat": "Die Antwort war keine Chat-Antwort.",
+          "storedContent": "Die zurückgelesene Datei weicht von der gespeicherten ab."
+        }
+      }
+    },
+    "testTargets": {
+      "asr": "Spracherkennung testen",
+      "diarization": "Sprechererkennung testen",
+      "llm": "KI-Endpunkt testen",
+      "realtimeOnprem": "Gateway testen",
+      "realtimeOpenai": "OpenAI Realtime testen",
+      "storage": "Speicher testen"
+    }
+  }
+}

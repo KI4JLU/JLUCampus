@@ -3,6 +3,7 @@ import {
   dashboardPutSchema,
   TILE_DEFAULT_H,
   TILE_DEFAULT_W,
+  TRANSCRIPTION_DEFAULT_CONFIG,
   widgetRefKey,
   type Component,
   type DashboardTile,
@@ -66,6 +67,8 @@ function component(id: string, type: Component['type']): Component {
           documentsEnabled: false
         }
       }
+    case 'transcription':
+      return { ...base, type, config: TRANSCRIPTION_DEFAULT_CONFIG }
     case 'iframe':
     case 'link':
       return { ...base, type, config: { url: 'https://example.org' } }

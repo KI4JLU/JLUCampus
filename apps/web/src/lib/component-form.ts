@@ -65,7 +65,7 @@ type Issue = { path: readonly PropertyKey[]; message: string }
 
 /**
  * Known fields get a translated message; anything else keeps the server's
- * wording. Embedded sites and the translator's APIs need https; feeds and
+ * wording. Embedded sites and the modules' APIs need https; feeds and
  * shortcuts accept http too. Paths into lists match with `*` for the index.
  */
 function toFieldErrors(issues: readonly Issue[], type: ComponentType, t: TFunction): FieldErrors {
@@ -78,6 +78,10 @@ function toFieldErrors(issues: readonly Issue[], type: ComponentType, t: TFuncti
     'config.feedUrl': t('admin.form.errors.externalUrl'),
     'config.deeplApiUrl': t('admin.form.errors.url'),
     'config.llmBaseUrl': t('admin.form.errors.url'),
+    'config.asrBaseUrl': t('admin.form.errors.url'),
+    'config.diarizationUrl': t('admin.form.errors.url'),
+    'config.onpremGatewayUrl': t('admin.form.errors.url'),
+    'config.openaiRealtimeUrl': t('admin.form.errors.url'),
     'config.llmModels': t('component.translator.configErrors.models', {
       max: TRANSLATOR_LLM_MODELS_MAX
     }),

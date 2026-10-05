@@ -17,3 +17,20 @@ export function isTrustedRequest(
   if (origin === undefined) return true
   return trusted.includes(origin)
 }
+
+/** The web app's origins, and the API's own when it serves the web app itself. */
+export function trustedOrigins(corsOrigins: readonly string[], authUrl: string): string[] {
+  return [...corsOrigins, new URL(authUrl).origin]
+}
+
+/**
+ * Whether a WebSocket upgrade comes from a trusted page. CORS does not cover WebSockets: any site
+ * may open one to the API, and the browser sends the session cookie along. Browsers always send
+ * `Origin` with an upgrade, so it must be there and trusted.
+ */
+export function isTrustedWebSocketOrigin(
+  origin: string | undefined,
+  trusted: readonly string[]
+): boolean {
+  return origin !== undefined && trusted.includes(origin)
+}

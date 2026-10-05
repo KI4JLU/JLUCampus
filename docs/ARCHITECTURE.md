@@ -29,6 +29,12 @@ quotes, no semicolons, width 100), TypeScript strict. Node ≥ 22 at runtime.
 `docker compose up -d` starts:
 
 - Postgres 16 on `127.0.0.1:5433` (db/user/password `justcampus`).
+- MinIO (S3-compatible storage of the transcription module) with its API on
+  `127.0.0.1:9100` and console on `http://localhost:9101` (`justcampus` /
+  `justcampus-dev-secret`); `minio-init` creates the bucket `justcampus-transcription`
+  and exits. MinIO allows the web origins (`http://localhost:5173`, `http://localhost:3000`,
+  `app://-`) by CORS. The images are `pgsty/minio` and `pgsty/mc`, builds of MinIO's
+  source, since MinIO publishes none any more.
 - Keycloak 26 on `http://localhost:8080` (admin console: `admin` / `admin`),
   importing `infra/keycloak/justcampus-realm.json`: realm `justcampus`,
   confidential client `justcampus` (secret `justcampus-dev-secret`), realm roles
@@ -36,6 +42,10 @@ quotes, no semicolons, width 100), TypeScript strict. Node ≥ 22 at runtime.
   and full-path `groups` claims in the ID token, access token and userinfo,
   and two users: `alice` / `alice` and `bob` / `bob`, both initially Campus users.
   Alice has the Keycloak `admin` role for presets and glossaries; it grants no app admin access.
+
+`bun run mock:transcription` starts a stand-in for every upstream of the
+transcription module on `127.0.0.1:9200` (`infra/transcription-mock`, see its README
+for the admin settings that point at it). It needs no keys.
 
 Copy `.env.example` to `.env` at the repo root. The server loads the root
 `.env` (and an optional `apps/server/.env`) with `dotenv`; Vite reads
@@ -95,7 +105,8 @@ Better-Auth tables (`user`, `session`, `account`, `verification`) as generated
 by the Better-Auth CLI, plus:
 
 ```
-component         id uuid pk, name text, type text ('iframe' | 'rss' | 'link' | 'translator' | 'files'),
+component         id uuid pk, name text, type text ('iframe' | 'rss' | 'link' | 'translator' |
+                  'transcription' | 'files'),
                   icon text null, icon_url text null, config jsonb, enabled bool,
                   singleton bool default false, secrets jsonb default {}, sort_order int,
                   created_at, updated_at
@@ -107,6 +118,33 @@ translator_document id uuid pk, component_id → component (cascade), user_id �
                   poll_claimed_at timestamp null, polled_at timestamp null,
                   deleted_at timestamp null, created_at, updated_at, expires_at;
                   indexes (user_id, created_at), (status, expires_at), (expires_at)
+transcription_job id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  group_id uuid null, group_order int, filename text, mime_type text, size bigint,
+                  duration double null, object_key text, normalized_key text null, status text,
+                  settings jsonb, speakers jsonb, mapping jsonb, snippets jsonb, colors jsonb,
+                  progress jsonb null, result jsonb null, error jsonb null, upstream_job_id text null,
+                  transcript_id → transcription_transcript (set null) null, attempts int,
+                  claimed_at, heartbeat_at, cancel_requested_at, uploaded_at, completed_at,
+                  deleted_at timestamp null, created_at, updated_at, expires_at timestamp null;
+                  indexes (user_id, created_at), (status, claimed_at), (expires_at), (transcript_id)
+transcription_transcript id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  idempotency_key uuid, title text, subtitle text null, subtitle_source text null,
+                  language text null, duration double null, model text null, provider text null,
+                  original_filename text null, file_size bigint null, segments jsonb, words jsonb,
+                  text text, source_files jsonb, speaker_colors jsonb, summary_template_id text null,
+                  revision int, user_locale text null, created_at, updated_at, expires_at null;
+                  indexes (user_id, updated_at), (expires_at), unique (user_id, idempotency_key)
+transcription_template id text pk (uuid text), component_id → component (cascade),
+                  user_id → user (cascade) null, name text, description text, structure jsonb,
+                  version int, output_format_hints text null, created_at, updated_at
+transcription_format id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  name text, speakers, timestamps, avatars, bubbles, anonymize bool, order text,
+                  created_at, updated_at
+transcription_summary id uuid pk, component_id → component (cascade), user_id → user (cascade),
+                  transcript_id → transcription_transcript (cascade), kind text ('summary' |
+                  'preview'), template_id text, template_version int, transcript_revision int,
+                  model text null, settings_hash text, markdown text null, sections jsonb null,
+                  generated_at, expires_at null; indexes (transcript_id, template_id, kind), (expires_at)
 sidebar_entry     user_id → user (cascade), component_id → component (cascade),
                   position int; pk (user_id, component_id)
 feed_read         user_id → user (cascade), feed_url text, read_at timestamp;
@@ -247,6 +285,255 @@ once it reaches 60, uploads once it reaches 10, with 429 `Too Many Attempts.`
 and Laravel's `X-RateLimit-*` and `Retry-After` headers. Refused requests do
 not count; runs at once are not limited.
 
+### Transcription
+
+The transcription module (`apps/server/src/modules/transcription`) ports kiChat's
+transcription service; `docs/TRANSCRIPTION-REQUIREMENTS.md` is its checklist (T-01 to
+T-63). Its contract is `packages/shared/src/transcription.ts` (re-exported by the shared
+index): schemas, limits, the five built-in summary templates, the transcript presets and
+`TRANSCRIPTION_API`, every route below `/api/modules/transcription` and the admin routes
+below `/api/admin/modules/transcription`. Each area has its own router (`jobs/`,
+`transcripts/`, `formats/`, `templates/`, `summaries/`, `optimize/`, `realtime/`,
+`admin/`); `index.ts` mounts them and answers `GET /capabilities`, what the settings,
+secrets and storage make available (`config.ts`). Routes not built yet answer
+`501 not_implemented`.
+
+The server runs the whole pipeline. Browsers upload each file straight to object storage
+with a signed `PUT` for exactly its size and type (`storage.ts`, `@aws-sdk/client-s3`);
+the server checks the stored bytes, then a worker normalises and chunks the audio with
+`ffmpeg` (`TRANSCRIPTION_FFMPEG`, `TRANSCRIPTION_FFPROBE`, installed in the Docker image),
+analyses the voices with a Speaches diarisation server, transcribes through an
+OpenAI-compatible `POST /audio/transcriptions` (`verbose_json` with word times) and corrects
+the text with an OpenAI-compatible chat endpoint, which also writes summaries, subtitles
+and speaker optimisations. This is kiChat's batch pipeline (`jobs/`): `asrBaseUrl` takes up to
+ten comma-separated speech workers, which take the chunks in parallel waves; one budget of
+`asrConcurrency` requests per server process (`jobs/limiter.ts`) covers transcription,
+diarisation and VAD; transport errors and `5xx` are retried three times (`jobs/upstream.ts`),
+a speech chunk also after a timeout (kiChat's `ConnectionException`), diarisation and VAD not
+(kiChat's processing timeout; Node's fetch cannot tell when it connected, so the passed deadline
+stands in for it). What an upstream answers reaches only an error's `detail`, for logs, masked
+before it is cut short (`maskSecrets` in `http.ts`): the request's own keys however short, keys
+other requests sent lately from eight characters on, `Bearer …`, `sk-…`, `api_key=…`. Browsers
+get the server's own words; only the admin connection test shows the start of a refusal, masked.
+Failures are classified by the error's `kind` and `status`, which the raw answer decided, never
+by its masked words. The live relay passes on and logs nothing the gateway says.
+The analysis diarises the whole file and offers samples per voice; the transcription diarises
+again with the named voices as known speakers (`known_speaker_references`, WAV cut from the
+normalised audio) plus VAD, and maps words to speakers by time overlap (`jobs/mapping.ts`,
+kiChat's `mapDiarizationSegments`). `diarizationUrl` is the Speaches base up to `/v1` (empty:
+the first speech worker), `diarizationApiKey` its key (empty: the speech key). A diariser that
+cannot be reached or refuses the key leaves the file one automatic voice; the job then carries
+`error: {code: 'diarization_failed'}` as a notice on an `analyzed` or `completed` job, and a
+failed LLM correction `correction_failed`, which the upload queue shows on the file's row.
+Playback and samples use fresh signed `GET` URLs from
+authenticated routes; signed URLs are never stored. The analysis also stores the waveform
+(20 peaks per second) right after normalising, before diarisation, for files too large for
+the browser to decode; the upload queue asks for it once the analysis ended, failed or not.
+All of a job's objects lie below `transcription/<component>/jobs/<job>/`. Deleting a job
+deletes that prefix and the row. The job sweep (`sweepJobs`) removes deleted, expired and
+orphaned jobs the same way, but first claims each with one conditional `UPDATE` that sets
+`deleted_at` (`claimJobsForCleanup`, skipping rows another transaction locks). Saving
+(`SELECT … FOR UPDATE`), analysis, dispatch and worker writes only touch jobs neither deleted
+nor expired, so a job is either saved or given a new expiry before the claim, and then not
+claimed, or claimed, and then no longer saved or revived. A saved transcript's audio stays
+until the transcript is deleted or its retention expires. A signed upload's URL is checked
+only when its `PUT` starts, so a slow transfer may still store audio after that. The orphan
+sweep (`jobs/orphans.ts`) therefore lists the storage itself: every minute one page of up to
+1000 keys below `transcription/`, continuing after the last key, and deletes job objects
+older than 15 minutes whose job row no longer exists. Objects of an existing row, even a
+deleted or expired one, are left to the job sweep's claim. A purged row never returns, so
+the sweep needs no assumed transfer time.
+The number of files per transcript is limited only by the admin's optional setting (and a
+generous anti-abuse bound in the contract), checked when the group is saved. Upstream calls (`http.ts`) refuse redirects,
+time out and follow the caller's abort; failures answer `502 module_unavailable`.
+
+Storage is configured by `TRANSCRIPTION_S3_*`: the endpoint the server uses, the public
+endpoint signed URLs point at (browsers must reach it; it needs its own host name, since a
+path prefix breaks the signatures), region, bucket, keys and path-style addressing. Without
+a bucket the module offers no uploads. Saved transcripts stay until the user deletes them,
+unless the admin sets `transcriptRetentionHours`; unsaved, failed and cancelled jobs and
+their audio go after `unsavedJobRetentionHours` (24). Admin secrets: `apiKey` (speech),
+`diarizationApiKey`, `llmApiKey` and `openaiRealtimeApiKey`. Live transcription runs over a
+WebSocket through the server (see _Live transcription_ below). `loadModuleRuntime`
+(`modules/runtime.ts`) gives the worker and sweeps a module's config and decrypted secrets
+outside a request.
+
+#### Backends
+
+The module runs against the university's services, as kiChat does. A fresh module points at the
+HRZ's LiteLLM gateway (`TRANSCRIPTION_HRZ_API_URL`, `https://api.hrz.uni-giessen.de/v1`):
+
+| Upstream            | Service and model                                                                                                                                                                                                   | Admin form (Admin → Components → Transkription)                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Speech recognition  | HRZ gateway, `jlu/whisper-1` (Whisper large v3), `POST /audio/transcriptions` with `verbose_json`                                                                                                                   | _Spracherkennung_: address (several Speaches workers comma-separated), models, the speech key (`apiKey`)                         |
+| Speaker recognition | kiChat's Speaches server `https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1`, `pyannote/speaker-diarization-community-1` (`POST /audio/diarization`, `POST /audio/speech/timestamps`); the gateway has neither | _Sprechererkennung_: switch, address (empty: the speech server), model, its own key (`diarizationApiKey`, empty: the speech key) |
+| Chat                | HRZ gateway: `jlu/qwen3.8-27b` for summaries and section previews, `jlu/qwen3.8-27b-fast` for the quick tasks (LLM correction, speaker optimisation, title, subtitle)                                               | _KI-Endpunkt_: address, models, the two default models, _Denkphase der Modelle abschalten_, the chat key (`llmApiKey`)           |
+| Live, on-prem       | HRZ gateway's realtime WebSocket (vLLM, `voxtral-mini-realtime`), relayed by this server                                                                                                                            | _Live-Transkription_: modes, gateway (empty: the speech address), live model; the speech key                                     |
+| Live, OpenAI        | OpenAI Realtime's WebSocket (transcription session), relayed by this server                                                                                                                                         | the OpenAI address, model and key (`openaiRealtimeApiKey`)                                                                       |
+
+Setting it up: enter the keys in the form's secret fields, press _Modelle abrufen_ for speech and
+chat (the lists come from the gateway's `GET /models`, speech recognition models only for speech:
+LiteLLM's `mode: audio_transcription` from `GET /model/info` where it names one, else the id, such
+as Whisper, `…transcribe`, STT, Voxtral, Parakeet or Canary; other ids can be added by hand, and
+without a default the first speech model of the list is used, never a chat model listed before
+it; the preset default models stay selected when the gateway lists them), check each upstream with _Verbindung testen_, then enable the
+module. The gateway answers `403` for models its key does not allow, so the key must include
+every model used (at the time of writing the HRZ key gets `403` for `voxtral-mini-realtime`, and
+the Speaches server needs a key of its own). A capability is offered only while its upstream is
+set up (`capabilitiesOf`); chat stays off until the model list names a model.
+
+The chat tasks use kiChat's prompts and budgets; every answer is read past thinking blocks
+(`withoutThinking`: Qwen3 reasons first, vLLM puts it in `reasoning_content` or inline as
+`<think>…</think>`) and code fences, JSON leniently. With `llmDisableThinking` (on by default)
+requests carry `chat_template_kwargs: {enable_thinking: false}`, which vLLM's Qwen3 template
+understands; endpoints that refuse unknown parameters (OpenAI) need it off.
+
+- **Title** (`transcripts/metadata.ts`, kiChat's `GenerateTranscriptionTitle`): only for a
+  made-up title; kiChat's _Name Prompt_ in the user's language on the first 500 characters,
+  20 tokens (kiChat: 10, too few for German compounds with Qwen3's tokenizer); an answer that
+  reports missing content becomes the text's first 50 characters.
+- **Subtitle** (`GenerateTranscriptionSubtitle`): kiChat's prompt on the first 200 tokens as
+  `Name: text` lines, 60 tokens, cleaned to one line of at most 80 characters.
+- **Summaries and previews** (`summaries/generate.ts`, kiChat's `summarize`): one request per AI
+  section, kiChat's system prompt, then the instruction, `TRANSKRIPT:` and the transcript;
+  previews read kiChat's reduced sample (beginning, middle, end, 2000 tokens).
+- **LLM correction** (`jobs/correction.ts`, kiChat's `optimizeTranscriptSpeakers` after
+  recognition): kiChat's prompt and `{original_index, text, speaker}` answer, in batches of 150
+  segments or 20,000 characters; splits timed by text length, speaker labels removed,
+  same-speaker neighbours under 3 s apart merged up to a segment's limits (20,000 characters,
+  5,000 words). A failure, or corrections a transcript cannot hold, leave the text uncorrected
+  with a notice.
+- **Speaker optimisation** (`optimize/speakers.ts`, the result view's button): the same prompt
+  and answer; the route takes only the speaker of most of each segment's text, as the client
+  keeps text, timing and redactions.
+
+Campus adds: the model reads redacted passages as `[AUSGEBLENDET]` (summaries then get one
+sentence not to guess them, and redacted segments keep their text), names the model invents are
+ignored, and `PROMPT_VERSION` keys stored summaries and previews to the prompts.
+
+**Outbound proxy.** Where the internet is reachable only through a proxy (the campus host), set
+`HTTPS_PROXY`/`HTTP_PROXY`, `NODE_USE_ENV_PROXY=1` and `NO_PROXY`. Node (22.21 and 24.5 or later)
+then sends `fetch` (upstreams, Keycloak) and `http`/`https` requests (the S3 client) through the
+proxy, except to the hosts of `NO_PROXY`, which must name object storage, Keycloak if it is
+internal, and `localhost`/`127.0.0.1` (the container's health check). `fetch` tunnels even
+plain-http requests with `CONNECT`; the live relay's WebSocket to the gateway (the `ws` package,
+which Node's proxy support does not reach) opens the same `CONNECT` tunnel itself where `fetch`
+would use the proxy (`proxyFor` in `realtime/gateway.ts`). At start the server warns about proxy
+variables Node ignores and about internal hosts the proxy would get (`outboundProxyWarnings` in
+`env.ts`).
+
+#### Live transcription
+
+```
+Browser ──wss://<app origin>/api/modules/transcription/live?mode=… (session cookie)──▶ Campus server
+        ──wss://<gateway>/v1/realtime?model=… (Authorization: Bearer <key>)──▶ gateway
+```
+
+The browser streams the microphone to the server's own WebSocket (`TRANSCRIPTION_API.realtimeLive`,
+`realtime/index.ts`); the server opens the gateway's realtime WebSocket with the key it holds and
+relays (`realtime/relay.ts`). No port besides the app's HTTPS port, no TURN relay, and no key in
+the browser: a browser WebSocket cannot send an `Authorization` header, which is why kiChat put a
+WebRTC bridge (`_docker/realtime-bridge`) in front of the gateway; the relay takes over its
+protocol and lifecycle in the server itself.
+
+- **Upgrade.** It runs through the app's middleware like any request (`upgradeWebSocket` of
+  `@hono/node-server`, `src/websocket.ts`): the Better-Auth session from the cookie, the module
+  enabled, then the route's own checks. CORS does not cover WebSockets, so the `Origin` must be
+  one of `CORS_ORIGINS` or the API's own (`isTrustedWebSocketOrigin`); without one, or with
+  another, the upgrade gets `403`. Everything the live tab explains (mode not set up, server busy,
+  gateway refused) comes as an `error` event on the open socket, since a browser cannot read the
+  status of a refused upgrade.
+- **Browser → server.** Only `input_audio_buffer.append` (canonical base64 of whole PCM16
+  samples, at most one second; 16 kHz mono for on-prem as vLLM wants it, 24 kHz for OpenAI) and
+  `input_audio_buffer.commit` (`keep_open: true` goes on with a new item); `session.update` is
+  ignored, anything else, binary frames, or a message over 96 KiB end the session
+  (`invalid_event`, 1008; 1009 from `ws`). Every message counts before it is parsed, ignored ones
+  and commits too: more than 200 at once or 50 a second on average, or more bytes on the wire than
+  the audio budget's base64 plus 256 bytes a message, end it (`message_rate_exceeded`). Audio
+  beyond real time (a 10 s burst, then 1.5×) ends it as well (`audio_rate_exceeded`). Audio held
+  while a gateway stream opens is decoded into one buffer per second, 30 s at most.
+- **Server → gateway.** vLLM (`onprem`): `session.update {model}` (model at the top level),
+  appends, `input_audio_buffer.commit {final: false}` after 300 ms of audio to start decoding,
+  `{final: true}` to end the stream; it answers `transcription.delta`/`…done`/`error`. OpenAI
+  (`openai`): a transcription session (`?intent=transcription`, `audio/pcm` at 24 kHz), whose
+  events already carry the browser's names. Its turns per model: `gpt-realtime-whisper` (the
+  default) has no voice detection (`turn_detection: null`), so the server commits the audio
+  itself, at a quiet frame after a second and after three seconds at the latest, and settles
+  each of its commits by one answer, once: an `input_audio_buffer.committed` of a new item (not
+  of an open or retired one) the oldest unanswered commit, an `input_audio_buffer_commit_empty`
+  the commit its `event_id` names if that is still unanswered; a repeated or unrelated answer
+  settles nothing. Other models keep `server_vad`. A gateway's messages count against a budget too (1000 at once,
+  200 a second; 8 MiB, then 1 MiB a second).
+- **Server → browser.** `session.created` once the gateway took the session (audio starts then),
+  `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.delta`,
+  `…completed`, `…failed` and `error`, each with only the fields the web app reads, errors only with
+  the server's codes and words (`TRANSCRIPTION_LIVE_ERROR_CODES`). Of a gateway's error the
+  server keeps its code for its own decisions; logs get fixed events, close codes and byte
+  counts, never the gateway's text or a key.
+- **Lifecycle** (as kiChat's bridge, with the rules of its reviews): a slot of
+  `TRANSCRIPTION_LIVE_MAX_SESSIONS` (20) and `…_PER_USER` (2) is taken before the gateway is asked
+  and freed on every way out once the session's sockets are gone (closed, dropped after 5 s, the
+  slot freed after 10 s at the latest); a rotation keeps one closing stream at most. The gateway
+  handshake (connection, CONNECT through the proxy, upgrade answer, `session.update`) has 10 s,
+  and a session that ends meanwhile, or before, creates or keeps nothing of it. A refused handshake with 401/403 asks the gateway's model list with the same key:
+  without the model it is `model_not_allowed` (the HRZ key's `403` for `voxtral-mini-realtime`),
+  a failing list `gateway_key_rejected`. Stop (a commit) seals the open item, waits up to 15 s for
+  its transcript and closes the socket with 1000; the browser waits for that at most 20 s. One
+  item model serves both modes (`realtime/items.ts`): an item is open from its first audio or
+  commit until it ends, with its transcript or as `…failed`; deltas reach the browser only for
+  open items, nothing of a retired one or of an id the gateway never committed. Retired ids are
+  remembered for the last 128 retired items (four times the open-item limit), and the once-only
+  outcome holds within that window: an id retired longer ago that the gateway commits again opens
+  as a new item and ends once more. Remembering every id instead would let a gateway grow the
+  server's memory without bound. An item with audio whose stream closes before its transcript,
+  decoding or not, or without it in time, comes as `…failed`; audio held during a rotation is the
+  next item's, which fails with its stream if that closes before the handoff. For OpenAI stop commits what is left and waits for the answer to that commit itself:
+  without voice detection for the answer to every commit of the server's, with it, where commits
+  of the gateway's may cross it, it commits again after each `…committed` until one of its final
+  commits (by `event_id`) is answered with an empty buffer. Without that confirmation in 15 s the
+  browser gets `upstream_error` and 1011, not a normal close. OpenAI items awaiting their
+  transcript are 32 at most (beyond, the session ends with `upstream_error`) and fail after 30 s;
+  what the gateway sends for them afterwards, within the remembered window, is dropped. A
+  `keep_open` commit seals the item and opens the next stream at once, holding the audio
+  meanwhile; commits during a rotation fold into one more, at most one per second. A session
+  without audio for 60 s or longer than 4 h is finalized like a stop (`session_idle`,
+  `session_expired`). A gateway or browser that does not read (1 MiB or 2 MiB queued) ends the
+  session, a gateway that closes the stream too (`upstream_closed`), a browser that goes closes
+  the gateway's stream; sockets that do not close in 5 s are dropped.
+- **Availability.** `GET /realtime/config` probes the on-prem gateway (open, `session.update`,
+  1.5 s for a refusal, close; cached 5 min, a refusal 30 s) and leaves on-prem out with the reason
+  while it refuses; the admin form's _Verbindung testen_ does the same with the typed values and
+  reports the handshake's status.
+- **Browser.** `live/session.ts` opens the socket, waits for `session.created` (15 s), then
+  `live/audio.ts` (a socket that closes meanwhile fails the start and frees microphone and audio
+  context) takes the microphone stream (`getUserMedia` with echo cancellation, noise
+  suppression and gain control) into an AudioWorklet (`live/pcm-worklet.ts`) that low-pass filters
+  and resamples to the mode's rate and posts 100 ms PCM16 frames (`live/pcm.ts`). Vite builds the
+  worklet as an asset of its own (`?worker&url`), so it loads under `script-src 'self'` in the
+  browser, the PWA and the desktop app. The local WAV take records the same stream.
+- **Reverse proxy.** It must pass WebSocket upgrades for `/api` (nginx:
+  `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`,
+  `proxy_set_header Connection $connection_upgrade`) and allow a read timeout above a minute
+  (`proxy_read_timeout`; the browser sends audio every 100 ms, the server finishes a stop within
+  15 s).
+
+`infra/transcription-mock` stands in for every upstream in automated tests (`startUpstreamMock`)
+and for offline development (`bun run mock:transcription`); nothing points at it by default.
+
+The web adapter (`apps/web/src/adapters/transcription/`) keeps one folder per area
+(`upload/`, `mapping/`, `result/`, `history/`, `segments/`, `export/`, `summary/`,
+`templates/`, `recording/`, `live/`, `widgets/`). `page.tsx` switches the work area
+between the entry choice, upload, recording, live transcription and a saved transcript,
+and fills the `PageSidePanel` with the view's settings and the history; `workspace.tsx`
+holds the state the areas share (`useTranscriptionWorkspace`), `api.ts` a typed function
+and TanStack Query hook per endpoint plus the signed upload with progress, `audio/` the
+waveform player. Texts live in `i18n/{de,en}/<area>.json`, merged into the app's resources
+under `transcription`; kiChat's catalogue is kept verbatim. Widgets: `quick` and `recent`.
+The shell renders a page in another tree below and above `lg` and drops it behind the narrow
+layout's navigation tab, so the page keeps what must outlive a remount (view, upload queue,
+recording and live session, takes) in `page-memory.ts`, one memory per component, disposed
+once the address is no longer the page's.
+
 Desktop components (`DESKTOP_COMPONENT_TYPES`, so far `files`) are built-in
 rows too (`singleton = true`, same rules), created **enabled** with the name
 and icon from `desktopComponentDefaults` and an empty config. They have no
@@ -307,7 +594,8 @@ strings).
 - Adapter registry: `src/adapters/registry.ts` maps `ComponentType` →
   `{ Page, ConfigFields, defaultConfig, sourceUrl?, externalUrl?, feedUrl?, widgets }`,
   where `widgets` holds a `Tile` for every key the type has in
-  `COMPONENT_WIDGETS`. Adapters with `externalUrl` (`link`) open outside the
+  `COMPONENT_WIDGETS`, and a `name` where a type offers several widgets (the add-widget
+  dialog shows it after the component's name). Adapters with `externalUrl` (`link`) open outside the
   app from tiles, folders and the sidebar instead of navigating to
   `/c/$componentId`. Adapters with `feedUrl` (`rss`) get a dot in the sidebar
   while their feed has unread entries.
@@ -373,7 +661,14 @@ import.meta.env.VITE_API_URL ?? ''` as base and `credentials: 'include'`.
   to `app://` by loading the URL itself if Chromium does not follow it. Only
   main-frame redirects count: embedded sites redirect inside their iframe.
 - CSP via `session.webRequest.onHeadersReceived`: `default-src 'self'`,
-  `connect-src` the API origin, `frame-src https: http://localhost:*`,
+  `connect-src` the API origin, its WebSocket origin (`ws:`/`wss:`, live transcription) and
+  `JUSTCAMPUS_CONNECT_ORIGINS` (runtime) or the build's `DESKTOP_CONNECT_ORIGINS`, by default the
+  local MinIO (transcription storage); `media-src` the API origin, those origins, `blob:` and
+  `data:`, `frame-src https: http://localhost:*`,
   `img-src 'self' https: data:`, fonts and styles self/inline.
+- Permissions (`src/main/media-permissions.ts`): the app's own main frame may use the
+  microphone (audio only) and element fullscreen, for the transcription module's recording,
+  live transcription and maximised live text; everything else, and every embedded site, is
+  refused. macOS builds declare the microphone use (`build/entitlements.mac.plist`).
 - Everything else (window state, external links → `shell.openExternal`,
   no Node in the renderer, context isolation) follows electron-vite defaults.

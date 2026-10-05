@@ -11,6 +11,12 @@ win:
 mac:
   target:
     - dmg
+  # Recording and live transcription: the system asks for the microphone with this reason, and the
+  # hardened runtime needs the audio input entitlement.
+  entitlementsInherit: build/entitlements.mac.plist
+  entitlements: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: JLU Campus nimmt Audio für Transkriptionen auf. / JLU Campus records audio for transcriptions.
 linux:
   target:
     - AppImage

@@ -24,7 +24,7 @@ the compose plugin), `git`.
 ```bash
 bun install                 # also builds the JLU design system from its git tag
 cp .env.example .env        # defaults match docker-compose
-bun run infra:up            # Postgres on :5433, Keycloak on :8080
+bun run infra:up            # Postgres on :5433, Keycloak on :8080, MinIO on :9100/:9101
 bun run db:migrate
 bun run db:seed             # two example components
 bun run sandbox:build       # image the translator editor's Python code blocks run in
@@ -37,6 +37,24 @@ Python code blocks in its editor run on the server, each in a fresh container
 of that image without network (Docker or Podman, best under gVisor as in HAWKI;
 without root `bun run sandbox:gvisor` sets it up for rootless Podman, see
 `.env.example`).
+
+The transcription module keeps audio in MinIO (`TRANSCRIPTION_S3_*` in
+`.env.example`) and needs `ffmpeg` on the server. It uses the university's
+services as kiChat does: speech recognition (`jlu/whisper-1`) and the chat
+models (`jlu/qwen3.8-27b`, `jlu/qwen3.8-27b-fast`) of the HRZ gateway
+`https://api.hrz.uni-giessen.de/v1`, which a fresh module is preset to, speaker
+recognition on kiChat's Speaches server (pyannote, its own key) and, for live
+transcription, the gateway's realtime WebSocket (`voxtral-mini-realtime`), which
+the server relays: browsers stream to the app's own
+`wss://…/api/modules/transcription/live`, so live transcription needs no port
+besides HTTPS and no key reaches the browser. Under
+Admin → Components → Transkription enter the API keys, press _Modelle abrufen_
+for speech and chat, check each service with _Verbindung testen_ and enable the
+module; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#backends) lists every
+setting. Behind an outbound proxy set `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1` and
+`NO_PROXY` as `.env.example` shows. `bun run mock:transcription` stands in for
+all of these in automated tests and offline development only
+(`infra/transcription-mock/README.md`).
 
 `COMPONENT_SECRETS_KEY` encrypts module secrets such as API keys. Generate a
 production value with `openssl rand -base64 32`; changing it makes stored
@@ -95,8 +113,25 @@ or starting the **Docker** workflow by hand, pushes it to
 tagged with their version and `latest`, manual runs with the branch name; every
 image also gets `sha-<short>`.
 
-`docker-compose.prod.yml` runs that image with Postgres. Keycloak and the
-TLS-terminating reverse proxy run outside it.
+`docker-compose.prod.yml` runs that image with Postgres and MinIO (the
+transcription module's audio). Keycloak and the TLS-terminating reverse proxy
+run outside it; the proxy also publishes MinIO on its own host name
+(`TRANSCRIPTION_S3_PUBLIC_ENDPOINT`), since browsers upload to it directly. It
+must pass WebSocket upgrades for `/api` (live transcription), with a read
+timeout above a minute; for nginx:
+
+```nginx
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+location /api/ {
+  proxy_pass http://127.0.0.1:3000;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection $connection_upgrade;
+  proxy_set_header Host $host;
+  proxy_read_timeout 300s;
+}
+```
 
 ```bash
 cp .env.production.example .env.production   # fill in secrets and URLs

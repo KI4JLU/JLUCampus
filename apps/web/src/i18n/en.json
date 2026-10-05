@@ -531,6 +531,26 @@
         "modelLabel": "Enter a display name of at most 80 characters."
       }
     },
+    "transcription": {
+      "secrets": {
+        "apiKey": {
+          "label": "Speech recognition API key",
+          "hint": "Only needed if the endpoint asks for one. It is stored encrypted and never shown again."
+        },
+        "diarizationApiKey": {
+          "label": "Speaker detection API key",
+          "hint": "The speaker detection's Speaches server has a key of its own. Empty: the speech recognition key. It is stored encrypted and never shown again."
+        },
+        "llmApiKey": {
+          "label": "AI endpoint API key",
+          "hint": "Only needed if the endpoint asks for one. It is stored encrypted and never shown again."
+        },
+        "openaiRealtimeApiKey": {
+          "label": "OpenAI Realtime API key",
+          "hint": "Enables live transcription through OpenAI. Browsers only ever get short-lived keys from the server. It is stored encrypted and never shown again."
+        }
+      }
+    },
     "files": {
       "configNote": "Nothing to set up here: everyone sets up their places in the desktop app on their device.",
       "desktopOnlyTitle": "Only available in the desktop app",
@@ -542,6 +562,7 @@
     "rss": "RSS feed",
     "link": "Shortcut",
     "translator": "Translator",
+    "transcription": "Transcription",
     "files": "Files & drives"
   },
   "shortcut": {

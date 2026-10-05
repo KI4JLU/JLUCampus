@@ -59,7 +59,29 @@ const envSchema = z
     // optional container runtime such as gVisor's `runsc`.
     PYTHON_SANDBOX_DOCKER: z.string().min(1).default('docker'),
     PYTHON_SANDBOX_IMAGE: z.string().min(1).default('justcampus-python-sandbox:latest'),
-    PYTHON_SANDBOX_RUNTIME: z.string().min(1).optional()
+    PYTHON_SANDBOX_RUNTIME: z.string().min(1).optional(),
+    // The transcription module's object storage (S3-compatible, MinIO in docker compose). The
+    // server reaches it at the endpoint; browsers upload and play through signed URLs on the public
+    // endpoint, which defaults to the same. Without a bucket the module offers no uploads.
+    TRANSCRIPTION_S3_ENDPOINT: z.url().optional(),
+    TRANSCRIPTION_S3_PUBLIC_ENDPOINT: z.url().optional(),
+    TRANSCRIPTION_S3_REGION: z.string().min(1).default('us-east-1'),
+    TRANSCRIPTION_S3_BUCKET: z.string().min(1).optional(),
+    TRANSCRIPTION_S3_ACCESS_KEY: z.string().min(1).optional(),
+    TRANSCRIPTION_S3_SECRET_KEY: z.string().min(1).optional(),
+    TRANSCRIPTION_S3_FORCE_PATH_STYLE: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
+    // The ffmpeg and ffprobe binaries the transcription worker runs, and where it keeps its
+    // temporary files (default: the system's temporary directory).
+    TRANSCRIPTION_FFMPEG: z.string().min(1).default('ffmpeg'),
+    TRANSCRIPTION_FFPROBE: z.string().min(1).default('ffprobe'),
+    TRANSCRIPTION_WORK_DIR: z.string().min(1).optional(),
+    // Live transcription sessions this server relays at once, and per person (each holds a
+    // WebSocket to the browser and one to the gateway).
+    TRANSCRIPTION_LIVE_MAX_SESSIONS: z.coerce.number().int().min(1).max(10_000).default(20),
+    TRANSCRIPTION_LIVE_MAX_SESSIONS_PER_USER: z.coerce.number().int().min(1).max(100).default(2)
   })
   .transform((value) => ({
     ...value,
@@ -67,3 +89,128 @@ const envSchema = z
   }))
 
 export const env = envSchema.parse(process.env)
+
+// ---------------------------------------------------------------------------
+// Outbound proxy
+// ---------------------------------------------------------------------------
+
+/**
+ * Hosts that reach the internet only through a proxy (the campus host): Node's `fetch` (the
+ * transcription and translator upstreams, Keycloak) and its `http`/`https` modules (the S3 client)
+ * use `HTTPS_PROXY`/`HTTP_PROXY` only with `NODE_USE_ENV_PROXY=1` (Node 22.21 and 24.5 or later)
+ * or `--use-env-proxy`, and go direct to the hosts of `NO_PROXY`. Object storage, Keycloak and
+ * local services usually sit inside and must be listed there. Nothing here changes requests; the
+ * server only warns at start about settings that would send them the wrong way.
+ */
+
+/** A proxy variable as Node reads it: lower case before upper case; empty counts as unset. */
+export function proxyVariable(
+  environment: NodeJS.ProcessEnv,
+  name: 'HTTPS_PROXY' | 'HTTP_PROXY' | 'NO_PROXY'
+): string | null {
+  return environment[name.toLowerCase()]?.trim() || environment[name]?.trim() || null
+}
+
+function ipNumber(address: string): number | null {
+  const parts = address.split('.')
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255))
+    return null
+  return parts.reduce((value, part) => value * 256 + Number(part), 0)
+}
+
+/**
+ * Whether `NO_PROXY` sends requests to `url` direct, read as strictly as Node's `http` module
+ * does (`fetch` is a little more lenient): `*`, the exact host, `.domain` or `*.domain` for its
+ * subdomains, an IPv4 address or `from-to` range, each optionally with `:port`.
+ */
+export function noProxyCovers(noProxy: string | null, url: string): boolean {
+  if (!noProxy) return false
+  const target = new URL(url)
+  const host = target.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  const port = target.port || (target.protocol === 'https:' ? '443' : '80')
+  return noProxy
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .some((raw) => {
+      const entry = raw.toLowerCase()
+      if (entry === '*') return true
+      const portMatch = /^(.+?):(\d+)$/.exec(entry)
+      if (portMatch && !portMatch[1]!.includes(':') && portMatch[2] !== port) return false
+      const name = portMatch && !portMatch[1]!.includes(':') ? portMatch[1]! : entry
+      const range = /^([\d.]+)-([\d.]+)$/.exec(name)
+      if (range) {
+        const [from, to, value] = [ipNumber(range[1]!), ipNumber(range[2]!), ipNumber(host)]
+        return from !== null && to !== null && value !== null && value >= from && value <= to
+      }
+      if (name.startsWith('*.')) return host.endsWith(name.slice(1))
+      if (name.startsWith('.')) return host.endsWith(name)
+      return host === name.replace(/^\[|\]$/g, '')
+    })
+}
+
+/** Whether Node uses the proxy variables: `NODE_USE_ENV_PROXY=1` or `--use-env-proxy`. */
+function envProxyEnabled(environment: NodeJS.ProcessEnv, execArgv: readonly string[]): boolean {
+  return (
+    environment.NODE_USE_ENV_PROXY === '1' ||
+    [...execArgv, ...(environment.NODE_OPTIONS?.split(/\s+/) ?? [])].includes('--use-env-proxy')
+  )
+}
+
+/**
+ * Whether a request to `url` goes through the proxy: Node uses the proxy variables, one is set
+ * for the URL's scheme and `NO_PROXY` does not cover its host.
+ */
+export function reachedThroughProxy(
+  environment: NodeJS.ProcessEnv,
+  url: string,
+  execArgv: readonly string[] = []
+): boolean {
+  if (!envProxyEnabled(environment, execArgv)) return false
+  const protocol = new URL(url).protocol
+  const proxy =
+    protocol === 'https:'
+      ? proxyVariable(environment, 'HTTPS_PROXY')
+      : protocol === 'http:'
+        ? proxyVariable(environment, 'HTTP_PROXY')
+        : null
+  return Boolean(proxy) && !noProxyCovers(proxyVariable(environment, 'NO_PROXY'), url)
+}
+
+/**
+ * What the server warns about at start: proxy variables Node ignores without
+ * `NODE_USE_ENV_PROXY=1`, and `internalUrls` (object storage, Keycloak, the server itself) that the
+ * proxy would get. Never names the proxy, whose URL may hold
+ * credentials.
+ */
+export function outboundProxyWarnings(
+  environment: NodeJS.ProcessEnv,
+  internalUrls: readonly string[],
+  execArgv: readonly string[] = []
+): string[] {
+  if (!proxyVariable(environment, 'HTTP_PROXY') && !proxyVariable(environment, 'HTTPS_PROXY')) {
+    return []
+  }
+  if (!envProxyEnabled(environment, execArgv)) {
+    return [
+      'HTTPS_PROXY/HTTP_PROXY is set but Node ignores it without NODE_USE_ENV_PROXY=1: outbound requests go direct.'
+    ]
+  }
+  return internalUrls.flatMap((url) =>
+    reachedThroughProxy(environment, url, execArgv)
+      ? [`${new URL(url).host} would be reached through the proxy: add it to NO_PROXY.`]
+      : []
+  )
+}
+
+for (const warning of outboundProxyWarnings(
+  process.env,
+  [
+    `http://127.0.0.1:${env.PORT}`,
+    `http://localhost:${env.PORT}`,
+    env.KEYCLOAK_ISSUER,
+    env.TRANSCRIPTION_S3_ENDPOINT
+  ].filter((url): url is string => Boolean(url)),
+  process.execArgv
+)) {
+  console.warn(`Outbound proxy: ${warning}`)
+}

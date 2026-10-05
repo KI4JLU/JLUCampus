@@ -1,0 +1,337 @@
+{
+  "defaultMicrophone": "Default microphone",
+  "deleteRecording": "Delete recording",
+  "downloadRecording": "Download recording",
+  "fontSize": "Font size",
+  "grantMicrophone": "Grant microphone access",
+  "invertContrast": "Invert contrast",
+  "livePreviewPlaceholder": "Your text will appear here.",
+  "livePreviewSample": "This is sample text for live transcription.",
+  "loadingMicrophones": "Loading microphones...",
+  "maximizeTextView": "Maximize text view",
+  "microphone": "Microphone",
+  "microphoneAccessUnsupported": "Microphone access not supported",
+  "microphonePermission": "Microphone permission",
+  "microphonePermissionDenied": "Microphone permission denied: ",
+  "microphonePermissionHint": "Please allow microphone access in the browser prompt.",
+  "microphoneReady": "Microphone ready",
+  "microphonesUnavailable": "Microphones unavailable",
+  "minimizeTextView": "Minimize text view",
+  "modeLabel": "Mode",
+  "modeLocal": "Local (default)",
+  "recordingNotPossible": "Recording not possible",
+  "recordingProcessFailed": "The recording could not be processed.",
+  "recordingReady": "Ready to record",
+  "recordingRunning": "Recording",
+  "recordingRunningHint": "The selected microphone is being recorded locally in your browser.",
+  "recordingStopping": "Stopping recording",
+  "recordingStoppingHint": "The audio file is being prepared.",
+  "recordingsReadyToUpload": "{{count}} recordings ready to upload",
+  "searchingDevices": "Searching for devices...",
+  "selectInputDeviceHint": "Select an input device and start recording.",
+  "selectMicrophoneBelow": "Select a microphone below and press Start recording.",
+  "selectMicrophoneHint": "Select a microphone and start recording.",
+  "startRecording": "Start recording",
+  "startRecordingFailed": "Could not start the recording",
+  "startYourRecording": "Start your recording",
+  "stopRecording": "Stop recording",
+  "stopRecordingFailed": "Could not stop the recording",
+  "uploadForTranscription": "Upload for transcription",
+  "modeOpenai": "OpenAI",
+  "microphoneN": "Microphone {{n}}",
+  "tabsLabel": "Recording mode",
+  "elapsed": "Elapsed {{time}}",
+  "takesTitle": "Recordings",
+  "takesHint": "Recordings stay only in this browser window until you upload them.",
+  "downloadRecordingName": "Download recording {{name}}",
+  "deleteRecordingName": "Delete recording {{name}}",
+  "confirmDeleteRecording": "Confirm deleting {{name}}",
+  "cancelDeleteRecording": "Cancel deleting {{name}}",
+  "uploadUnavailable": "Uploading becomes possible once speech recognition is set up.",
+  "connecting": "Connecting",
+  "connectingHint": "The live transcription is connecting to the service.",
+  "liveRunning": "Live transcription running",
+  "liveRunningHint": "The microphone is transcribed live and recorded locally in your browser at the same time.",
+  "liveUnavailable": "No service is set up for live transcription yet.",
+  "onpremUnavailable": {
+    "modelNotAllowed": "Local live transcription is unavailable right now: the gateway does not allow the model {{model}} for its API key. Once it is allowed, it works without further setup.",
+    "gatewayKeyRejected": "Local live transcription is unavailable right now: the gateway refuses the API key.",
+    "gatewayRefused": "Local live transcription is unavailable right now: the gateway refuses a live session with {{model}}.",
+    "gatewayUnreachable": "Local live transcription is unavailable right now: the server cannot reach the gateway."
+  },
+  "liveTranscript": "Live transcript",
+  "liveErrors": {
+    "not_set_up": "This live mode is not set up.",
+    "busy": "Live transcription is busy right now: the server takes no more sessions. Please try again shortly.",
+    "model_not_allowed": "Live transcription is unavailable right now: the gateway does not allow the live model for its API key.",
+    "gateway_key_rejected": "Live transcription is unavailable right now: the gateway refuses the API key.",
+    "gateway_refused": "Live transcription is unavailable right now: the gateway refuses the live session.",
+    "gateway_unreachable": "Live transcription is unavailable right now: the server cannot reach the gateway.",
+    "upstream_error": "The gateway reported an error during live transcription.",
+    "upstream_closed": "The gateway ended the live session.",
+    "session_idle": "Live transcription ended because no audio arrived for too long.",
+    "session_expired": "Live transcription reached its maximum length and ended.",
+    "invalid_event": "The server refused a message of the live transcription.",
+    "audio_rate_exceeded": "More audio arrived than plays in real time; live transcription ended.",
+    "message_rate_exceeded": "The browser sent more messages than the server takes; live transcription ended."
+  },
+  "liveServiceError": "Live transcription error: {{message}}",
+  "appearance": "Appearance",
+  "fontSizeValue": "{{size}}px",
+  "resetAppearance": "Reset appearance",
+  "clearText": "Clear text",
+  "errors": {
+    "connectionFailed": "Audio connection failed.",
+    "connectionClosed": "Audio connection closed.",
+    "connectionTimeout": "Audio connection not established within 15s.",
+    "audioFailed": "The audio processing could not start.",
+    "aborted": "Audio connection closed."
+  },
+  "widgets": {
+    "quickName": "New transcription",
+    "recentName": "In progress and recently saved",
+    "upload": "Upload file",
+    "record": "Record audio",
+    "activeJobs_one": "{{count}} job in progress",
+    "activeJobs_other": "{{count}} jobs in progress",
+    "jobsTitle": "In progress",
+    "transcriptsTitle": "Recently saved",
+    "recentEmpty": "No saved transcriptions yet.",
+    "jobStatus": {
+      "uploading": "Uploading",
+      "analyzing": "Speaker analysis",
+      "analyzed": "Name speakers",
+      "processing": "Transcribing",
+      "completed": "Not saved",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "admin": {
+    "sections": {
+      "asr": "Speech recognition",
+      "diarization": "Speaker recognition",
+      "llm": "AI endpoint",
+      "defaults": "Defaults for uploads",
+      "limits": "Limits",
+      "retention": "Retention",
+      "live": "Live transcription",
+      "storage": "Storage"
+    },
+    "asrBaseUrl": {
+      "label": "Speech recognition address",
+      "hint": "OpenAI-compatible endpoint up to /v1, preset to the HRZ AI gateway with jlu/whisper-1. Several Speaches workers separated by commas; the chunks of a job go to them in turn. Transcription uses POST /audio/transcriptions (verbose_json, word timing where the server gives it)."
+    },
+    "asrConcurrency": {
+      "label": "Simultaneous requests to the servers",
+      "hint": "Requests to speech and speaker recognition at once, across all jobs of this server process (like kiChat's SPEACHES_MAX_CONCURRENCY). As many as the servers have model instances; from 1 to 32."
+    },
+    "providerName": {
+      "label": "Provider name",
+      "hint": "Saved with every transcription, such as KI@JLU."
+    },
+    "asrModels": {
+      "label": "Speech models",
+      "hint": "At most {{max}}. “Fetch models” takes the endpoint’s speech recognition models (by their mode with LiteLLM, else by id); display names you gave stay. Add other ids with “Add model”."
+    },
+    "defaultAsrModel": {
+      "label": "Speech model of jobs",
+      "hint": "Without a choice, the first of the list."
+    },
+    "diarizationEnabled": {
+      "label": "Recognise speakers",
+      "hint": "Analyses the voices before transcribing, so they can be named, and assigns the transcript's segments to them. Without it, or while the server cannot be reached, every file has one automatic voice."
+    },
+    "diarizationUrl": {
+      "label": "Speaker recognition address",
+      "hint": "Speaches server up to /v1 with POST /audio/diarization and /audio/speech/timestamps, such as https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1. Empty: the speech recognition address (the HRZ AI gateway offers no speaker recognition). Without an API key of its own, the speech recognition key is used."
+    },
+    "diarizationModel": {
+      "label": "Speaker recognition model",
+      "hint": "Empty: pyannote/speaker-diarization-community-1, as in kiChat."
+    },
+    "llmBaseUrl": {
+      "label": "AI endpoint address",
+      "hint": "OpenAI-compatible chat endpoint up to /v1 for correction, titles, subtitles, summaries and speaker optimisation. The HRZ AI gateway is preset; enter its API key below."
+    },
+    "llmModels": {
+      "label": "AI models",
+      "hint": "At most {{max}}. The list can be fetched from the endpoint; display names you gave stay. Only listed models are used; without models the AI stays off."
+    },
+    "defaultCorrectionModel": {
+      "label": "Model for quick tasks",
+      "hint": "AI correction, speaker optimisation, title and subtitle. jlu/qwen3.8-27b-fast is preset; it applies once it is in the list, else the first of the list."
+    },
+    "defaultSummaryModel": {
+      "label": "Summary model",
+      "hint": "Summaries and template previews. jlu/qwen3.8-27b is preset; it applies once it is in the list, else the first of the list."
+    },
+    "llmDisableThinking": {
+      "label": "Turn off the models’ thinking",
+      "hint": "Sends chat_template_kwargs.enable_thinking = false, which vLLM servers with Qwen3 models understand (HRZ gateway): the models answer at once instead of reasoning first. Turn it off for endpoints that refuse unknown parameters, such as OpenAI."
+    },
+    "firstSpeechModel": "First speech model of the list",
+    "firstModel": "First model of the list",
+    "unlistedModel": "{{id}} (not in the list)",
+    "modelId": "Model ID",
+    "modelLabel": "Display name",
+    "modelActions": "Actions",
+    "addModel": "Add model",
+    "removeModel": "Remove model {{name}}",
+    "fetchModels": "Fetch models",
+    "fetchingModels": "Fetching models …",
+    "fetchedModels_one": "{{count}} model taken over.",
+    "fetchedModels_other": "{{count}} models taken over.",
+    "fetchedModelsOmitted_one": "{{count}} more above the maximum of {{max}} left out.",
+    "fetchedModelsOmitted_other": "{{count}} more above the maximum of {{max}} left out.",
+    "fetchedModelsLeftOut": {
+      "asr_one": "Left out {{count}} model without speech recognition (such as chat or embeddings).",
+      "asr_other": "Left out {{count}} models without speech recognition (such as chat or embeddings).",
+      "llm_one": "Left out {{count}} model that does not chat (embeddings, speech, images).",
+      "llm_other": "Left out {{count}} models that do not chat (embeddings, speech, images)."
+    },
+    "fetchModelsErrors": {
+      "noneOfKind": {
+        "asr_one": "The endpoint lists no speech recognition model, only {{count}} other one. Add an id by hand with “Add model”.",
+        "asr_other": "The endpoint lists no speech recognition model, only {{count}} others. Add an id by hand with “Add model”.",
+        "llm_one": "The endpoint lists no chat model, only {{count}} other one. Add an id by hand with “Add model”.",
+        "llm_other": "The endpoint lists no chat model, only {{count}} others. Add an id by hand with “Add model”."
+      },
+      "empty": "The endpoint names no models.",
+      "invalidUrl": "The address is not valid.",
+      "failed": "The models could not be fetched. Check the address and the API key."
+    },
+    "defaultLanguage": {
+      "label": "Language",
+      "hint": "What new uploads start with; people can change it."
+    },
+    "languages": {
+      "auto": "Detect automatically",
+      "de": "German",
+      "en": "English"
+    },
+    "defaultSpeakerCount": {
+      "label": "Number of speakers",
+      "hint": "What new uploads start with; people can change it."
+    },
+    "speakerCounts": {
+      "auto": "Auto",
+      "single": "Single person",
+      "multi": "Multiple people"
+    },
+    "defaultLlmCorrection": {
+      "label": "AI correction on by default",
+      "hint": "Only takes effect when an AI endpoint with models is set up."
+    },
+    "maxFileMegabytes": {
+      "label": "Largest file (MB)",
+      "hint": "From 1 to 10240 MB."
+    },
+    "maxDurationMinutes": {
+      "label": "Longest recording (minutes)",
+      "hint": "Empty: no limit besides the file size."
+    },
+    "maxFilesPerGroup": {
+      "label": "Files per transcript",
+      "hint": "Empty: no limit."
+    },
+    "maxActiveJobsPerUser": {
+      "label": "Running jobs per person",
+      "hint": "Jobs uploading, being analysed or transcribed at the same time."
+    },
+    "workerConcurrency": {
+      "label": "Simultaneous jobs of the server",
+      "hint": "Per server process, from 1 to 16."
+    },
+    "chunkSeconds": {
+      "label": "Chunk length (seconds)",
+      "hint": "Long recordings are cut into chunks of this length before recognition."
+    },
+    "upstreamTimeoutSeconds": {
+      "label": "Time limit per request (seconds)",
+      "hint": "How long a request to speech recognition, speaker recognition or the AI endpoint may take."
+    },
+    "transcriptRetentionHours": {
+      "label": "Delete saved transcripts after (hours)",
+      "hint": "Counted from the last change. Empty: they stay until the person deletes them."
+    },
+    "unsavedJobRetentionHours": {
+      "label": "Delete unsaved jobs after (hours)",
+      "hint": "Failed and cancelled ones too, each with its audio."
+    },
+    "realtimeModes": {
+      "label": "Offered modes",
+      "hint": "Local needs a gateway (without its own: speech recognition), OpenAI the API key for OpenAI Realtime. Both run through this server."
+    },
+    "modes": {
+      "onprem": "Local (gateway)",
+      "openai": "OpenAI Realtime"
+    },
+    "defaultRealtimeMode": {
+      "label": "Default mode",
+      "hint": "Without a choice, the first one offered.",
+      "auto": "First mode offered"
+    },
+    "onpremGatewayUrl": {
+      "label": "Live transcription gateway",
+      "hint": "Up to /v1; the server opens its /v1/realtime as a WebSocket with the speech recognition API key. Empty: the speech recognition address. Browsers never get the key."
+    },
+    "onpremRealtimeModel": {
+      "label": "Gateway live model",
+      "hint": "The gateway’s realtime model, voxtral-mini-realtime as in kiChat. The API key must be allowed to use it."
+    },
+    "openaiRealtimeUrl": {
+      "label": "OpenAI API address",
+      "hint": "Up to /v1. The server opens its /v1/realtime as a WebSocket with the API key for OpenAI Realtime; browsers never get it."
+    },
+    "openaiRealtimeModel": {
+      "label": "OpenAI transcription model",
+      "hint": "Set at the start of every session."
+    },
+    "storageHint": "Storage is set up with the server's TRANSCRIPTION_S3_* environment variables. Without storage, no uploads are possible.",
+    "test": {
+      "running": "Testing …",
+      "ok": "Connection successful.",
+      "failed": "Connection failed.",
+      "status": "HTTP {{status}}",
+      "latency": "{{ms}} ms",
+      "error": "The test could not be run.",
+      "findings": {
+        "models_one": "{{count}} model",
+        "models_other": "{{count}} models",
+        "modelMissing": "The endpoint does not list the model {{model}}.",
+        "notSetUp": "Not set up yet.",
+        "bucketReachable": "Bucket {{bucket}} is reachable",
+        "modelsUnlisted": "The endpoint lists no models",
+        "noModel": "No model is chosen to test with.",
+        "transcribed": "A test clip was transcribed with {{model}}",
+        "diarized": "A test clip was analysed for speakers ({{turns}} turns)",
+        "chatAnswered": "{{model}} answered a test question",
+        "realtimeModelAccepted": "The gateway accepts the key and the live model {{model}}",
+        "realtimeUnavailable": {
+          "modelNotAllowed": "The gateway does not allow the model {{model}} for this API key. The key works otherwise; ask the gateway’s operator to allow the model.",
+          "gatewayKeyRejected": "The gateway refuses the API key.",
+          "gatewayRefused": "The gateway refuses a live session with {{model}}.",
+          "gatewayUnreachable": "The server cannot reach the gateway."
+        },
+        "signedRoundTrip": "A test file was uploaded, read back and deleted through signed URLs in bucket {{bucket}}",
+        "serverRoundTrip": "A test file was written, read back and deleted by the server in bucket {{bucket}}",
+        "signedUrlsUnreachable": "This server cannot reach the address of the signed URLs; browsers may still reach it",
+        "invalidAnswer": {
+          "transcription": "The answer was no transcription.",
+          "diarization": "The answer held no speaker turns.",
+          "chat": "The answer was no chat completion.",
+          "storedContent": "The file read back differs from the one stored."
+        }
+      }
+    },
+    "testTargets": {
+      "asr": "Test speech recognition",
+      "diarization": "Test speaker recognition",
+      "llm": "Test AI endpoint",
+      "realtimeOnprem": "Test gateway",
+      "realtimeOpenai": "Test OpenAI Realtime",
+      "storage": "Test storage"
+    }
+  }
+}

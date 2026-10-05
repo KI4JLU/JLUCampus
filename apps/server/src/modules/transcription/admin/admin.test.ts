@@ -1,0 +1,660 @@
+import { Readable } from 'node:stream'
+
+import {
+  firstSpeechModel,
+  isSpeechModelId,
+  TRANSCRIPTION_API,
+  TRANSCRIPTION_DEFAULT_CONFIG
+} from '@justcampus/shared'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+import { asrModel, transcriptionConfigSchema } from '../config.js'
+import { json, startUpstreamMock, testApp, type RunningMock } from '../transcripts/testing.js'
+
+import {
+  chatModels,
+  safeMessage,
+  speechModels,
+  silentWav,
+  testConnection,
+  type ConnectionContext,
+  type TestStorage
+} from './connections.js'
+import { adminRouter } from './index.js'
+
+const ADMIN = '/api/admin/modules/transcription'
+const models = TRANSCRIPTION_API.adminModels.slice(ADMIN.length)
+const test = TRANSCRIPTION_API.adminTest.slice(ADMIN.length)
+
+let mock: RunningMock
+beforeAll(async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  mock = await startUpstreamMock()
+})
+afterAll(async () => {
+  await mock.close()
+  vi.restoreAllMocks()
+})
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('helpers', () => {
+  it('keeps chat models only for the chat endpoint', () => {
+    expect(
+      chatModels([
+        { id: 'mock-chat', label: 'Chat' },
+        { id: 'text-embedding-3', label: 'E' },
+        { id: 'whisper-1', label: 'W' },
+        { id: 'gpt-4o-transcribe', label: 'T' }
+      ]).map((model) => model.id)
+    ).toEqual(['mock-chat'])
+  })
+
+  it('masks keys and bearer tokens in messages', () => {
+    expect(safeMessage('Incorrect API key sk-live-123 (Bearer abc.def)', ['sk-live-123'])).toBe(
+      'Incorrect API key *** (Bearer ***)'
+    )
+  })
+
+  it('makes a valid silent WAV', () => {
+    const wav = silentWav(0.5)
+    expect(new TextDecoder().decode(wav.slice(0, 4))).toBe('RIFF')
+    expect(wav.byteLength).toBe(44 + 16_000)
+  })
+})
+
+describe('model discovery', () => {
+  it('lists speech recognition models for speech and chat models for chat', async () => {
+    const app = testApp(adminRouter)
+    const speech = await app.request(
+      models,
+      json('POST', { kind: 'asr', baseUrl: `${mock.origin}/asr/v1` })
+    )
+    // The gateway's chat model is left out by LiteLLM's mode, though its id says nothing.
+    expect(await speech.json()).toEqual({
+      models: [
+        { id: 'jlu/whisper-1', label: 'jlu/whisper-1', speech: true },
+        { id: 'mock-gateway', label: 'mock-gateway', speech: true },
+        { id: 'mock-fail', label: 'mock-fail', speech: true }
+      ],
+      leftOut: 1
+    })
+    const chat = await app.request(
+      models,
+      json('POST', { kind: 'llm', baseUrl: `${mock.origin}/llm/v1` })
+    )
+    expect(await chat.json()).toMatchObject({
+      models: [
+        { id: 'mock-chat', label: 'Mock Chat' },
+        { id: 'mock-chat-large', label: 'mock-chat-large' }
+      ]
+    })
+  })
+
+  it('tells speech models by LiteLLM’s mode, else by id', () => {
+    const list = [
+      'jlu/qwen3.8-27b',
+      'jlu/qwen3-embedding',
+      'jlu/whisper-1',
+      'gpt-4o-transcribe',
+      'gpt-4o-mini-tts',
+      'voxtral-mini-2507',
+      'nvidia/parakeet-tdt-0.6b',
+      'nvidia/canary-1b',
+      'my-stt',
+      'jlu/gemma-4-26b-it'
+    ].map((id) => ({ id, label: id }))
+    expect(speechModels(list).map((model) => model.id)).toEqual([
+      'jlu/whisper-1',
+      'gpt-4o-transcribe',
+      'voxtral-mini-2507',
+      'nvidia/parakeet-tdt-0.6b',
+      'nvidia/canary-1b',
+      'my-stt'
+    ])
+    // A mode overrides the id either way.
+    const modes = new Map([
+      ['jlu/whisper-1', 'chat'],
+      ['jlu/gemma-4-26b-it', 'audio_transcription']
+    ])
+    expect(speechModels(list, modes).map((model) => model.id)).toContain('jlu/gemma-4-26b-it')
+    expect(speechModels(list, modes).map((model) => model.id)).not.toContain('jlu/whisper-1')
+    expect(isSpeechModelId('text-to-speech-1')).toBe(false)
+  })
+
+  it('never picks a chat model listed first for speech', () => {
+    const chat = { id: 'jlu/qwen3.8-27b', label: 'Qwen' }
+    const whisper = { id: 'jlu/whisper-1', label: 'Whisper' }
+    expect(firstSpeechModel([chat, whisper])).toBe(whisper)
+    // Ids the admin typed that say nothing are the manual override.
+    const custom = { id: 'campus-recognizer', label: 'Custom' }
+    expect(firstSpeechModel([custom])).toBe(custom)
+    expect(firstSpeechModel([])).toBeNull()
+  })
+
+  it('keeps discovery’s classification and order for the automatic speech model (C-3)', () => {
+    const list = [
+      { id: 'jlu/qwen3.8-27b', label: 'Qwen' },
+      { id: 'campus-recognizer', label: 'Campus' },
+      { id: 'whisper-1', label: 'Whisper' }
+    ]
+    const modes = new Map([
+      ['jlu/qwen3.8-27b', 'chat'],
+      ['campus-recognizer', 'audio_transcription'],
+      ['whisper-1', 'audio_transcription']
+    ])
+    const discovered = speechModels(list, modes)
+    expect(discovered).toEqual([
+      { id: 'campus-recognizer', label: 'Campus', speech: true },
+      { id: 'whisper-1', label: 'Whisper', speech: true }
+    ])
+    // The alias LiteLLM calls audio_transcription comes first, as the gateway lists it.
+    expect(firstSpeechModel(discovered)?.id).toBe('campus-recognizer')
+    // Saved, the classification stays, and the server uses the same model.
+    const config = { ...TRANSCRIPTION_DEFAULT_CONFIG, asrModels: discovered, defaultAsrModel: null }
+    expect(transcriptionConfigSchema.parse(config).asrModels).toEqual(discovered)
+    expect(asrModel(transcriptionConfigSchema.parse(config))?.id).toBe('campus-recognizer')
+    // A chat id typed alone into the speech list is the admin's choice and is used.
+    const typed = { id: 'jlu/qwen3.8-27b', label: 'Qwen' }
+    expect(firstSpeechModel([typed])).toBe(typed)
+  })
+
+  it('lists the ids alone when the endpoint has no model info', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        String(url).endsWith('/models')
+          ? Response.json({ data: [{ id: 'jlu/qwen3.8-27b' }, { id: 'whisper-large-v3' }] })
+          : new Response('Not Found', { status: 404 })
+      )
+    )
+    const app = testApp(adminRouter)
+    const speech = await app.request(
+      models,
+      json('POST', { kind: 'asr', baseUrl: 'https://asr.example/v1' })
+    )
+    expect(await speech.json()).toEqual({
+      models: [{ id: 'whisper-large-v3', label: 'whisper-large-v3', speech: true }],
+      leftOut: 1
+    })
+  })
+
+  it('uses the typed key, else the saved one of that endpoint', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ data: [{ id: 'm' }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const app = testApp(adminRouter, {
+      secrets: { apiKey: 'saved-speech', llmApiKey: 'saved-chat' }
+    })
+    // The model lists only; speech discovery also asks for LiteLLM's model info.
+    const listCalls = (): [string, RequestInit][] =>
+      (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(([url]) =>
+        String(url).endsWith('/models')
+      )
+    const authorization = (call: number): string | null =>
+      new Headers(listCalls()[call]![1].headers).get('authorization')
+    await app.request(models, json('POST', { kind: 'asr', baseUrl: 'https://asr.example/v1' }))
+    await app.request(models, json('POST', { kind: 'llm', baseUrl: 'https://llm.example/v1' }))
+    await app.request(
+      models,
+      json('POST', { kind: 'llm', baseUrl: 'https://llm.example/v1', apiKey: 'typed' })
+    )
+    await app.request(
+      models,
+      json('POST', { kind: 'llm', baseUrl: 'https://llm.example/v1', apiKey: null })
+    )
+    expect([0, 1, 2, 3].map(authorization)).toEqual([
+      'Bearer saved-speech',
+      'Bearer saved-chat',
+      'Bearer typed',
+      null
+    ])
+  })
+
+  it('answers 502 when the endpoint fails, and 400 for plain http elsewhere', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('nope', { status: 401 }))
+    )
+    const app = testApp(adminRouter)
+    const failed = await app.request(
+      models,
+      json('POST', { kind: 'asr', baseUrl: 'https://asr.example/v1' })
+    )
+    expect(failed.status).toBe(502)
+    const insecure = await app.request(
+      models,
+      json('POST', { kind: 'asr', baseUrl: 'http://asr.example/v1' })
+    )
+    expect(insecure.status).toBe(400)
+  })
+})
+
+describe('connection tests', () => {
+  const runtime = (
+    overrides: Record<string, unknown> = {}
+  ): { config: Record<string, unknown>; secrets: Record<string, string | null> } => ({
+    config: {
+      ...testConfig(),
+      ...overrides
+    },
+    secrets: {
+      apiKey: 'sk-speech-secret',
+      diarizationApiKey: null,
+      llmApiKey: null,
+      openaiRealtimeApiKey: 'sk-openai-secret'
+    }
+  })
+  function testConfig(): Record<string, unknown> {
+    return {
+      asrBaseUrl: `${mock.origin}/asr/v1`,
+      asrModels: [{ id: 'jlu/whisper-1', label: 'Whisper' }],
+      defaultAsrModel: 'jlu/whisper-1',
+      llmBaseUrl: `${mock.origin}/llm/v1`,
+      llmModels: [{ id: 'mock-chat', label: 'Mock Chat' }],
+      defaultSummaryModel: 'mock-chat',
+      onpremGatewayUrl: `${mock.origin}/realtime/v1`,
+      onpremRealtimeModel: 'voxtral-mini-realtime',
+      openaiRealtimeUrl: `${mock.origin}/realtime/openai/v1`,
+      openaiRealtimeModel: 'gpt-realtime-whisper',
+      diarizationUrl: null,
+      diarizationModel: null
+    }
+  }
+  const context = (overrides: Record<string, unknown> = {}): { runtime: never; storage: null } => ({
+    runtime: { ...runtime(), config: { ...runtime().config, ...overrides } } as never,
+    storage: null
+  })
+
+  it('recognises a test clip and gets a chat answer, beside the model lists', async () => {
+    const asr = await testConnection({ target: 'asr' }, context())
+    expect(asr).toMatchObject({
+      ok: true,
+      status: 200,
+      finding: { kind: 'transcribed', model: 'jlu/whisper-1' },
+      checks: [
+        { kind: 'models', count: 4 },
+        { kind: 'transcribed', model: 'jlu/whisper-1' }
+      ],
+      message: null
+    })
+    // A listed model the endpoint cannot run fails at the operation.
+    expect(await testConnection({ target: 'asr', model: 'mock-fail' }, context())).toMatchObject({
+      ok: false,
+      status: 503,
+      checks: [{ kind: 'models', count: 4 }]
+    })
+    expect(await testConnection({ target: 'llm', model: 'mock-chat' }, context())).toMatchObject({
+      ok: true,
+      checks: [
+        { kind: 'models', count: 2 },
+        { kind: 'chatAnswered', model: 'mock-chat' }
+      ]
+    })
+    expect(await testConnection({ target: 'llm', model: 'mock-fail' }, context())).toMatchObject({
+      ok: false,
+      status: 500
+    })
+    expect(
+      await testConnection({ target: 'llm' }, context({ llmModels: [], defaultSummaryModel: null }))
+    ).toMatchObject({ ok: false, finding: { kind: 'noModel' } })
+    expect(
+      await testConnection(
+        { target: 'diarization' },
+        context({ diarizationUrl: `${mock.origin}/diarization/v1` })
+      )
+    ).toMatchObject({ ok: true, finding: { kind: 'diarized', turns: 1 } })
+    // Without a diariser of its own, the speech server is asked, as kiChat does; the HRZ gateway
+    // (here the speech mock) has no diarisation.
+    expect(await testConnection({ target: 'diarization' }, context())).toMatchObject({
+      ok: false,
+      status: 404
+    })
+  })
+
+  it('fails an endpoint that lists the model but rejects the operation', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) =>
+      String(url).endsWith('/models')
+        ? Response.json({ data: [{ id: 'jlu/whisper-1' }, { id: 'chat' }] })
+        : new Response('Not found', { status: 404 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject({
+      ok: false,
+      status: 404,
+      checks: [{ kind: 'models', count: 2 }],
+      message: 'Status 404: Not found'
+    })
+    expect(await testConnection({ target: 'llm', model: 'chat' }, context())).toMatchObject({
+      ok: false,
+      status: 404
+    })
+    // A speech endpoint without a model list is still tested by its operation.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) =>
+        String(url).endsWith('/models')
+          ? new Response('no', { status: 404 })
+          : Response.json({ text: '', segments: [] })
+      )
+    )
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject({
+      ok: true,
+      checks: [{ kind: 'modelsUnlisted' }, { kind: 'transcribed', model: 'jlu/whisper-1' }]
+    })
+  })
+
+  it('tests a chat model configured by hand on an endpoint without a model list', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) =>
+      String(url).endsWith('/models')
+        ? new Response('Not found', { status: 404 })
+        : Response.json({ choices: [{ message: { content: 'OK' } }] })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await testConnection({ target: 'llm', model: 'manual-chat' }, context())).toMatchObject({
+      ok: true,
+      status: 200,
+      checks: [{ kind: 'modelsUnlisted' }, { kind: 'chatAnswered', model: 'manual-chat' }],
+      message: null
+    })
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      `${mock.origin}/llm/v1/models`,
+      `${mock.origin}/llm/v1/chat/completions`
+    ])
+    // A wrong key still fails, at the operation that decides.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('Unauthorized', { status: 401 }))
+    )
+    expect(await testConnection({ target: 'llm', model: 'manual-chat' }, context())).toMatchObject({
+      ok: false,
+      status: 401,
+      checks: [{ kind: 'modelsUnlisted' }],
+      message: 'Status 401: Unauthorized'
+    })
+  })
+
+  it('rejects 2xx answers of the wrong shape', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) =>
+        String(url).endsWith('/models')
+          ? Response.json({ data: [{ id: 'jlu/whisper-1' }] })
+          : new Response('<html>Login</html>', {
+              status: 200,
+              headers: { 'Content-Type': 'text/html' }
+            })
+      )
+    )
+    const invalid = (expected: string): Record<string, unknown> => ({
+      ok: false,
+      status: 200,
+      finding: { kind: 'invalidAnswer', expected }
+    })
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject(
+      invalid('transcription')
+    )
+    expect(
+      await testConnection({ target: 'llm', model: 'jlu/whisper-1' }, context())
+    ).toMatchObject(invalid('chat'))
+    expect(
+      await testConnection({ target: 'diarization', url: 'https://diarize.example/d' }, context())
+    ).toMatchObject(invalid('diarization'))
+  })
+
+  it('rejects 2xx answers that parse but are no result of the operation', async () => {
+    // The review's counterexamples: each answered 200 and passed before.
+    const answers: Record<string, () => Response> = {
+      'audio/transcriptions': () => Response.json({ error: 'operation failed' }),
+      'chat/completions': () => Response.json({ choices: [{ message: {} }] })
+    }
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const path = String(url)
+      if (path.endsWith('/models')) return Response.json({ data: [{ id: 'jlu/whisper-1' }] })
+      const match = Object.entries(answers).find(([suffix]) => path.endsWith(suffix))
+      return match ? match[1]() : new Response('?', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const invalid = (expected: string): Record<string, unknown> => ({
+      ok: false,
+      status: 200,
+      finding: { kind: 'invalidAnswer', expected }
+    })
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject(
+      invalid('transcription')
+    )
+    expect(
+      await testConnection({ target: 'llm', model: 'jlu/whisper-1' }, context())
+    ).toMatchObject(invalid('chat'))
+
+    // Empty or thinking-only chat content is no answer either; unrelated JSON no transcription.
+    answers['chat/completions'] = () =>
+      Response.json({ choices: [{ message: { content: '<think>…</think> ' } }] })
+    answers['audio/transcriptions'] = () => Response.json({ result: 'ok' })
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject(
+      invalid('transcription')
+    )
+    expect(
+      await testConnection({ target: 'llm', model: 'jlu/whisper-1' }, context())
+    ).toMatchObject(invalid('chat'))
+
+    // Silence is a valid transcription: Whisper's shape with empty text.
+    answers['audio/transcriptions'] = () =>
+      Response.json({ task: 'transcribe', language: 'german', duration: 1, text: '', segments: [] })
+    expect(await testConnection({ target: 'asr' }, context())).toMatchObject({
+      ok: true,
+      finding: { kind: 'transcribed' }
+    })
+  })
+
+  it('opens the realtime WebSocket of either mode with key and model, never echoing keys', async () => {
+    const onprem = await testConnection({ target: 'realtimeOnprem' }, context())
+    expect(onprem).toMatchObject({
+      ok: true,
+      status: 101,
+      finding: { kind: 'realtimeModelAccepted', model: 'voxtral-mini-realtime' },
+      checks: [{ kind: 'realtimeModelAccepted', model: 'voxtral-mini-realtime' }],
+      message: null
+    })
+    expect(JSON.stringify(onprem)).not.toContain('sk-speech-secret')
+    const openai = await testConnection({ target: 'realtimeOpenai' }, context())
+    expect(openai).toMatchObject({
+      ok: true,
+      finding: { kind: 'realtimeModelAccepted', model: 'gpt-realtime-whisper' }
+    })
+    expect(JSON.stringify(openai)).not.toContain('sk-openai')
+    const typedKeyOnly = await testConnection({ target: 'realtimeOpenai', apiKey: null }, context())
+    expect(typedKeyOnly).toMatchObject({ ok: false, finding: { kind: 'notSetUp' } })
+  })
+
+  it('says precisely why a live mode cannot run', async () => {
+    // The mock gateway refuses `denied` models with 403 at the handshake, as the HRZ gateway
+    // refuses a realtime model the key may not use; its model list works and lacks the model.
+    const denied = await testConnection(
+      { target: 'realtimeOnprem', model: 'voxtral-denied' },
+      context()
+    )
+    expect(denied).toMatchObject({
+      ok: false,
+      status: 403,
+      finding: { kind: 'realtimeUnavailable', reason: 'modelNotAllowed', model: 'voxtral-denied' },
+      checks: [{ kind: 'realtimeUnavailable' }]
+    })
+    expect(JSON.stringify(denied)).not.toContain('sk-speech-secret')
+
+    // A key the gateway refuses at the handshake and at the model list.
+    vi.stubEnv('TRANSCRIPTION_MOCK_REALTIME_KEY', 'the-right-key')
+    try {
+      expect(await testConnection({ target: 'realtimeOnprem' }, context())).toMatchObject({
+        ok: false,
+        status: 401,
+        finding: { kind: 'realtimeUnavailable', reason: 'gatewayKeyRejected' }
+      })
+      expect(
+        await testConnection({ target: 'realtimeOnprem', apiKey: 'the-right-key' }, context())
+      ).toMatchObject({ ok: true })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+
+    // A session refused after the handshake, and a gateway nobody answers at.
+    expect(
+      await testConnection({ target: 'realtimeOnprem', model: 'mock-realtime-refused' }, context())
+    ).toMatchObject({
+      ok: false,
+      status: null,
+      finding: { kind: 'realtimeUnavailable', reason: 'gatewayRefused' }
+    })
+    expect(
+      await testConnection(
+        { target: 'realtimeOnprem', gatewayUrl: 'http://127.0.0.1:9/v1' },
+        context()
+      )
+    ).toMatchObject({
+      ok: false,
+      status: null,
+      finding: { kind: 'realtimeUnavailable', reason: 'gatewayUnreachable' }
+    })
+    // Without a gateway (no speech endpoint either), nothing to test.
+    expect(
+      await testConnection(
+        { target: 'realtimeOnprem' },
+        context({ asrBaseUrl: null, onpremGatewayUrl: null })
+      )
+    ).toMatchObject({ finding: { kind: 'notSetUp' } })
+  })
+
+  describe('storage', () => {
+    /** A bucket in memory; signed URLs answer through the stubbed `fetch`. */
+    function memoryStorage(): TestStorage & { objects: Map<string, string> } {
+      const objects = new Map<string, string>()
+      return {
+        objects,
+        bucket: 'test-bucket',
+        presignUpload: async (key) => ({
+          url: `https://storage.example/put/${encodeURIComponent(key)}`,
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/plain' },
+          expiresAt: new Date().toISOString()
+        }),
+        presignDownload: async (key) => ({
+          url: `https://storage.example/get/${encodeURIComponent(key)}`,
+          expiresAt: new Date().toISOString()
+        }),
+        put: async (key, body) =>
+          void objects.set(key, new TextDecoder().decode(body as Uint8Array)),
+        get: async (key) => Readable.from([Buffer.from(objects.get(key) ?? '')]),
+        delete: async (key) => void objects.delete(key),
+        head: async (key) => (objects.has(key) ? { size: 1, contentType: 'text/plain' } : null)
+      }
+    }
+    function signedFetch(
+      storage: { objects: Map<string, string> },
+      tamper = false
+    ): ReturnType<typeof vi.fn> {
+      return vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const [, action, key] = /\/(put|get)\/(.+)$/.exec(String(url))!
+        const decoded = decodeURIComponent(key!)
+        if (action === 'put') {
+          storage.objects.set(decoded, new TextDecoder().decode(init!.body as Uint8Array))
+          return new Response(null, { status: 200 })
+        }
+        return new Response(tamper ? 'other' : (storage.objects.get(decoded) ?? ''), {
+          status: 200
+        })
+      })
+    }
+    const storageContext = (storage: TestStorage): ConnectionContext => ({
+      runtime: { ...runtime(), componentId: 'c1' } as never,
+      storage
+    })
+
+    it('puts, reads back and deletes a test object through signed URLs', async () => {
+      const storage = memoryStorage()
+      const fetchMock = signedFetch(storage)
+      vi.stubGlobal('fetch', fetchMock)
+      const result = await testConnection({ target: 'storage' }, storageContext(storage))
+      expect(result).toMatchObject({
+        ok: true,
+        finding: { kind: 'signedRoundTrip', bucket: 'test-bucket' }
+      })
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(['PUT', 'GET'])
+      expect(String(fetchMock.mock.calls[0]![0])).toContain('transcription%2Fc1%2Fconnection-tests')
+      expect(storage.objects.size).toBe(0)
+    })
+
+    it('says when the server cannot reach the signed URLs, and catches wrong content', async () => {
+      const storage = memoryStorage()
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          throw new TypeError('fetch failed')
+        })
+      )
+      expect(await testConnection({ target: 'storage' }, storageContext(storage))).toMatchObject({
+        ok: true,
+        checks: [
+          { kind: 'signedUrlsUnreachable' },
+          { kind: 'serverRoundTrip', bucket: 'test-bucket' }
+        ]
+      })
+      vi.stubGlobal('fetch', signedFetch(storage, true))
+      expect(await testConnection({ target: 'storage' }, storageContext(storage))).toMatchObject({
+        ok: false,
+        finding: { kind: 'invalidAnswer', expected: 'storedContent' }
+      })
+      expect(storage.objects.size).toBe(0)
+      // A refused signature is a failure, not an unreachable endpoint.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('SignatureDoesNotMatch', { status: 403 }))
+      )
+      expect(await testConnection({ target: 'storage' }, storageContext(storage))).toMatchObject({
+        ok: false,
+        status: 403
+      })
+    })
+  })
+
+  it('reports what is not set up, and storage without a bucket', async () => {
+    expect(
+      await testConnection({ target: 'diarization' }, context({ asrBaseUrl: null }))
+    ).toMatchObject({
+      ok: false,
+      status: null,
+      finding: { kind: 'notSetUp' }
+    })
+    expect(await testConnection({ target: 'storage' }, context())).toMatchObject({ ok: false })
+  })
+
+  it('masks a key the upstream repeats in its error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('Invalid key sk-typed-1234 given', { status: 401 }))
+    )
+    const result = await testConnection(
+      { target: 'diarization', url: 'https://diarize.example/diarize', apiKey: 'sk-typed-1234' },
+      context()
+    )
+    expect(result).toMatchObject({
+      ok: false,
+      status: 401,
+      message: 'Status 401: Invalid key *** given'
+    })
+  })
+
+  it('answers through the route, validating the target', async () => {
+    const app = testApp(adminRouter, { config: testConfig() as never, secrets: runtime().secrets })
+    const response = await app.request(test, json('POST', { target: 'llm' }))
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(JSON.parse(body)).toMatchObject({ ok: true, status: 200 })
+    expect(JSON.parse(body).checks).toEqual([
+      { kind: 'models', count: 2 },
+      { kind: 'chatAnswered', model: 'mock-chat' }
+    ])
+    expect(body).not.toContain('sk-')
+    expect((await app.request(test, json('POST', { target: 'nope' }))).status).toBe(400)
+  })
+})

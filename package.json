@@ -15,6 +15,7 @@
     "sandbox:build": "docker build -t justcampus-python-sandbox:latest infra/python-sandbox",
     "sandbox:build:podman": "podman build -t justcampus-python-sandbox:latest infra/python-sandbox",
     "sandbox:gvisor": "infra/python-sandbox/install-gvisor.sh",
+    "mock:transcription": "node infra/transcription-mock/server.mjs",
     "dev": "bun run --filter '@justcampus/server' --filter '@justcampus/web' dev",
     "dev:server": "bun run --filter '@justcampus/server' dev",
     "dev:web": "bun run --filter '@justcampus/web' dev",
@@ -32,6 +33,7 @@
   },
   "devDependencies": {
     "prettier": "^3.7.4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "ws": "^8.22.0"
   }
 }
