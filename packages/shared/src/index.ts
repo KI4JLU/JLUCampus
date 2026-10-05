@@ -44,6 +44,33 @@ export const mePatchSchema = z.object({
 })
 export type MePatch = z.infer<typeof mePatchSchema>
 
+/**
+ * A user as the admin user management lists them. `role` is the app's own: an admin grants or
+ * revokes it there, or the server CLI sets it (`admin grant|revoke|list`); Keycloak roles never
+ * change it. Keycloak roles and groups are those of the user's last sign-in.
+ */
+export const adminUserSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string(),
+  image: z.string().nullable(),
+  role: userRoleSchema,
+  keycloakRoles: z.array(z.string()),
+  keycloakGroups: z.array(z.string()),
+  createdAt: z.string().datetime(),
+  /** `null`: not signed in since the time was first recorded. */
+  lastSignInAt: z.string().datetime().nullable()
+})
+export type AdminUser = z.infer<typeof adminUserSchema>
+
+/** Every user who ever signed in, admins first, then by name. */
+export const adminUserListSchema = z.object({ users: z.array(adminUserSchema) })
+export type AdminUserList = z.infer<typeof adminUserListSchema>
+
+/** Grants (`admin`) or revokes (`user`) a user's admin role. */
+export const adminUserPatchSchema = z.object({ role: userRoleSchema })
+export type AdminUserPatch = z.infer<typeof adminUserPatchSchema>
+
 // ---------------------------------------------------------------------------
 // Dashboard grid geometry
 // ---------------------------------------------------------------------------
@@ -1557,6 +1584,13 @@ export const API = {
   adminPresetAudiences: '/api/admin/presets/audiences',
   /** Admin only. GET / PUT (`layoutPresetInputSchema`) / DELETE one preset by id. */
   adminPreset: (id: string) => `/api/admin/presets/${id}`,
+  /** Admin only. GET: `adminUserListSchema`. */
+  adminUsers: '/api/admin/users',
+  /**
+   * Admin only. PATCH: `adminUserPatchSchema` → `adminUserSchema`. Revoking one's own admin role,
+   * which would also leave the app without one, answers `409 conflict`.
+   */
+  adminUser: (id: string) => `/api/admin/users/${id}`,
   /** GET / PUT `sidebarSchema` for the current user. */
   sidebar: '/api/sidebar',
   /** GET / PUT `dashboardSchema` for the current user. */

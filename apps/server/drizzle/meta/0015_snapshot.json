@@ -1,6 +1,6 @@
 {
-  "id": "64c76a46-d7af-4c54-9ccf-a458a8ff54c9",
-  "prevId": "73d58172-3401-4959-8712-cf7efde141bb",
+  "id": "8ec95606-e58a-443d-b99e-3c11883269f5",
+  "prevId": "64c76a46-d7af-4c54-9ccf-a458a8ff54c9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1517,6 +1517,24 @@
         },
         "language": {
           "name": "language",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "given_name": {
+          "name": "given_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "family_name": {
+          "name": "family_name",
           "type": "text",
           "primaryKey": false,
           "notNull": false

@@ -27,7 +27,8 @@
     "format": "prettier --write .",
     "db:generate": "bun run --filter '@justcampus/server' db:generate",
     "db:migrate": "bun run --filter '@justcampus/server' db:migrate",
-    "db:seed": "bun run --filter '@justcampus/server' db:seed"
+    "db:seed": "bun run --filter '@justcampus/server' db:seed",
+    "admin": "bun run --filter '@justcampus/server' admin"
   },
   "devDependencies": {
     "prettier": "^3.7.4",

@@ -34,7 +34,8 @@ quotes, no semicolons, width 100), TypeScript strict. Node ≥ 22 at runtime.
   confidential client `justcampus` (secret `justcampus-dev-secret`), realm roles
   `admin` and `user`, groups `/Studierende` and `/Beschaeftigte`, flat `roles`
   and full-path `groups` claims in the ID token, access token and userinfo,
-  and two users: `alice` / `alice` (admin) and `bob` / `bob` (user).
+  and two users: `alice` / `alice` and `bob` / `bob`, both initially Campus users.
+  Alice has the Keycloak `admin` role for presets and glossaries; it grants no app admin access.
 
 Copy `.env.example` to `.env` at the repo root. The server loads the root
 `.env` (and an optional `apps/server/.env`) with `dotenv`; Vite reads
@@ -47,12 +48,24 @@ Copy `.env.example` to `.env` at the repo root. The server loads the root
   `keycloak` (`KEYCLOAK_PROVIDER_ID` in shared), discovery URL
   `${KEYCLOAK_ISSUER}/.well-known/openid-configuration`, scopes
   `openid profile email`, PKCE.
-- The user table has an extra `role` column (`user` | `admin`) and a nullable
-  `language` column (`de` | `en`). `role` is **derived from Keycloak on every
-  sign-in**: if the `roles` claim contains `KEYCLOAK_ADMIN_ROLE` (default
-  `admin`) the user is `admin`, otherwise `user`. Nothing in the app can change
-  it. Use the plugin's option to refresh user info on sign-in so a role change
-  in Keycloak applies at the next login.
+- The user table has an app-managed `role` column (`user` | `admin`) and a
+  nullable `language` column (`de` | `en`). New users start as `user`.
+  Keycloak roles never change the app role. Account create/update hooks sync
+  `keycloak_roles`, `keycloak_groups` and `last_sign_in_at` on sign-in and
+  initialise the layout once. User profile information refreshes on sign-in.
+- App admins appoint other admins through `GET /api/admin/users` and
+  `PATCH /api/admin/users/:id` with `{ role }`. The list puts admins first,
+  then sorts names case-insensitively. Revoking one's own role or leaving zero
+  admins returns `409 conflict`. A transaction locks user rows in id order and
+  rechecks the acting admin before updating, so concurrent revocations are safe.
+- The server CLI `bun run admin grant <email|id>`, `revoke <email|id>` and
+  `list` appoints admins and recovers access. Users must have signed in first.
+  The CLI can revoke the last admin with a warning. In production, run
+  `docker compose -f docker-compose.prod.yml exec app node dist/admin.js grant <email>`.
+  The migration to app-managed roles resets every user's role to `user`.
+- Session cookie caching is disabled, and API session reads explicitly bypass
+  cookie caching. Better-Auth reads the user from Postgres on each request,
+  so a role change applies to the target's next request.
 - Sign-in from the client: Better-Auth 1.7 registers generic OAuth providers as
   core social providers, so the call is
   `authClient.signIn.social({ provider: 'keycloak', callbackURL })` and the
@@ -130,7 +143,9 @@ layout_preset     id uuid pk, name text, audience_kind text ('role' | 'group' | 
                   audience_name text null, sort_order int, sidebar jsonb (component ids),
                   dashboard jsonb (tiles as in dashboardPutSchema), created_at, updated_at;
                   at most one 'everyone' row
-user              + keycloak_roles text[], keycloak_groups text[], layout_initialized_at timestamp null
+user              + role text default 'user', language text null,
+                  keycloak_roles text[], keycloak_groups text[],
+                  layout_initialized_at timestamp null, last_sign_in_at timestamp null
 ```
 
 Layout presets are the starting sidebar and dashboard admins define per
@@ -267,7 +282,7 @@ strings).
 
 - Routes (TanStack Router, code-based like JLU Mail, **browser history**):
   `/login`, `/` (dashboard), `/c/$componentId` (component full page),
-  `/admin/components`, `/admin/folders`, `/admin/presets` and
+  `/admin/components`, `/admin/folders`, `/admin/users` ("Nutzer" tab), `/admin/presets` and
   `/admin/presets/$presetId` (admin only). Settings (language, colour scheme)
   are a `SettingsDialog` opened from the user menu, not a route.
   The preset editor reuses the user's dashboard grid and sidebar editor.
