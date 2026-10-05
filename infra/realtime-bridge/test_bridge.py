@@ -19,10 +19,13 @@ import aiohttp  # noqa: E402
 from aiohttp import web  # noqa: E402
 from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription  # noqa: E402
 from aiortc.mediastreams import AudioStreamTrack  # noqa: E402
+from aioice import ice as aioice_ice, stun, turn as aioice_turn  # noqa: E402
 
 import bridge  # noqa: E402
 
 GATEWAY_KEY = "test-gateway-key-0123456789"
+# An offer aiortc refuses: its session is admitted, then closed at once (400 bad_offer).
+UNUSABLE_OFFER = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 RTP/AVP 0\r\n"
 # Campus (D-1): a key with both quote kinds and characters URL encoding changes.
 ODD_KEY = "gw\"odd'key/=+0123456789"
 MODEL = "voxtral-mini-realtime"
@@ -205,7 +208,11 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         bridge.WS_CLOSE_TIMEOUT_S = 5.0
         bridge.HTTP_CLOSE_TIMEOUT_S = 5.0
         bridge.PEER_CLOSE_TIMEOUT_S = 5.0
+        bridge.PEER_RECLAIM_TIMEOUT_S = 5.0
+        bridge.MAX_PEER_CLEANUPS = 20
         bridge.ACTIVE_SESSIONS.clear()
+        bridge.PEER_CLEANUPS.clear()
+        bridge.ABANDONED_PEERS.clear()
         original = bridge.build_rtc_configuration
         bridge.build_rtc_configuration = host_only
         self.addCleanup(setattr, bridge, "build_rtc_configuration", original)
@@ -334,9 +341,10 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(c["bytes"] == 0 for c in self.gateway.connections))
 
     async def test_unusable_offer_is_the_clients_fault(self):
-        offer = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 RTP/AVP 0\r\n"
         async with self.http.post(
-            f"{self.bridge.url}/realtime", data=offer, headers=gateway_headers(self.gateway.base)
+            f"{self.bridge.url}/realtime",
+            data=UNUSABLE_OFFER,
+            headers=gateway_headers(self.gateway.base),
         ) as response:
             self.assertEqual(response.status, 400)
             self.assertEqual((await response.json())["error"], "bad_offer")
@@ -652,10 +660,9 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         bridge.WS_CLOSE_TIMEOUT_S = 0.5
         sessions = self.record_sessions()
         self.slow_closing_streams()
-        offer = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 RTP/AVP 0\r\n"
         with self.assertLogs(level="WARNING") as logs:
             status, body, elapsed = await self.timed_post(
-                "/realtime", data=offer, headers=gateway_headers(self.gateway.base)
+                "/realtime", data=UNUSABLE_OFFER, headers=gateway_headers(self.gateway.base)
             )
             self.assertEqual((status, body["error"]), (400, "bad_offer"))
             self.assertLess(elapsed, 1.2)
@@ -716,6 +723,162 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
                         await session.http.close()
                     await wait_for(lambda: stream["transport"].is_closing(), timeout=2)
                     self.assert_released(session, stream)
+
+    async def stall_turn_send(self, pc):
+        """Campus (F-1): the review's reproduction. The peer connection's sends go through an
+        aioice TURN client (no socket, no server: `relay` stands in for its connection to the TURN
+        server) whose channel bind for the remote address failed, so every further send waits
+        for good on the waiter the failed bind left behind. Injected at the DTLS send boundary,
+        and registered as a relayed candidate of the ICE connection, as aioice does for a TURN
+        allocation."""
+
+        class Relay:
+            def __init__(self):
+                self.aborted = False
+
+            def sendto(self, _data, _addr=None):
+                pass
+
+            def abort(self):
+                self.aborted = True
+
+            close = abort
+
+            def is_closing(self):
+                return self.aborted
+
+            def get_extra_info(self, _name, default=None):
+                return default
+
+        ice = pc.sctp.transport.transport
+        connection = ice._connection
+        relay = Relay()
+        client = aioice_turn.TurnClientUdpProtocol(
+            ("192.0.2.1", 3478), username="u", password="p", lifetime=600, channel_refresh_time=300
+        )
+        client.connection_made(relay)
+        candidate = aioice_ice.StunProtocol(connection)
+        candidate.connection_made(aioice_turn.TurnTransport(client))
+        client.receiver = candidate
+        connection._protocols.append(candidate)
+
+        async def failed_bind(_channel, _addr):
+            raise stun.TransactionTimeout()
+
+        remote = ("192.0.2.2", 50000)
+        client.channel_bind = failed_bind
+        with self.assertRaises(stun.TransactionTimeout):
+            await client.send_data(b"first", remote)
+        self.assertEqual(client.peer_connect_waiters, {remote: []})
+        ice._send = lambda data: client.send_data(data, remote)
+        return client, relay, connection, remote
+
+    async def test_a_peer_close_stalled_in_transport_io_is_reclaimed(self):
+        """Campus (F-1): an established peer connection whose close stalls in a TURN send (the
+        SCTP ABORT behind an orphaned channel-bind waiter). Until it is closed it counts against
+        MAX_PEER_CLEANUPS, so no new session starts; after PEER_CLOSE_TIMEOUT_S its transports
+        are stopped, aiortc's own close ends, every socket is released and no task remains."""
+        bridge.MAX_PEER_CLEANUPS = 1
+        bridge.PEER_CLOSE_TIMEOUT_S = 1.0
+        bridge.PEER_RECLAIM_TIMEOUT_S = 3.0
+        peer, _channel, _events = await self.connect()
+        [session] = bridge.ACTIVE_SESSIONS
+        pc = session.pc
+        client, relay, connection, remote = await self.stall_turn_send(pc)
+        sockets = [p.transport for p in connection._protocols if p.transport is not None]
+        sockets = [s for s in sockets if not isinstance(s, aioice_turn.TurnTransport)]
+        self.assertTrue(sockets)
+        headers = gateway_headers(self.gateway.base)
+        with self.assertLogs(level="INFO") as logs:
+            closing = asyncio.ensure_future(session.close())
+            await asyncio.sleep(0.5)
+            # aiortc's close waits behind the orphaned waiter; the session's slot is free, the
+            # peer connection holds the only cleanup place.
+            self.assertTrue(client.peer_connect_waiters[remote])
+            waiters = list(client.peer_connect_waiters[remote])
+            self.assertEqual(pc.signalingState, "closed")
+            self.assertNotEqual(pc.connectionState, "closed")
+            self.assertFalse(bridge.ACTIVE_SESSIONS)
+            [supervisor] = bridge.PEER_CLEANUPS
+            health = await self.health()
+            self.assertEqual((health["sessions"], health["peer_cleanups"]), (0, 1))
+            status, body, _elapsed = await self.timed_post(
+                "/realtime", data=UNUSABLE_OFFER, headers=headers
+            )
+            self.assertEqual((status, body["error"]), (503, "busy"))
+            await asyncio.wait_for(closing, 2)
+            await asyncio.wait_for(asyncio.shield(supervisor), 3)
+        log = "\n".join(logs.output)
+        self.assertIn("not closed within 1s, stopping its transports", log)
+        self.assertIn("closed after its transports were stopped", log)
+        self.assertIn("peer connections still closing", log)
+        self.assertNotIn("giving it up", log)
+        # The close ran to its end, with its `closed` future resolved, and released everything.
+        self.assertEqual(pc.connectionState, "closed")
+        await asyncio.wait_for(pc.close(), 1)
+        self.assertTrue(all(waiter.done() for waiter in waiters))
+        self.assertFalse(client.peer_connect_waiters)
+        self.assertTrue(relay.aborted)
+        self.assertTrue(all(socket.is_closing() for socket in sockets))
+        self.assertFalse(connection._protocols)
+        self.assertFalse(bridge.PEER_CLEANUPS)
+        self.assertFalse(bridge.ABANDONED_PEERS)
+        await wait_for(lambda: not bridge.BACKGROUND_TASKS, timeout=5)
+        # The place is free: the next session is admitted.
+        status, body, _elapsed = await self.timed_post(
+            "/realtime", data=UNUSABLE_OFFER, headers=headers
+        )
+        self.assertEqual((status, body["error"]), (400, "bad_offer"))
+        await wait_for(lambda: bridge.peer_cleanups() == 0)
+        await peer.close()
+
+    async def test_stalled_peer_closes_cannot_pile_up(self):
+        """Campus (F-1): the review's accumulation, MAX_SESSIONS=1 with successive sessions whose
+        peer close never ends, not even with its transports stopped. Only MAX_PEER_CLEANUPS of
+        them are admitted; past every deadline the bridge keeps no task for them, but they count
+        until their close ends."""
+        bridge.MAX_SESSIONS = 1
+        bridge.MAX_PEER_CLEANUPS = 2
+        bridge.PEER_CLOSE_TIMEOUT_S = 0.1
+        bridge.PEER_RECLAIM_TIMEOUT_S = 0.2
+        blocker = asyncio.Event()
+
+        class StuckPeer(RTCPeerConnection):
+            async def close(self):
+                await blocker.wait()
+                await super().close()
+
+        original = bridge.RTCPeerConnection
+        bridge.RTCPeerConnection = StuckPeer
+        self.addCleanup(setattr, bridge, "RTCPeerConnection", original)
+        headers = gateway_headers(self.gateway.base)
+        with self.assertLogs(level="WARNING") as logs:
+            statuses = []
+            for _ in range(5):
+                status, _body, _elapsed = await self.timed_post(
+                    "/realtime", data=UNUSABLE_OFFER, headers=headers
+                )
+                statuses.append(status)
+            self.assertEqual(statuses, [400, 400, 503, 503, 503])
+            await wait_for(lambda: "\n".join(logs.output).count("giving it up") == 2, timeout=5)
+        await wait_for(lambda: not bridge.BACKGROUND_TASKS, timeout=5)
+        self.assertFalse(bridge.ACTIVE_SESSIONS)
+        self.assertFalse(bridge.PEER_CLEANUPS)
+        self.assertEqual(len(bridge.ABANDONED_PEERS), 2)
+        health = await self.health()
+        self.assertEqual((health["peer_cleanups"], health["abandoned_peers"]), (2, 2))
+        status, _body, _elapsed = await self.timed_post(
+            "/realtime", data=UNUSABLE_OFFER, headers=headers
+        )
+        self.assertEqual(status, 503)
+        # Once their closes end, the places are free again.
+        blocker.set()
+        await wait_for(lambda: not bridge.ABANDONED_PEERS, timeout=5)
+        status, _body, _elapsed = await self.timed_post(
+            "/realtime", data=UNUSABLE_OFFER, headers=headers
+        )
+        self.assertEqual(status, 400)
+        await wait_for(lambda: bridge.peer_cleanups() == 0 and not bridge.BACKGROUND_TASKS)
 
     async def test_rotation_behind_a_stalled_open_ends_the_session(self):
         bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 0.5
@@ -844,8 +1007,14 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
             headers={**headers, "Authorization": "Bearer bridge-secret"},
         ) as response:
             self.assertEqual(response.status, 400)
+        health = await self.health()
+        self.assertTrue(health["ok"])
+        self.assertEqual((health["sessions"], health["peer_cleanups"]), (0, 0))
+
+    async def health(self):
         async with self.http.get(f"{self.bridge.url}/health") as response:
-            self.assertEqual(await response.text(), "ok")
+            self.assertEqual(response.status, 200)
+            return await response.json()
 
     async def test_unconnected_peer_is_closed_with_its_upstream(self):
         bridge.CONNECT_TIMEOUT_S = 0.5

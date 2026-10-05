@@ -6,8 +6,9 @@ with the gateway's status, `POST /probe`, a connect timeout for peers that never
 credentials minted from a shared secret (coturn `use-auth-secret`), a mandatory BRIDGE_API_KEY,
 a session limit with idle and lifetime limits, deadlines for the upstream handshake, the
 negotiation and the probe with their cleanup after the answer, closes that release every resource
-within their own time also when their caller gives up, coalesced rotations, and nothing the
-upstream says in a log or an answer.
+within their own time also when their caller gives up, peer connections whose transports are
+stopped when their close stalls and which count against a budget until they are closed, coalesced
+rotations, and nothing the upstream says in a log or an answer.
 
 Bridges browser WebRTC connections to the vLLM realtime speech-to-text WebSocket (reached through
 the LiteLLM gateway). Exists because vLLM's realtime endpoint is WebSocket-only: a browser
@@ -44,7 +45,7 @@ Protocol towards vLLM (see vllm/entrypoints/speech_to_text/realtime/):
 HTTP API (signaling is reached by the Campus server only, never by browsers):
   POST /realtime   SDP offer in (application/sdp), SDP answer out (application/sdp)
   POST /probe      opens one upstream stream, validates the model and closes it again
-  GET  /health     "ok"
+  GET  /health     {"ok": true, ...} with the sessions, probes and peer connections still closing
 
 Per-request configuration comes from the Campus server via headers (X-Gateway-Base, X-Gateway-Key,
 X-Model), so the module's settings stay the single source of truth for gateway credentials. The
@@ -64,10 +65,12 @@ import re
 import sys
 import time
 import uuid
+import weakref
 
 import aiohttp
 import aiohttp.helpers
 from aiohttp import web
+from aioice import stun
 from aiortc import (
     RTCConfiguration,
     RTCIceServer,
@@ -127,11 +130,30 @@ LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 # Sessions holding a slot of MAX_SESSIONS, and probes in flight (they hold one each too).
 ACTIVE_SESSIONS: set = set()
 active_probes = 0
+# Campus: a session frees its slot when it starts closing, but its peer connection may take a while
+# to close (`close_peer`). Peer connections still closing count against MAX_PEER_CLEANUPS instead,
+# and no new session starts while that many are, so stalled closes cannot pile up while sessions
+# keep coming: at most MAX_SESSIONS + MAX_PEER_CLEANUPS peer connections exist at once.
+# PEER_CLEANUPS holds the closes being supervised, ABANDONED_PEERS (weakly) those given up after
+# their last deadline, as long as they exist at all.
+MAX_PEER_CLEANUPS = int(os.environ.get("MAX_PEER_CLEANUPS", str(MAX_SESSIONS)))
+PEER_CLEANUPS: set = set()
+ABANDONED_PEERS: weakref.WeakSet = weakref.WeakSet()
 
 
 def capacity_left() -> bool:
     """Campus: whether one more session or probe fits into MAX_SESSIONS."""
     return len(ACTIVE_SESSIONS) + active_probes < MAX_SESSIONS
+
+
+def peer_cleanups() -> int:
+    """Campus: peer connections whose close has not finished, abandoned ones included."""
+    return len(PEER_CLEANUPS) + len(ABANDONED_PEERS)
+
+
+def peer_capacity_left() -> bool:
+    """Campus: whether a new session may open a peer connection (MAX_PEER_CLEANUPS)."""
+    return peer_cleanups() < MAX_PEER_CLEANUPS
 
 
 # ---------------------------------------------------------------------------
@@ -388,10 +410,12 @@ CLEANUP_TIMEOUT_S = float(os.environ.get("CLEANUP_TIMEOUT_S", "10"))
 BACKGROUND_TASKS: set = set()
 # Campus: what each resource gets to close, whatever deadline its caller has (`close_quietly`,
 # `close_http`, BridgeSession.close): a stream's closing handshake, an HTTP session's TLS
-# shutdown, and how long a session's close waits for its peer connection.
+# shutdown, and a peer connection's own close (`close_peer`). A peer connection still not closed
+# then has its transports stopped and PEER_RECLAIM_TIMEOUT_S more to finish its close.
 WS_CLOSE_TIMEOUT_S = 5.0
 HTTP_CLOSE_TIMEOUT_S = 5.0
 PEER_CLOSE_TIMEOUT_S = 5.0
+PEER_RECLAIM_TIMEOUT_S = 5.0
 
 
 def keep(task: asyncio.Future) -> asyncio.Future:
@@ -414,6 +438,182 @@ def in_background(coro, what: str) -> asyncio.Future:
             logger.warning("%s failed: %s", what, failure_text(exc))
 
     return keep(asyncio.ensure_future(run()))
+
+
+# ---------------------------------------------------------------------------
+# Closing a peer connection
+# ---------------------------------------------------------------------------
+# Campus: aiortc's close sends over the connection while it closes (the SCTP ABORT, the DTLS
+# close_notify, an RTCP BYE) before it stops the ICE transports, and aioice waits for each socket
+# to report its loss, for a TURN allocation only after the server answered its deletion (up to a
+# minute of retransmissions) or after a channel bind that never comes (a failed bind leaves its
+# waiters behind). Such a close can stall for long or for good. Cancelling it halfway is no way
+# out: its `closed` future would then never resolve. So a close that runs past
+# PEER_CLOSE_TIMEOUT_S has the ground pulled from under it instead (`stop_peer_transports`):
+# sends fail at once, waiting sends and STUN/TURN transactions fail, every socket is aborted
+# and reported lost, and the close itself runs to its end. One that still has not ended
+# PEER_RECLAIM_TIMEOUT_S later is given up: the bridge drops its references, and it counts
+# against MAX_PEER_CLEANUPS for as long as anything else keeps it alive.
+
+
+async def _refuse_send(*_args) -> None:
+    raise ConnectionError("the peer connection's transports were stopped")
+
+
+async def _nothing_to_delete() -> None:
+    """Campus: a TURN allocation whose connection is gone has nothing left to delete."""
+
+
+def _fail_transactions(transactions) -> None:
+    """Campus: STUN transactions end as timed out, now instead of after their retransmissions."""
+    for transaction in list((transactions or {}).values()):
+        future = getattr(transaction, "_Transaction__future", None)
+        if future is not None and not future.done():
+            future.set_exception(stun.TransactionTimeout())
+
+
+def _abort_transport(transport) -> None:
+    if transport is None:
+        return
+    try:
+        stop = getattr(transport, "abort", None) or transport.close
+        stop()
+    except Exception:
+        pass
+
+
+def _stop_turn_client(turn) -> None:
+    """Campus: an aioice TURN client: its refresh stops, sends waiting for a channel bind fail
+    (also those whose bind failed and left them behind), its transactions fail, its deletion is
+    skipped and its connection to the TURN server aborted."""
+    refresh = getattr(turn, "refresh_task", None)
+    if refresh is not None:
+        refresh.cancel()
+        turn.refresh_task = None
+    waiters = getattr(turn, "peer_connect_waiters", None) or {}
+    for pending in waiters.values():
+        for waiter in pending:
+            if not waiter.done():
+                waiter.set_exception(ConnectionError("the TURN relay was stopped"))
+                waiter.exception()  # its sender gets it; no "never retrieved" if none waits
+    waiters.clear()
+    _fail_transactions(getattr(turn, "transactions", None))
+    turn.delete = _nothing_to_delete
+    _abort_transport(getattr(turn, "transport", None))
+
+
+def _stop_stun_protocol(protocol) -> None:
+    """Campus: one local candidate of an aioice connection: its socket (or its TURN relay) is
+    aborted and reported lost, which is what aioice's close waits for."""
+    _fail_transactions(getattr(protocol, "transactions", None))
+    transport = getattr(protocol, "transport", None)
+    turn = getattr(transport, "_TurnTransport__inner_protocol", None)
+    if turn is not None:
+        _stop_turn_client(turn)
+    else:
+        _abort_transport(transport)
+    lost = getattr(protocol, "connection_lost", None)
+    if lost is not None:
+        lost(None)
+
+
+def _stop_ice_connection(connection) -> None:
+    consent = getattr(connection, "_query_consent_task", None)
+    if consent is not None and not consent.done():
+        consent.cancel()
+    nominated = getattr(connection, "_nominated", None)
+    if nominated is not None:
+        nominated.clear()  # sends now raise ConnectionError
+    for protocol in list(getattr(connection, "_protocols", None) or ()):
+        try:
+            _stop_stun_protocol(protocol)
+        except Exception as exc:
+            logger.warning("stopping an ICE candidate failed: %s", failure_text(exc))
+
+
+def stop_peer_transports(pc) -> int:
+    """Campus: pulls the transports from under a peer connection's stalled close, without
+    cancelling it: every send at the boundary between DTLS and ICE fails from now on, sends
+    already waiting there (behind a TURN channel bind) fail, and every ICE socket and TURN relay
+    is aborted, so each step of aiortc's close gets its ConnectionError and the close ends.
+    Returns the number of ICE connections stopped."""
+    dtls_transports = {}
+    try:
+        for transceiver in pc.getTransceivers():
+            for dtls in (transceiver.receiver.transport, transceiver.sender.transport):
+                if dtls is not None:
+                    dtls_transports[id(dtls)] = dtls
+        if pc.sctp is not None:
+            dtls_transports[id(pc.sctp.transport)] = pc.sctp.transport
+    except Exception as exc:
+        logger.warning("listing a peer connection's transports failed: %s", failure_text(exc))
+    connections = {}
+    for dtls in dtls_transports.values():
+        ice = getattr(dtls, "transport", None)
+        connection = getattr(ice, "_connection", None)
+        if connection is None:
+            continue
+        ice._send = _refuse_send
+        connections[id(connection)] = connection
+    for connection in connections.values():
+        _stop_ice_connection(connection)
+    return len(connections)
+
+
+def close_peer(pc, log: logging.Logger) -> asyncio.Future:
+    """Campus: closes a peer connection under supervision and returns the supervising task. It
+    counts in PEER_CLEANUPS from this call on, until the close has ended or been given up; the
+    close itself is never cancelled."""
+    closing = asyncio.ensure_future(pc.close())
+    supervisor = keep(asyncio.ensure_future(_supervise_peer_close(pc, closing, log)))
+    PEER_CLEANUPS.add(supervisor)
+    supervisor.add_done_callback(PEER_CLEANUPS.discard)
+    return supervisor
+
+
+async def _supervise_peer_close(pc, closing: asyncio.Future, log: logging.Logger) -> None:
+    try:
+        try:
+            await asyncio.wait_for(asyncio.shield(closing), PEER_CLOSE_TIMEOUT_S)
+            return
+        except TimeoutError:
+            log.warning(
+                "peer connection not closed within %gs, stopping its transports",
+                PEER_CLOSE_TIMEOUT_S,
+            )
+        stop_peer_transports(pc)
+        try:
+            await asyncio.wait_for(asyncio.shield(closing), PEER_RECLAIM_TIMEOUT_S)
+            log.info("peer connection closed after its transports were stopped")
+        except TimeoutError:
+            log.error(
+                "peer connection still not closed %gs after its transports were stopped, "
+                "giving it up",
+                PEER_RECLAIM_TIMEOUT_S,
+            )
+            abandon_peer(pc, closing)
+    except Exception as exc:
+        log.warning("closing the peer connection failed: %s", failure_text(exc))
+
+
+def abandon_peer(pc, closing: asyncio.Future) -> None:
+    """Campus: the bridge lets go of a close that outlived every deadline: no strong reference
+    of the bridge keeps it (nor its session, whose handlers are removed), and it counts against
+    MAX_PEER_CLEANUPS until it ends or is collected."""
+    try:
+        pc.remove_all_listeners()
+    except Exception:
+        pass
+    ABANDONED_PEERS.add(closing)
+    closing.add_done_callback(_forget_abandoned)
+
+
+def _forget_abandoned(closing: asyncio.Future) -> None:
+    ABANDONED_PEERS.discard(closing)
+    if not closing.cancelled() and closing.exception() is not None:
+        logger.warning(
+            "an abandoned peer connection's close failed: %s", failure_text(closing.exception())
+        )
 
 
 async def start_stream(http: aiohttp.ClientSession, url: str, gateway_key: str, model: str):
@@ -872,40 +1072,41 @@ class BridgeSession:
             await asyncio.sleep(0.5)
             await self.close()
 
+    def begin_close(self) -> asyncio.Future:
+        """Campus: starts the release (once) and returns it. Synchronous, so the slot in
+        ACTIVE_SESSIONS is handed over to the peer connection's place in PEER_CLEANUPS with no
+        moment in between where neither counts."""
+        if self.closing is None:
+            self.closed = True
+            self.log.info("closing session")
+            for task in list(self.tasks):
+                if task is not asyncio.current_task():
+                    task.cancel()
+            peer = close_peer(self.pc, self.log)
+            self.closing = keep(asyncio.ensure_future(self._release(peer)))
+            ACTIVE_SESSIONS.discard(self)
+        return self.closing
+
     async def close(self):
         """Ends the session and releases its resources. Campus: the release runs as a task of its
         own (held in BACKGROUND_TASKS until it ends), so a caller that is cancelled, a cleanup
         deadline say, stops waiting for it and does not stop it. Every call waits for the same
         release."""
-        if self.closing is None:
-            self.closed = True
-            ACTIVE_SESSIONS.discard(self)
-            self.log.info("closing session")
-            for task in list(self.tasks):
-                if task is not asyncio.current_task():
-                    task.cancel()
-            self.closing = keep(asyncio.ensure_future(self._release()))
-        await asyncio.shield(self.closing)
+        await asyncio.shield(self.begin_close())
 
-    async def _release(self):
-        """Campus: the peer connection, and the upstream stream followed by its HTTP session, each
-        within its own time (`close_stream`, PEER_CLOSE_TIMEOUT_S) and each also when another
-        fails. aiortc's close is never cancelled halfway, which would leave it unable to close
-        again; it runs on in BACKGROUND_TASKS if it takes longer."""
-        peer = keep(asyncio.ensure_future(self._close_peer()))
+    async def _release(self, peer: asyncio.Future):
+        """Campus: the peer connection (`close_peer`, already under way), and the upstream stream
+        followed by its HTTP session (`close_stream`), each within its own time and each also when
+        another fails. The release waits PEER_CLOSE_TIMEOUT_S for the peer connection; a close
+        that takes longer goes on under its supervision, which stops its transports, and keeps
+        counting against MAX_PEER_CLEANUPS."""
         try:
             await close_stream(self.upstream, self.http)
         finally:
             try:
                 await asyncio.wait_for(asyncio.shield(peer), PEER_CLOSE_TIMEOUT_S)
             except TimeoutError:
-                self.log.warning("peer connection not closed within %gs", PEER_CLOSE_TIMEOUT_S)
-
-    async def _close_peer(self):
-        try:
-            await self.pc.close()
-        except Exception as exc:
-            self.log.warning("closing the peer connection failed: %s", failure_text(exc))
+                pass
 
     # ----------------------------------------------------------------- utils
 
@@ -966,16 +1167,24 @@ async def handle_realtime(request: web.Request) -> web.Response:
     if not offer_sdp.startswith("v="):
         return error_response(400, "bad_request", "body must be an SDP offer")
 
-    # Campus: the slot is taken before anything opens and freed on every path.
+    # Campus: the slot is taken before anything opens and freed on every path; peer connections
+    # still closing hold theirs in MAX_PEER_CLEANUPS until they are closed.
     if not capacity_left():
         logger.warning("session refused: %d sessions open (MAX_SESSIONS)", len(ACTIVE_SESSIONS))
+        return error_response(503, "busy", "the bridge holds as many sessions as it takes")
+    if not peer_capacity_left():
+        logger.warning(
+            "session refused: %d peer connections still closing (MAX_PEER_CLEANUPS)",
+            peer_cleanups(),
+        )
         return error_response(503, "busy", "the bridge holds as many sessions as it takes")
     session = BridgeSession(*gateway)
     ACTIVE_SESSIONS.add(session)
 
     def drop(reason: str) -> None:
-        """Frees the slot now and closes the session after the answer."""
-        ACTIVE_SESSIONS.discard(session)
+        """Frees the slot now (for the peer connection's place in MAX_PEER_CLEANUPS) and closes
+        the session after the answer."""
+        session.begin_close()
         in_background(session.close(), f"closing a session after {reason}")
 
     # Campus: the whole negotiation has a deadline, so a stalled step frees the slot, and the
@@ -1140,7 +1349,19 @@ async def close_probe(ws, http: aiohttp.ClientSession) -> None:
 
 
 async def handle_health(_request: web.Request) -> web.Response:
-    return web.Response(text="ok")
+    """Campus: running, and what the bridge holds: sessions and probes against MAX_SESSIONS, peer
+    connections still closing (abandoned ones included) against MAX_PEER_CLEANUPS."""
+    return web.json_response(
+        {
+            "ok": True,
+            "sessions": len(ACTIVE_SESSIONS),
+            "probes": active_probes,
+            "max_sessions": MAX_SESSIONS,
+            "peer_cleanups": peer_cleanups(),
+            "abandoned_peers": len(ABANDONED_PEERS),
+            "max_peer_cleanups": MAX_PEER_CLEANUPS,
+        }
+    )
 
 
 def make_app() -> web.Application:

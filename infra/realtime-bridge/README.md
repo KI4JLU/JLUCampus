@@ -10,7 +10,8 @@ Ported from HAWKI's realtime bridge (kiChat, `_docker/realtime-bridge`), with th
 The changes are marked `Campus:` in `bridge.py`: JSON errors that carry the gateway's status,
 `POST /probe`, a timeout for peers that never connect, TURN credentials minted from coturn's
 shared secret, the outbound proxy for the WebSocket, a mandatory `BRIDGE_API_KEY`, a session
-limit with idle and lifetime limits, coalesced rotations, and nothing the gateway says in a log
+limit with idle and lifetime limits, peer connections whose stalled close loses its transports and
+counts against a budget until it ends, coalesced rotations, and nothing the gateway says in a log
 or an answer.
 
 ## How a session runs
@@ -33,14 +34,15 @@ or an answer.
 
 ## API
 
-| Request          | Body      | Answer                                                                   |
-| ---------------- | --------- | ------------------------------------------------------------------------ |
-| `POST /realtime` | SDP offer | `200 application/sdp` answer                                             |
-| `POST /probe`    | –         | `200 {"ok": true}`: the gateway took key and model (no audio, no WebRTC) |
-| `GET /health`    | –         | `200 ok`                                                                 |
+| Request          | Body      | Answer                                                                                |
+| ---------------- | --------- | ------------------------------------------------------------------------------------- |
+| `POST /realtime` | SDP offer | `200 application/sdp` answer                                                          |
+| `POST /probe`    | –         | `200 {"ok": true}`: the gateway took key and model (no audio, no WebRTC)              |
+| `GET /health`    | –         | `200 {"ok": true, "sessions", "probes", "peer_cleanups", "abandoned_peers", "max_…"}` |
 
 Errors are JSON `{error, message, upstream_status?, upstream_close_code?}` with fixed messages: `401 unauthorized` (bridge key),
-`400 bad_request`/`bad_offer`, `503 busy` (`MAX_SESSIONS` reached), `502 upstream_rejected` (the
+`400 bad_request`/`bad_offer`, `503 busy` (`MAX_SESSIONS` reached, or for an offer
+`MAX_PEER_CLEANUPS` peer connections still closing), `502 upstream_rejected` (the
 gateway refused the handshake, with its status: 403 for a model the key may not use),
 `upstream_error`/`upstream_closed` (refused after the handshake), `upstream_failed`
 (unreachable; `504` when the handshake, the negotiation or the probe ran past its deadline). The Campus server turns them into the reasons `modelNotAllowed`,
@@ -69,6 +71,7 @@ key may not use the model.
 | `HTTPS_PROXY`, `NO_PROXY`        | –                 | Outbound proxy for the gateway's WebSocket.                                                  |
 | `BRIDGE_ALLOW_UNAUTHENTICATED`   | –                 | `1`: development without a key, only with a loopback `HOST`.                                 |
 | `MAX_SESSIONS`                   | `20`              | Sessions and probes at once; beyond, `503 busy`.                                             |
+| `MAX_PEER_CLEANUPS`              | `MAX_SESSIONS`    | Peer connections of ended sessions still closing; at this many, offers get `503 busy`.       |
 | `IDLE_TIMEOUT_S`                 | `60`              | A connected session without audio for this long is finalized.                                |
 | `MAX_SESSION_S`                  | `14400`           | A connected session is finalized after this long in all.                                     |
 | `ROTATE_MIN_INTERVAL_S`          | `1`               | Rotations (`keep_open` commits) start at most this often.                                    |
@@ -94,9 +97,24 @@ finalization never waits behind it. The answer does not wait for the cleanup: th
 once, and closing the streams and the peer connection (up to five seconds for a WebSocket) runs
 afterwards within `CLEANUP_TIMEOUT_S`, so the 504 arrives within the deadline, before the Campus
 server's 15 s run out. A cleanup that runs out of `CLEANUP_TIMEOUT_S` still releases everything:
-each resource has its own five seconds to close, a WebSocket that does not close gracefully in
-time loses its connection, and the HTTP session and the peer connection are closed also when
-closing another resource fails or takes longer. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
+the WebSocket and the HTTP session have five seconds each to close, a WebSocket that does not
+close gracefully in time loses its connection, and the HTTP session and the peer connection are
+closed also when closing another resource fails or takes longer.
+
+A peer connection is not done when its session's slot is free. From the moment its session starts
+closing until its close has ended, it counts against `MAX_PEER_CLEANUPS`, and while that many are
+closing, offers get `503 busy` (probes open no peer connection), so at most `MAX_SESSIONS` +
+`MAX_PEER_CLEANUPS` peer connections exist at once. aiortc's close is never cancelled, which
+would leave it unable to finish. It sends over the connection while it closes, and aioice waits
+for a TURN server to confirm the deletion of its allocation (up to a minute when the server is
+gone) or, behind a channel bind that failed, for good. A close that has not ended after five
+seconds has its transports stopped: sends fail at once, sends waiting for a TURN channel bind and
+pending STUN/TURN transactions fail, every ICE socket and connection to a TURN server is aborted,
+and the close runs to its end. One that still has not ended five seconds later is given up: the
+bridge keeps no reference to it, and it counts until it ends or is collected. `GET /health` shows
+the counts (`peer_cleanups`, of them `abandoned_peers`).
+
+A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
 finalized like a stop: the client gets an `error` event (`session_idle`, `session_expired`), the
 current item's transcript, then the close. `keep_open` commits asked for while a rotation runs
 fold into one next rotation, which starts `ROTATE_MIN_INTERVAL_S` after the last.
@@ -135,8 +153,9 @@ talks to the bridge on the same host (`TURN_ALLOWED_PEER_IP`).
 an aiortc client in the browser's role (audio track and `oai-events` channel): deltas while
 speaking, the final transcript on commit, a refused model with the gateway's status, the probe,
 the bridge key and its startup check, unusable offers, peers that never connect, a full bridge,
-connected peers without audio or beyond their lifetime, a flood of commits, and a gateway that
-repeats the key in its errors.
+connected peers without audio or beyond their lifetime, a flood of commits, a gateway that
+repeats the key in its errors, slow and failing closes, and peer connections whose close stalls
+in a TURN send or never ends.
 
 ```sh
 docker run --rm --network host -v "$PWD/infra/realtime-bridge/test_bridge.py:/app/test_bridge.py:ro" \
