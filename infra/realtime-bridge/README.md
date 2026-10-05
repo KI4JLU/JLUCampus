@@ -93,7 +93,10 @@ after `PROBE_TIMEOUT_S`, and a rotation whose next stream does not open ends the
 finalization never waits behind it. The answer does not wait for the cleanup: the slot is free at
 once, and closing the streams and the peer connection (up to five seconds for a WebSocket) runs
 afterwards within `CLEANUP_TIMEOUT_S`, so the 504 arrives within the deadline, before the Campus
-server's 15 s run out. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
+server's 15 s run out. A cleanup that runs out of `CLEANUP_TIMEOUT_S` still releases everything:
+each resource has its own five seconds to close, a WebSocket that does not close gracefully in
+time loses its connection, and the HTTP session and the peer connection are closed also when
+closing another resource fails or takes longer. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
 finalized like a stop: the client gets an `error` event (`session_idle`, `session_expired`), the
 current item's transcript, then the close. `keep_open` commits asked for while a rotation runs
 fold into one next rotation, which starts `ROTATE_MIN_INTERVAL_S` after the last.

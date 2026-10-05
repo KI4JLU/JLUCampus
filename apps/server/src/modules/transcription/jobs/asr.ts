@@ -3,7 +3,15 @@ import { openAsBlob } from 'node:fs'
 import type { TranscriptionLanguage } from '@justcampus/shared'
 import { z } from 'zod'
 
-import { bearer, ensureOk, readJson, UpstreamError, upstreamFetch, upstreamUrl } from '../http.js'
+import {
+  bearer,
+  ensureOk,
+  readJson,
+  secretsOfResponse,
+  UpstreamError,
+  upstreamFetch,
+  upstreamUrl
+} from '../http.js'
 import { upstreamLimiter, type ConcurrencyLimiter } from './limiter.js'
 import { withRetry } from './upstream.js'
 
@@ -229,7 +237,12 @@ export async function transcribeFile(
   try {
     return parseVerboseJson(body, chunkDuration)
   } catch {
-    throw UpstreamError.invalidAnswer(`${label} answered in an unexpected shape`, response.status)
+    throw UpstreamError.invalidAnswer(
+      `${label} answered in an unexpected shape`,
+      response.status,
+      null,
+      secretsOfResponse(response)
+    )
   }
 }
 

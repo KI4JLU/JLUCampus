@@ -152,6 +152,11 @@ const bridgeErrorSchema = z.object({
   upstream_status: z.number().int().optional()
 })
 
+/** The credentials of a request to the bridge: its headers' and the target's keys. */
+function requestSecrets(response: Response, target: OnpremTarget): (string | null)[] {
+  return [...secretsOfResponse(response), target.gatewayKey, target.bridgeKey]
+}
+
 /**
  * Why a failed bridge answer failed. A refused offer (400) is the offer's fault and leaves the
  * path available. A gateway that refused the handshake with 401 or 403 is asked for its model list
@@ -166,7 +171,7 @@ export async function failureOf(
   const text = await response.text().catch(() => '')
   // The whole answer: the error masks the request's keys in it before cutting it short.
   const detail = text || null
-  const secrets = [...secretsOfResponse(response), target.gatewayKey, target.bridgeKey]
+  const secrets = requestSecrets(response, target)
   const fail = (reason: TranscriptionOnpremUnavailableReason): OnpremUnavailable =>
     new OnpremUnavailable(reason, target.model, response.status, detail, secrets)
   if (response.status === 400) {
@@ -276,7 +281,13 @@ export async function onpremSignaling(
     target
   )
   if (!response.ok) throw await failureOf(response, target, signal)
-  return parseSignalingAnswer(await response.text(), response.headers.get('content-type'), offer)
+  // Every error about the answer masks this request's keys, however short or long ago noted.
+  return parseSignalingAnswer(
+    await response.text(),
+    response.headers.get('content-type'),
+    offer,
+    requestSecrets(response, target)
+  )
 }
 
 /**

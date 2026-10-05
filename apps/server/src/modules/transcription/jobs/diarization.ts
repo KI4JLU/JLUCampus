@@ -198,7 +198,12 @@ export async function diarizeFile(
   try {
     body = JSON.parse(answer.body)
   } catch {
-    throw UpstreamError.invalidAnswer(`${label} did not answer with JSON`, answer.status)
+    throw UpstreamError.invalidAnswer(
+      `${label} did not answer with JSON`,
+      answer.status,
+      null,
+      secrets
+    )
   }
   try {
     return parseDiarization(body)

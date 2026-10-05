@@ -5,8 +5,9 @@ with the same protocol. Changes against the original, marked "Campus:" below: JS
 with the gateway's status, `POST /probe`, a connect timeout for peers that never connect, TURN
 credentials minted from a shared secret (coturn `use-auth-secret`), a mandatory BRIDGE_API_KEY,
 a session limit with idle and lifetime limits, deadlines for the upstream handshake, the
-negotiation and the probe with their cleanup after the answer, coalesced rotations, and nothing
-the upstream says in a log or an answer.
+negotiation and the probe with their cleanup after the answer, closes that release every resource
+within their own time also when their caller gives up, coalesced rotations, and nothing the
+upstream says in a log or an answer.
 
 Bridges browser WebRTC connections to the vLLM realtime speech-to-text WebSocket (reached through
 the LiteLLM gateway). Exists because vLLM's realtime endpoint is WebSocket-only: a browser
@@ -315,7 +316,7 @@ async def connect_upstream_ws(http: aiohttp.ClientSession, url: str, gateway_key
                 headers=headers,
                 heartbeat=20,
                 max_msg_size=16 * 1024 * 1024,
-                timeout=aiohttp.ClientWSTimeout(ws_close=5.0),
+                timeout=aiohttp.ClientWSTimeout(ws_close=WS_CLOSE_TIMEOUT_S),
                 proxy=proxy,
                 proxy_auth=proxy_auth,
             )
@@ -325,22 +326,72 @@ async def connect_upstream_ws(http: aiohttp.ClientSession, url: str, gateway_key
         raise UpstreamTimeout(UPSTREAM_HANDSHAKE_TIMEOUT_S) from None
 
 
-async def close_quietly(ws) -> None:
-    """Closes a WebSocket, whatever state it is in (bounded by its ws_close timeout)."""
-    if ws is None or ws.closed:
-        return
+def abort_ws(ws) -> None:
+    """Campus: drops a WebSocket's connection without the closing handshake. Nothing after a
+    graceful close, which has released the connection already."""
     try:
-        await ws.close()
+        connection = getattr(ws, "_conn", None)
+        transport = getattr(connection, "transport", None)
+        if transport is not None:
+            transport.abort()
+        response = getattr(ws, "_response", None)
+        if response is not None:
+            response.close()
     except Exception:
         pass
 
 
+async def close_quietly(ws) -> None:
+    """Closes a WebSocket, whatever state it is in. Campus: the graceful close gets
+    WS_CLOSE_TIMEOUT_S; when it runs out, fails or is cancelled, the connection is dropped
+    (`abort_ws`), so no deadline of a caller leaves it open."""
+    if ws is None:
+        return
+    try:
+        if not ws.closed:
+            async with asyncio.timeout(WS_CLOSE_TIMEOUT_S):
+                await ws.close()
+    except Exception:
+        pass
+    finally:
+        abort_ws(ws)
+
+
+async def close_http(http: aiohttp.ClientSession | None) -> None:
+    """Campus: closes an HTTP session within HTTP_CLOSE_TIMEOUT_S. Its connections are closed as
+    soon as the close starts; what it waits for afterwards is the TLS shutdown."""
+    if http is None:
+        return
+    try:
+        async with asyncio.timeout(HTTP_CLOSE_TIMEOUT_S):
+            await http.close()
+    except Exception:
+        pass
+
+
+async def close_stream(ws, http: aiohttp.ClientSession | None) -> None:
+    """Campus: an upstream stream, then its HTTP session; the session is closed also when
+    closing the stream fails, runs out of time or is cancelled."""
+    try:
+        await close_quietly(ws)
+    finally:
+        await close_http(http)
+
+
 # Campus: cleanup after a failed or overdue negotiation or probe runs after the answer, so closing
-# a stream (up to its five seconds of ws_close) cannot push the answer past NEGOTIATE_TIMEOUT_S or
+# a stream (up to WS_CLOSE_TIMEOUT_S) cannot push the answer past NEGOTIATE_TIMEOUT_S or
 # PROBE_TIMEOUT_S, and with the Campus server's 15 s. It gets CLEANUP_TIMEOUT_S, then it is
-# cancelled. The tasks are kept here until they end.
+# cancelled: a stream it was still closing loses its connection (`close_quietly`), its HTTP session
+# is closed all the same (`close_stream`), and a session's release runs on (BridgeSession.close).
+# The tasks are kept here until they end.
 CLEANUP_TIMEOUT_S = float(os.environ.get("CLEANUP_TIMEOUT_S", "10"))
 BACKGROUND_TASKS: set = set()
+# Campus: what each resource gets to close, whatever deadline its caller has (`close_quietly`,
+# `close_http`, BridgeSession.close): a stream's closing handshake, an HTTP session's TLS
+# shutdown, and how long a session's close waits for its peer connection.
+WS_CLOSE_TIMEOUT_S = 5.0
+HTTP_CLOSE_TIMEOUT_S = 5.0
+PEER_CLOSE_TIMEOUT_S = 5.0
 
 
 def keep(task: asyncio.Future) -> asyncio.Future:
@@ -351,7 +402,8 @@ def keep(task: asyncio.Future) -> asyncio.Future:
 
 
 def in_background(coro, what: str) -> asyncio.Future:
-    """Campus: runs a cleanup after the answer, within CLEANUP_TIMEOUT_S."""
+    """Campus: runs a cleanup after the answer, within CLEANUP_TIMEOUT_S. Cancelling it at the
+    deadline releases what it holds anyway: every close it runs is safe against that."""
 
     async def run():
         try:
@@ -423,6 +475,8 @@ class BridgeSession:
         self.hold = bytearray()
         self.segment_lock = asyncio.Lock()
         self.closed = False
+        # Campus: the release of the session's resources (`close`), once.
+        self.closing: asyncio.Future | None = None
         # Campus: one rotation at a time and at most one more waiting (`rotation_again`), one
         # finalization, and the watchdog's clock.
         self.rotation_pending = False
@@ -553,7 +607,7 @@ class BridgeSession:
         try:
             self.upstream, self.done_received = await self._open_upstream(self.item_id)
         except Exception:
-            await self.http.close()
+            await close_http(self.http)
             self.http = None
             raise
 
@@ -762,11 +816,7 @@ class BridgeSession:
             try:
                 await self._seal(old_ws, tail)
             finally:
-                if old_ws is not None and not old_ws.closed:
-                    try:
-                        await old_ws.close()
-                    except Exception:
-                        pass
+                await close_quietly(old_ws)
 
             try:
                 new_ws, new_done = await opening
@@ -823,25 +873,39 @@ class BridgeSession:
             await self.close()
 
     async def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        ACTIVE_SESSIONS.discard(self)
-        self.log.info("closing session")
-        for task in list(self.tasks):
-            if task is not asyncio.current_task():
-                task.cancel()
-        if self.upstream is not None and not self.upstream.closed:
+        """Ends the session and releases its resources. Campus: the release runs as a task of its
+        own (held in BACKGROUND_TASKS until it ends), so a caller that is cancelled, a cleanup
+        deadline say, stops waiting for it and does not stop it. Every call waits for the same
+        release."""
+        if self.closing is None:
+            self.closed = True
+            ACTIVE_SESSIONS.discard(self)
+            self.log.info("closing session")
+            for task in list(self.tasks):
+                if task is not asyncio.current_task():
+                    task.cancel()
+            self.closing = keep(asyncio.ensure_future(self._release()))
+        await asyncio.shield(self.closing)
+
+    async def _release(self):
+        """Campus: the peer connection, and the upstream stream followed by its HTTP session, each
+        within its own time (`close_stream`, PEER_CLOSE_TIMEOUT_S) and each also when another
+        fails. aiortc's close is never cancelled halfway, which would leave it unable to close
+        again; it runs on in BACKGROUND_TASKS if it takes longer."""
+        peer = keep(asyncio.ensure_future(self._close_peer()))
+        try:
+            await close_stream(self.upstream, self.http)
+        finally:
             try:
-                await self.upstream.close()
-            except Exception:
-                pass
-        if self.http is not None:
-            await self.http.close()
+                await asyncio.wait_for(asyncio.shield(peer), PEER_CLOSE_TIMEOUT_S)
+            except TimeoutError:
+                self.log.warning("peer connection not closed within %gs", PEER_CLOSE_TIMEOUT_S)
+
+    async def _close_peer(self):
         try:
             await self.pc.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            self.log.warning("closing the peer connection failed: %s", failure_text(exc))
 
     # ----------------------------------------------------------------- utils
 
@@ -1071,11 +1135,8 @@ async def probe(gateway_base: str, gateway_key: str, model: str) -> web.Response
 
 
 async def close_probe(ws, http: aiohttp.ClientSession) -> None:
-    """Campus: a probe's stream, then its HTTP session."""
-    try:
-        await close_quietly(ws)
-    finally:
-        await http.close()
+    """Campus: a probe's stream, then its HTTP session (`close_stream`)."""
+    await close_stream(ws, http)
 
 
 async def handle_health(_request: web.Request) -> web.Response:

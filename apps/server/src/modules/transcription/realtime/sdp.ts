@@ -5,26 +5,33 @@ import { randomBytes, randomInt, randomUUID } from 'node:crypto'
  * WebRTC peer, and the offer the admin connection test sends, shaped like a browser's.
  */
 
+/** One line of an SDP and its number, counted from 1. */
+interface SdpLine {
+  text: string
+  line: number
+}
+
 interface MediaSection {
   /** The `m=` line. */
-  media: string
-  attributes: string[]
+  media: SdpLine
+  attributes: SdpLine[]
 }
 
 interface ParsedSdp {
-  session: string[]
+  session: SdpLine[]
   sections: MediaSection[]
 }
 
 function parseSdp(sdp: string): ParsedSdp {
-  const session: string[] = []
+  const session: SdpLine[] = []
   const sections: MediaSection[] = []
-  for (const line of sdp.split(/\r?\n/)) {
-    if (!line) continue
-    if (line.startsWith('m=')) sections.push({ media: line, attributes: [] })
+  sdp.split(/\r?\n/).forEach((text, index) => {
+    if (!text) return
+    const line = { text, line: index + 1 }
+    if (text.startsWith('m=')) sections.push({ media: line, attributes: [] })
     else if (sections.length > 0) sections.at(-1)!.attributes.push(line)
     else session.push(line)
-  }
+  })
   return { session, sections }
 }
 
@@ -70,10 +77,12 @@ const TRANSPORT: readonly { name: string; valid: (value: string) => boolean }[] 
   { name: 'setup', valid: (value) => value === 'active' || value === 'passive' }
 ]
 
-/** The values of every `a=<name>:` line. */
-function attributeValues(lines: readonly string[], name: string): string[] {
+/** The values of every `a=<name>:` line, with their line numbers. */
+function attributeValues(lines: readonly SdpLine[], name: string): SdpLine[] {
   const prefix = `a=${name}:`
-  return lines.filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length))
+  return lines
+    .filter(({ text }) => text.startsWith(prefix))
+    .map(({ text, line }) => ({ text: text.slice(prefix.length), line }))
 }
 
 /**
@@ -82,12 +91,16 @@ function attributeValues(lines: readonly string[], name: string): string[] {
  * for every accepted section valid ICE credentials, DTLS fingerprints and an answerer's DTLS role
  * (`TRANSPORT`). A section takes them from its own lines, else from the section that carries the
  * transport of its BUNDLE group (RFC 8843), else from the session.
+ *
+ * The problem is in fixed words with line numbers, counts and the media kinds WebRTC knows, and
+ * never quotes the answer: whatever a bridge put into it, a credential it reflects among them,
+ * stays out of logs.
  */
 export function sdpAnswerProblem(sdp: string, offer: string | null = null): string | null {
   if (!/^v=0\r?\n/.test(sdp)) return 'no v=0 line'
   const { session, sections } = parseSdp(sdp)
   for (const type of ['o', 's', 't']) {
-    if (!session.some((line) => line.startsWith(`${type}=`))) return `no ${type}= line`
+    if (!session.some(({ text }) => text.startsWith(`${type}=`))) return `no ${type}= line`
   }
   if (sections.length === 0) return 'no media section'
   if (offer !== null) {
@@ -97,9 +110,9 @@ export function sdpAnswerProblem(sdp: string, offer: string | null = null): stri
     }
   }
   const midOf = (section: MediaSection): string | undefined =>
-    attributeValues(section.attributes, 'mid')[0]?.trim()
+    attributeValues(section.attributes, 'mid')[0]?.text.trim()
   const bundles = attributeValues(session, 'group')
-    .map((group) => group.trim().split(/\s+/))
+    .map((group) => group.text.trim().split(/\s+/))
     .filter(([semantics]) => semantics === 'BUNDLE')
     .map(([, ...mids]) => mids)
   /** The section that carries the transport of `section`'s BUNDLE group, if any. */
@@ -110,20 +123,22 @@ export function sdpAnswerProblem(sdp: string, offer: string | null = null): stri
   }
   let accepted = 0
   for (const section of sections) {
-    const media = WEBRTC_MEDIA.exec(section.media)
-    if (!media) return `not a WebRTC media section: ${section.media.slice(0, 80)}`
+    const media = WEBRTC_MEDIA.exec(section.media.text)
+    if (!media) return `line ${section.media.line}: not a WebRTC media section`
     // Port 0 rejects the section; it needs nothing else.
     if (media[2] === '0') continue
     accepted += 1
+    // One of the kinds `WEBRTC_MEDIA` names, never the answer's own words.
+    const kind = media[1]!
     const tagged = bundleTagged(section)
     for (const { name, valid } of TRANSPORT) {
       const sources = [section.attributes, tagged?.attributes ?? [], session]
       const values = sources
         .map((lines) => attributeValues(lines, name))
         .find((found) => found.length > 0)
-      if (!values) return `no ${name} for ${media[1]}`
-      const invalid = values.find((value) => !valid(value.trim()))
-      if (invalid !== undefined) return `invalid ${name} for ${media[1]}: ${invalid.slice(0, 80)}`
+      if (!values) return `no ${name} for ${kind} (line ${section.media.line})`
+      const invalid = values.find(({ text }) => !valid(text.trim()))
+      if (invalid !== undefined) return `line ${invalid.line}: invalid ${name} for ${kind}`
     }
   }
   if (accepted === 0) return 'every media section rejected'

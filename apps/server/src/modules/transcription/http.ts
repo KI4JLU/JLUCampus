@@ -16,7 +16,9 @@ import { ApiError } from '../../api.js'
  *
  * What an upstream answered goes into an error's `detail` only, for logs; its `message` is the
  * server's own words, and its `kind` and `status` say how the request failed, decided on the raw
- * answer before anything is masked. Callers decide by those, never by the masked words.
+ * answer before anything is masked. Callers decide by those, never by the masked words. Every
+ * error built from an answer gets that answer's credentials (`secretsOfResponse`), also where its
+ * detail is only the server's own words (an SDP's problem, say): the recent keys are a backstop.
  */
 
 /** Keys this server sent to upstreams lately, newest last; `maskSecrets` hides them. */
@@ -244,7 +246,12 @@ export async function readJson<T>(
   try {
     body = await response.json()
   } catch {
-    throw UpstreamError.invalidAnswer(`${label} did not answer with JSON`, response.status)
+    throw UpstreamError.invalidAnswer(
+      `${label} did not answer with JSON`,
+      response.status,
+      null,
+      secretsOfResponse(response)
+    )
   }
   const parsed = schema.safeParse(body)
   if (!parsed.success) {
@@ -325,7 +332,9 @@ export async function listModels(
   } catch {
     throw UpstreamError.invalidAnswer(
       'The model list answered in an unexpected shape',
-      response.status
+      response.status,
+      null,
+      secretsOfResponse(response)
     )
   }
 }

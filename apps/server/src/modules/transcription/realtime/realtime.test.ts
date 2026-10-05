@@ -54,13 +54,13 @@ describe('upstream answers', () => {
     expect(sdpAnswerProblem('v=0\r\n')).toBe('no o= line')
     expect(sdpAnswerProblem(answer.replace(/^m=.*\r\n/gm, ''))).toBe('no media section')
     expect(sdpAnswerProblem(answer.replaceAll('a=fingerprint:', 'a=x-fingerprint:'))).toBe(
-      'no fingerprint for audio'
+      'no fingerprint for audio (line 6)'
     )
     expect(sdpAnswerProblem(answer.replaceAll('a=ice-pwd:', 'a=x-pwd:'))).toBe(
-      'no ice-pwd for audio'
+      'no ice-pwd for audio (line 6)'
     )
-    expect(sdpAnswerProblem(answer.replace('UDP/TLS/RTP/SAVPF', 'RTP/AVP'))).toMatch(
-      /^not a WebRTC media section/
+    expect(sdpAnswerProblem(answer.replace('UDP/TLS/RTP/SAVPF', 'RTP/AVP'))).toBe(
+      'line 6: not a WebRTC media section'
     )
     // One media section for an offer of two breaks RFC 3264.
     const audioOnly = answer.slice(0, answer.indexOf('m=application'))
@@ -90,28 +90,52 @@ describe('upstream answers', () => {
       sdpAnswerProblem(answer.replaceAll(from, to), probeOffer())
     // The review's counterexample: every attribute there, every value empty.
     expect(problem(/^a=(ice-ufrag|ice-pwd|fingerprint):.*$/gm, 'a=$1:')).toBe(
-      'invalid ice-ufrag for audio: '
+      'line 9: invalid ice-ufrag for audio'
     )
-    expect(problem('a=ice-ufrag:abcd', 'a=ice-ufrag:abc')).toBe('invalid ice-ufrag for audio: abc')
-    expect(problem('a=ice-ufrag:abcd', 'a=ice-ufrag:ab cd')).toMatch(/^invalid ice-ufrag/)
+    expect(problem('a=ice-ufrag:abcd', 'a=ice-ufrag:abc')).toBe(
+      'line 9: invalid ice-ufrag for audio'
+    )
+    expect(problem('a=ice-ufrag:abcd', 'a=ice-ufrag:ab cd')).toMatch(/^line 9: invalid ice-ufrag/)
     expect(problem('a=ice-pwd:abcdefghijklmnopqrstuvwx', 'a=ice-pwd:short')).toBe(
-      'invalid ice-pwd for audio: short'
+      'line 10: invalid ice-pwd for audio'
     )
-    expect(problem('a=fingerprint:sha-256 ', 'a=fingerprint:')).toMatch(/^invalid fingerprint/)
-    expect(problem('a=fingerprint:sha-256 ', 'a=fingerprint:sha-999 ')).toMatch(
-      /^invalid fingerprint/
+    expect(problem('a=fingerprint:sha-256 ', 'a=fingerprint:')).toBe(
+      'line 11: invalid fingerprint for audio'
+    )
+    expect(problem('a=fingerprint:sha-256 ', 'a=fingerprint:sha-999 ')).toBe(
+      'line 11: invalid fingerprint for audio'
     )
     // Too few bytes for SHA-256, and no hex.
-    expect(problem(/ 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:/g, ' 00:')).toMatch(
-      /^invalid fingerprint/
+    expect(problem(/ 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:/g, ' 00:')).toBe(
+      'line 11: invalid fingerprint for audio'
     )
-    expect(problem(/AA:BB/g, 'XX:YY')).toMatch(/^invalid fingerprint/)
+    expect(problem(/AA:BB/g, 'XX:YY')).toBe('line 11: invalid fingerprint for audio')
     // The answerer takes a DTLS role; `actpass` is the offerer's, and none is none.
-    expect(problem('a=setup:passive', 'a=setup:actpass')).toBe('invalid setup for audio: actpass')
-    expect(problem('a=setup:passive', 'a=setup:holdconn')).toMatch(/^invalid setup/)
-    expect(problem('a=setup:passive\r\n', '')).toBe('no setup for audio')
+    expect(problem('a=setup:passive', 'a=setup:actpass')).toBe('line 12: invalid setup for audio')
+    expect(problem('a=setup:passive', 'a=setup:holdconn')).toBe('line 12: invalid setup for audio')
+    expect(problem('a=setup:passive\r\n', '')).toBe('no setup for audio (line 6)')
     expect(problem('a=setup:passive', 'a=setup:active')).toBeNull()
     expect(problem(/AA:BB:CC:DD:EE:FF/g, 'aa:bb:cc:dd:ee:ff')).toBeNull()
+  })
+
+  it('never quotes the answer in what is wrong with it (E-1)', () => {
+    // A credential a bridge reflects into any line stays out of the problem, whatever its length.
+    const key = 'review7'
+    const problems = [
+      answer.replace('m=audio 9 UDP/TLS/RTP/SAVPF 111', `m=${key}`),
+      answer.replace('m=audio 9 UDP/TLS/RTP/SAVPF 111', `m=audio 9 RTP/${key} 111`),
+      answer.replace('a=ice-ufrag:abcd', `a=ice-ufrag:${key} x`),
+      answer.replace('a=ice-pwd:abcdefghijklmnopqrstuvwx', `a=ice-pwd:${key}`),
+      answer.replace(/a=fingerprint:sha-256 [^\r]*/, `a=fingerprint:${key} AB`),
+      answer.replace('a=setup:passive', `a=setup:${key}`)
+    ].map((sdp) => sdpAnswerProblem(sdp, probeOffer()))
+    for (const problem of problems) {
+      expect(problem).not.toBeNull()
+      expect(problem).not.toContain(key)
+      expect(problem).toMatch(
+        /^(line \d+: (not a WebRTC media section|invalid [a-z-]+ for (audio|video|application))|no [a-z-]+ for (audio|video|application) \(line \d+\))$/
+      )
+    }
   })
 
   it('takes bundled transport from the section that carries it', () => {
@@ -124,7 +148,7 @@ describe('upstream answers', () => {
     expect(sdpAnswerProblem(bundled, probeOffer())).toBeNull()
     // Without the group the data channel has no transport of its own.
     expect(sdpAnswerProblem(bundled.replace('a=group:BUNDLE 0 1\r\n', ''), probeOffer())).toBe(
-      'no ice-ufrag for application'
+      'no ice-ufrag for application (line 14)'
     )
   })
 
@@ -149,7 +173,7 @@ describe('upstream answers', () => {
       expect(sdpAnswerProblem(local.sdp, offer)).toBeNull()
       // The same answer with empty transport values is one no peer takes, nor this check.
       const emptied = local.sdp.replace(/^a=(ice-ufrag|ice-pwd|fingerprint):.*$/gm, 'a=$1:')
-      expect(sdpAnswerProblem(emptied, offer)).toMatch(/^invalid ice-ufrag/)
+      expect(sdpAnswerProblem(emptied, offer)).toMatch(/^line \d+: invalid ice-ufrag for audio$/)
     } finally {
       await peer.close()
     }

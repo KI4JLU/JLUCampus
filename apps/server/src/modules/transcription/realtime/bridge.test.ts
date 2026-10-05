@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { TRANSCRIPTION_API, TRANSCRIPTION_DEFAULT_CONFIG } from '@justcampus/shared'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { forgetKeys } from '../http.js'
+import { forgetKeys, rememberKey, UpstreamError } from '../http.js'
 import { json, NO_SECRETS, testApp } from '../transcripts/testing.js'
 import {
   AVAILABLE_TTL_MS,
@@ -233,6 +233,51 @@ describe('the realtime bridge proxy', () => {
       )) as OnpremUnavailable
       expect(error.reason).toBe('gatewayUnreachable')
       expect(error.detail).not.toContain(key.slice(0, 3))
+    }
+  })
+
+  it('keeps a short own key and an evicted one out of an unusable SDP answer (E-1)', async () => {
+    const long = 'opaque-gateway-credential-0123456789'
+    for (const [key, evict] of [
+      ['review7', 0],
+      [long, 65]
+    ] as const) {
+      forgetKeys()
+      vi.mocked(console.error).mockClear()
+      answers['/realtime'] = (offer) => {
+        // Other requests' keys push this one out of the recent keys before the answer comes.
+        for (let other = 0; other < evict; other++) rememberKey(`other-request-key-${other}-xyz`)
+        const sdp = answerFor(offer)
+          .replace(/^m=audio .*$/m, `m=${key}`)
+          .replace(/^a=ice-pwd:.*$/gm, `a=ice-pwd:${key}`)
+        return { status: 200, type: 'application/sdp', body: sdp }
+      }
+      const chosen = onpremTarget(config(), { apiKey: key }, 'bridge-secret-0123456789')!
+      const error = (await onpremSignaling(chosen, probeOffer()).catch(
+        (caught: unknown) => caught
+      )) as UpstreamError
+      expect(error.kind).toBe('invalidAnswer')
+      expect(error.detail).toMatch(/^line \d+: not a WebRTC media section$/)
+      expect(`${error.message} ${error.detail}`).not.toContain(key)
+
+      // Through the route its log carries neither.
+      const app = testApp(realtimeRouter, { config: config(), secrets: { apiKey: key } })
+      const failed = await app.request(
+        relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
+        json('POST', { sdp: probeOffer() })
+      )
+      expect(failed.status).toBe(502)
+      expect(await failed.text()).not.toContain(key)
+      const logged = vi
+        .mocked(console.error)
+        .mock.calls.flat()
+        .map((value) =>
+          value instanceof UpstreamError ? `${value.message} ${value.detail} ${value.stack}` : value
+        )
+        .map(String)
+        .join(' ')
+      expect(logged).toContain('not a WebRTC media section')
+      expect(logged).not.toContain(key)
     }
   })
 

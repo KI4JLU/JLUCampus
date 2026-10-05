@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { bearer, ensureOk, upstreamFetch, UpstreamError } from '../http.js'
+import { bearer, ensureOk, secretsOfResponse, upstreamFetch, UpstreamError } from '../http.js'
 import { sdpAnswerProblem } from './sdp.js'
 
 /**
@@ -27,12 +27,14 @@ const signalingAnswerSchema = z.object({
 /**
  * The bridge's SDP answer from its response: JSON `{sdp}` (or `{answer}`), or the SDP itself as
  * `application/sdp` or text. It must be one a WebRTC peer can use (`sdpAnswerProblem`), for
- * `offer` if given.
+ * `offer` if given. Its errors mask `secrets`, the credentials of the request that got the answer
+ * (`secretsOfResponse` and the target's keys), though what is wrong never quotes the answer.
  */
 export function parseSignalingAnswer(
   body: string,
   contentType: string | null,
-  offer: string | null = null
+  offer: string | null = null,
+  secrets: readonly (string | null | undefined)[] = []
 ): string {
   let sdp: string | undefined
   if (contentType?.includes('json') || body.trimStart().startsWith('{')) {
@@ -51,15 +53,21 @@ export function parseSignalingAnswer(
     sdp = body
   }
   if (!sdp || !isSdp(sdp) || sdp.length > SDP_MAX) {
-    throw UpstreamError.invalidAnswer('The signaling bridge answered without an SDP answer', 200)
+    throw UpstreamError.invalidAnswer(
+      'The signaling bridge answered without an SDP answer',
+      200,
+      null,
+      secrets
+    )
   }
   const problem = sdpAnswerProblem(sdp.trimStart(), offer)
   if (problem) {
-    // What is wrong quotes the answer: detail, for logs only.
+    // Fixed words and line numbers, for logs only; masked all the same.
     throw UpstreamError.invalidAnswer(
       'The signaling bridge answered with an unusable SDP',
       200,
-      problem
+      problem,
+      secrets
     )
   }
   return sdp
@@ -136,7 +144,12 @@ export async function issueClientSecret(
   try {
     body = await response.json()
   } catch {
-    throw UpstreamError.invalidAnswer('OpenAI Realtime did not answer with JSON', response.status)
+    throw UpstreamError.invalidAnswer(
+      'OpenAI Realtime did not answer with JSON',
+      response.status,
+      null,
+      secretsOfResponse(response)
+    )
   }
   return parseClientSecret(body)
 }

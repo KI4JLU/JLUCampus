@@ -10,13 +10,14 @@ import asyncio
 import json
 import os
 import unittest
+from contextlib import nullcontext
 from urllib.parse import quote
 
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 
 import aiohttp  # noqa: E402
 from aiohttp import web  # noqa: E402
-from aiortc import RTCPeerConnection, RTCSessionDescription  # noqa: E402
+from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription  # noqa: E402
 from aiortc.mediastreams import AudioStreamTrack  # noqa: E402
 
 import bridge  # noqa: E402
@@ -69,8 +70,12 @@ class FakeGateway:
         await ws.prepare(request)
         # vLLM greets every connection before the model is validated.
         await ws.send_json({"type": "session.created", "id": "sess"})
-        connection = {"model": model, "events": [], "bytes": 0}
+        connection = {"model": model, "events": [], "bytes": 0, "transport": request.transport}
         self.connections.append(connection)
+        if model == "silent-close":
+            # Campus (E-2): reads nothing more, so a closing handshake never completes.
+            await self.release.wait()
+            return ws
         deltas = []
         started = False
         async for msg in ws:
@@ -165,6 +170,12 @@ class BridgeServer:
         await self.runner.cleanup()
 
 
+def host_only():
+    """Host candidates only: without ICE servers aiortc asks a public STUN server, which these
+    tests neither need nor may reach."""
+    return RTCConfiguration(iceServers=[])
+
+
 def gateway_headers(base, model=MODEL, key=GATEWAY_KEY):
     return {"X-Gateway-Base": base, "X-Gateway-Key": key, "X-Model": model}
 
@@ -191,7 +202,13 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         bridge.PROBE_TIMEOUT_S = 14
         bridge.PROBE_WAIT_S = 1.5
         bridge.CLEANUP_TIMEOUT_S = 10
+        bridge.WS_CLOSE_TIMEOUT_S = 5.0
+        bridge.HTTP_CLOSE_TIMEOUT_S = 5.0
+        bridge.PEER_CLOSE_TIMEOUT_S = 5.0
         bridge.ACTIVE_SESSIONS.clear()
+        original = bridge.build_rtc_configuration
+        bridge.build_rtc_configuration = host_only
+        self.addCleanup(setattr, bridge, "build_rtc_configuration", original)
         bridge.active_probes = 0
         self.gateway = FakeGateway()
         await self.gateway.start()
@@ -207,7 +224,7 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
     async def offer(self, audio=True):
         """A client peer like the browser's, with its offer after ICE gathering. Without `audio`
         it negotiates an audio stream but never sends any."""
-        peer = RTCPeerConnection()
+        peer = RTCPeerConnection(host_only())
         channel = peer.createDataChannel("oai-events")
         if audio:
             peer.addTrack(AudioStreamTrack())
@@ -584,6 +601,121 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
             task = bridge.in_background(asyncio.Event().wait(), "closing a test stream")
             await task
         self.assertIn("closing a test stream did not finish within 0.2s", "\n".join(logs.output))
+
+    def record_sessions(self):
+        """Campus (E-2): every BridgeSession the routes create, also once they left
+        ACTIVE_SESSIONS."""
+        sessions = []
+        original = bridge.BridgeSession
+
+        class Recorded(original):
+            def __init__(self, *args):
+                super().__init__(*args)
+                sessions.append(self)
+
+        bridge.BridgeSession = Recorded
+        self.addCleanup(setattr, bridge, "BridgeSession", original)
+        return sessions
+
+    def assert_released(self, session, stream=None):
+        """The session's HTTP session, peer connection and upstream connection are closed: the
+        gateway's side of the stream has lost its connection."""
+        self.assertTrue(session.http.closed)
+        self.assertEqual(session.pc.connectionState, "closed")
+        self.assertEqual(session.pc.signalingState, "closed")
+        if stream is not None:
+            self.assertTrue(stream["transport"].is_closing())
+
+    def slow_closing_streams(self):
+        """Campus (E-2): real gateway streams whose graceful close never ends."""
+        original = bridge.start_stream
+
+        async def start(*args):
+            ws = await original(*args)
+
+            async def close(**_kwargs):
+                await asyncio.sleep(30)
+
+            ws.close = close
+            return ws
+
+        bridge.start_stream = start
+        self.addCleanup(setattr, bridge, "start_stream", original)
+
+    async def test_a_cleanup_deadline_still_releases_the_session(self):
+        """Campus (E-2): the review's case, scaled: the cleanup deadline (50 ms) passes while the
+        stream's graceful close (500 ms budget) does not end. The answer comes at once, the slot
+        is free, and after the deadline the stream's connection is dropped and the HTTP session
+        and the peer connection are closed all the same; another close waits for that release."""
+        bridge.MAX_SESSIONS = 1
+        bridge.CLEANUP_TIMEOUT_S = 0.05
+        bridge.WS_CLOSE_TIMEOUT_S = 0.5
+        sessions = self.record_sessions()
+        self.slow_closing_streams()
+        offer = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 RTP/AVP 0\r\n"
+        with self.assertLogs(level="WARNING") as logs:
+            status, body, elapsed = await self.timed_post(
+                "/realtime", data=offer, headers=gateway_headers(self.gateway.base)
+            )
+            self.assertEqual((status, body["error"]), (400, "bad_offer"))
+            self.assertLess(elapsed, 1.2)
+            self.assertFalse(bridge.ACTIVE_SESSIONS)
+            [session] = sessions
+            await wait_for(lambda: "did not finish within 0.05s" in "\n".join(logs.output))
+        # The deadline has passed; the release has not given up.
+        self.assertFalse(session.http.closed)
+        self.assertTrue(bridge.BACKGROUND_TASKS)
+        await wait_for(lambda: not bridge.BACKGROUND_TASKS, timeout=5)
+        [stream] = self.gateway.connections
+        self.assert_released(session, stream)
+        await asyncio.wait_for(session.close(), 1)
+
+    async def test_a_cancelled_stream_close_drops_the_connection(self):
+        """Campus (E-2): a stream closed by a cleanup that runs out of time loses its connection
+        at the deadline, as a probe's does, and its HTTP session is closed too."""
+        bridge.CLEANUP_TIMEOUT_S = 0.05
+        bridge.WS_CLOSE_TIMEOUT_S = 5.0
+        http = aiohttp.ClientSession()
+        ws = await bridge.start_stream(
+            http, bridge.realtime_url(self.gateway.base, "silent-close"), GATEWAY_KEY, "x"
+        )
+        await wait_for(lambda: self.gateway.connections)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with self.assertLogs(level="WARNING"):
+            await bridge.in_background(bridge.close_probe(ws, http), "closing a test probe")
+        self.assertLess(loop.time() - started, 1)
+        self.assertTrue(http.closed)
+        await wait_for(lambda: self.gateway.connections[0]["transport"].is_closing(), timeout=2)
+
+    async def test_a_failing_close_still_releases_the_rest(self):
+        """Campus (E-2): whichever resource fails to close, the others are closed."""
+        for failing in ("upstream", "http", "pc"):
+            with self.subTest(failing=failing):
+                self.gateway.connections.clear()
+                session = bridge.BridgeSession(self.gateway.base, GATEWAY_KEY, MODEL)
+                await session._connect_upstream()
+                await wait_for(lambda: self.gateway.connections)
+                [stream] = self.gateway.connections
+                resource = getattr(session, failing)
+                original = resource.close
+
+                async def fail(*_args, **_kwargs):
+                    raise RuntimeError("close failed")
+
+                resource.close = fail
+                with self.assertLogs(level="WARNING") if failing == "pc" else nullcontext():
+                    await asyncio.wait_for(session.close(), 3)
+                resource.close = original
+                if failing == "pc":
+                    self.assertTrue(session.http.closed)
+                    self.assertTrue(stream["transport"].is_closing())
+                    await session.pc.close()
+                else:
+                    if failing == "http":
+                        await session.http.close()
+                    await wait_for(lambda: stream["transport"].is_closing(), timeout=2)
+                    self.assert_released(session, stream)
 
     async def test_rotation_behind_a_stalled_open_ends_the_session(self):
         bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 0.5
