@@ -20,6 +20,7 @@ import {
   bearer,
   listModels,
   maskSecrets,
+  secretsOfResponse,
   upstreamFetch,
   UpstreamError,
   upstreamUrl
@@ -96,18 +97,21 @@ export async function modelModes(
 }
 
 /**
- * The speech recognition models of a list: LiteLLM's `audio_transcription` mode where the
- * endpoint names a mode, else by id (`isSpeechModelId`). A chat model never makes it in, so the
- * first model of the list cannot be one.
+ * The speech recognition models of a list in its order, marked `speech`: LiteLLM's
+ * `audio_transcription` mode where the endpoint names a mode, else by id (`isSpeechModelId`).
+ * The mark keeps that classification in the saved list, so `firstSpeechModel` takes the first
+ * of them even where its id says nothing.
  */
 export function speechModels(
   models: readonly TranscriptionModel[],
   modes: ReadonlyMap<string, string> = new Map()
 ): TranscriptionModel[] {
-  return models.filter((model) => {
-    const mode = modes.get(model.id)
-    return mode ? mode === 'audio_transcription' : isSpeechModelId(model.id)
-  })
+  return models
+    .filter((model) => {
+      const mode = modes.get(model.id)
+      return mode ? mode === 'audio_transcription' : isSpeechModelId(model.id)
+    })
+    .map((model) => ({ ...model, speech: true }))
 }
 
 /**
@@ -191,7 +195,8 @@ async function answer(
 ): Promise<Response> {
   const response = await upstreamFetch(url, { ...init, timeoutMs, signal })
   if (response.ok) return response
-  const body = await response.text().catch(() => '')
+  // The whole body masked with the request's keys before it is cut short; it reaches the admin.
+  const body = maskSecrets(await response.text().catch(() => ''), secretsOfResponse(response))
   throw new CheckFailed(
     null,
     response.status,

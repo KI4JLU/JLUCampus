@@ -1230,10 +1230,15 @@ export type TranscriptionRealtimeSession = z.infer<typeof transcriptionRealtimeS
 // Admin configuration
 // ---------------------------------------------------------------------------
 
-/** A model of an OpenAI-compatible endpoint: `id` as the endpoint takes it, `label` for users. */
+/**
+ * A model of an OpenAI-compatible endpoint: `id` as the endpoint takes it, `label` for users.
+ * `speech`: model discovery (`Modelle abrufen`) classified it as speech recognition (LiteLLM's
+ * `audio_transcription` mode, else its id); left out for models typed by hand and chat models.
+ */
 export const transcriptionModelSchema = z.object({
   id: z.string().trim().min(1).max(200),
-  label: z.string().trim().min(1).max(80)
+  label: z.string().trim().min(1).max(80),
+  speech: z.literal(true).optional()
 })
 export type TranscriptionModel = z.infer<typeof transcriptionModelSchema>
 
@@ -1251,12 +1256,20 @@ export function isSpeechModelId(id: string): boolean {
 }
 
 /**
- * The speech model used without a default: the first whose id names a speech model, so a list
- * that also holds chat models never sends audio to one; else the first (ids the admin typed).
+ * The speech model used without a default, in the list's order: the first that discovery
+ * classified as speech recognition (`speech`) or whose id names a speech model, so the first
+ * model discovery found stays the one used, whatever its id, and a chat model listed before a
+ * speech model (a list saved before discovery classified) is passed over. Without either the
+ * first model is used: an id the admin typed is their choice, so this may still be a chat model
+ * typed into the speech list.
  */
-export function firstSpeechModel<T extends { id: string }>(models: readonly T[]): T | null {
+export function firstSpeechModel<T extends { id: string; speech?: true }>(
+  models: readonly T[]
+): T | null {
   const named = models.filter((model) => model.id.trim())
-  return named.find((model) => isSpeechModelId(model.id)) ?? named[0] ?? null
+  return (
+    named.find((model) => model.speech === true || isSpeechModelId(model.id)) ?? named[0] ?? null
+  )
 }
 
 const modelListSchema = z

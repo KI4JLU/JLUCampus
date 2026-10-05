@@ -42,34 +42,38 @@ Errors are JSON `{error, message, upstream_status?}`: `401 unauthorized` (bridge
 `400 bad_request`/`bad_offer`, `503 busy` (`MAX_SESSIONS` reached), `502 upstream_rejected` (the
 gateway refused the handshake, with its status: 403 for a model the key may not use),
 `upstream_error`/`upstream_closed` (refused after the handshake), `upstream_failed`
-(unreachable). The Campus server turns them into the reasons `modelNotAllowed`,
+(unreachable; `504` when the handshake, the negotiation or the probe ran past its deadline). The Campus server turns them into the reasons `modelNotAllowed`,
 `gatewayKeyRejected`, `gatewayRefused`, `gatewayUnreachable`, `bridgeUnreachable`,
 `bridgeKeyRejected` and `bridgeBusy`, which the admin connection test and the live tab show.
 
-What the gateway says never reaches a log or a client unmasked: the gateway key of the request,
-the bridge key, `Bearer …`, `sk-…` and `api_key=…` are replaced by `***`. Browsers get fixed
+What the gateway says never reaches a log or a client unmasked: the gateway key of the request
+and the bridge key (however short, before the text is cut short), `Bearer …`, `sk-…` and
+`api_key=…` are replaced by `***`. Browsers get fixed
 messages only (`…failed` with `{code: "upstream_error"}`), the Campus server a masked one. A 401/403 handshake is told apart by the gateway's model list with the same key: if it
 works and lacks the model, the key may not use the model.
 
 ## Settings
 
-| Variable                         | Default           | Meaning                                                                   |
-| -------------------------------- | ----------------- | ------------------------------------------------------------------------- |
-| `PORT`, `HOST`                   | `8089`, `0.0.0.0` | Where the HTTP API listens. WebRTC media uses every interface.            |
-| `BRIDGE_API_KEY`                 | –                 | Bearer the Campus server must send (`TRANSCRIPTION_REALTIME_BRIDGE_KEY`). |
-| `TURN_URLS`                      | –                 | Comma-separated `turn:`/`turns:` URLs for the bridge's own ICE.           |
-| `TURN_SECRET`                    | –                 | coturn's `static-auth-secret`: credentials are minted per session.        |
-| `TURN_USERNAME`, `TURN_PASSWORD` | –                 | Static TURN credentials instead of `TURN_SECRET`.                         |
-| `STUN_URLS`                      | –                 | Comma-separated STUN URLs.                                                |
-| `HTTPS_PROXY`, `NO_PROXY`        | –                 | Outbound proxy for the gateway's WebSocket.                               |
-| `BRIDGE_ALLOW_UNAUTHENTICATED`   | –                 | `1`: development without a key, only with a loopback `HOST`.              |
-| `MAX_SESSIONS`                   | `20`              | Sessions and probes at once; beyond, `503 busy`.                          |
-| `IDLE_TIMEOUT_S`                 | `60`              | A connected session without audio for this long is finalized.             |
-| `MAX_SESSION_S`                  | `14400`           | A connected session is finalized after this long in all.                  |
-| `ROTATE_MIN_INTERVAL_S`          | `1`               | Rotations (`keep_open` commits) start at most this often.                 |
-| `CONNECT_TIMEOUT_S`              | `30`              | A peer not connected by then is closed with its gateway stream.           |
-| `PROBE_WAIT_S`                   | `1.5`             | How long `/probe` waits for the gateway to refuse the model.              |
-| `LOG_LEVEL`                      | `INFO`            |                                                                           |
+| Variable                         | Default           | Meaning                                                                                      |
+| -------------------------------- | ----------------- | -------------------------------------------------------------------------------------------- |
+| `PORT`, `HOST`                   | `8089`, `0.0.0.0` | Where the HTTP API listens. WebRTC media uses every interface.                               |
+| `BRIDGE_API_KEY`                 | –                 | Bearer the Campus server must send (`TRANSCRIPTION_REALTIME_BRIDGE_KEY`).                    |
+| `TURN_URLS`                      | –                 | Comma-separated `turn:`/`turns:` URLs for the bridge's own ICE.                              |
+| `TURN_SECRET`                    | –                 | coturn's `static-auth-secret`: credentials are minted per session.                           |
+| `TURN_USERNAME`, `TURN_PASSWORD` | –                 | Static TURN credentials instead of `TURN_SECRET`.                                            |
+| `STUN_URLS`                      | –                 | Comma-separated STUN URLs.                                                                   |
+| `HTTPS_PROXY`, `NO_PROXY`        | –                 | Outbound proxy for the gateway's WebSocket.                                                  |
+| `BRIDGE_ALLOW_UNAUTHENTICATED`   | –                 | `1`: development without a key, only with a loopback `HOST`.                                 |
+| `MAX_SESSIONS`                   | `20`              | Sessions and probes at once; beyond, `503 busy`.                                             |
+| `IDLE_TIMEOUT_S`                 | `60`              | A connected session without audio for this long is finalized.                                |
+| `MAX_SESSION_S`                  | `14400`           | A connected session is finalized after this long in all.                                     |
+| `ROTATE_MIN_INTERVAL_S`          | `1`               | Rotations (`keep_open` commits) start at most this often.                                    |
+| `CONNECT_TIMEOUT_S`              | `30`              | A peer not connected by then is closed with its gateway stream.                              |
+| `PROBE_WAIT_S`                   | `1.5`             | How long `/probe` waits for the gateway to refuse the model.                                 |
+| `UPSTREAM_HANDSHAKE_TIMEOUT_S`   | `10`              | Opening one gateway stream: connection, upgrade answer, `session.update`.                    |
+| `NEGOTIATE_TIMEOUT_S`            | `14`              | Answering one offer in all (gateway stream and WebRTC), under the 15 s of the Campus server. |
+| `PROBE_TIMEOUT_S`                | `14`              | One `/probe` in all.                                                                         |
+| `LOG_LEVEL`                      | `INFO`            |                                                                                              |
 
 Without `BRIDGE_API_KEY` the bridge refuses to start: anyone who reached the port could make it
 connect to any WebSocket (`X-Gateway-Base`). Only for development on one machine,
@@ -77,7 +81,11 @@ connect to any WebSocket (`X-Gateway-Base`). Only for development on one machine
 development Compose file does so). Keep the port closed to the outside all the same.
 
 Every session takes a slot of `MAX_SESSIONS` before its gateway stream opens and frees it on every
-way out. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
+way out. Before a session is connected, deadlines bound every step: a gateway (or a proxy) that
+takes the connection and never answers the WebSocket upgrade ends the offer or probe after
+`UPSTREAM_HANDSHAKE_TIMEOUT_S`, the whole answer to an offer after `NEGOTIATE_TIMEOUT_S`, a probe
+after `PROBE_TIMEOUT_S`, and a rotation whose next stream does not open ends the session, so a
+finalization never waits behind it. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
 finalized like a stop: the client gets an `error` event (`session_idle`, `session_expired`), the
 current item's transcript, then the close. `keep_open` commits asked for while a rotation runs
 fold into one next rotation, which starts `ROTATE_MIN_INTERVAL_S` after the last.

@@ -4,11 +4,13 @@ import { z } from 'zod'
 import { ApiError } from '../../api.js'
 import {
   bearer,
+  DETAIL_MAX,
   ensureOk,
   fetchJson,
   forgetKeys,
   maskSecrets,
   parseModels,
+  secretsOf,
   upstream,
   UpstreamError,
   upstreamFetch,
@@ -108,9 +110,6 @@ describe('keys reflected by an upstream (B-1)', () => {
     expect(maskSecrets('token sk-live-abcdefgh')).toBe('token sk-***')
     bearer('custom-gateway-key-9876')
     expect(maskSecrets('refused custom-gateway-key-9876')).toBe('refused ***')
-    // Short strings are never taken for keys, so ordinary text stays.
-    bearer('abc')
-    expect(maskSecrets('abc')).toBe('abc')
   })
 
   it('never keeps a key a refusing upstream repeats in an error, nor logs it', async () => {
@@ -142,6 +141,90 @@ describe('keys reflected by an upstream (B-1)', () => {
       'sentinel-4f1d9c2e7b'
     )
     expect(String(logged.mock.calls)).not.toContain('sentinel-4f1d9c2e7b')
+  })
+})
+
+describe('masking whatever the key (C-1)', () => {
+  const refusing = (body: string): void => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(body, { status: 403 }))
+    )
+  }
+  const failure = async (
+    headers: Record<string, string>,
+    secrets: string[] = []
+  ): Promise<UpstreamError> => {
+    const response = await upstreamFetch('https://gw.example/v1/models', { headers, secrets })
+    return ensureOk(response, 'The gateway').then(
+      () => {
+        throw new Error('no failure')
+      },
+      (error: unknown) => error as UpstreamError
+    )
+  }
+
+  it('masks a short key of the request, also without a note of it', async () => {
+    refusing('Rejected credential review7')
+    forgetKeys()
+    const error = await failure({ Authorization: 'Bearer review7' })
+    expect(error.detail).toBe('Rejected credential ***')
+    // Even one character: the request's own key is masked whatever its length.
+    refusing('key x refused')
+    expect((await failure({ Authorization: 'Bearer x' })).detail).not.toMatch(/\bx\b/)
+    bearer('review7')
+    await expect(
+      ensureOk(new Response('Rejected credential review7', { status: 403 }), 'gateway')
+    ).rejects.toMatchObject({ detail: 'Rejected credential ***' })
+  })
+
+  it('masks the whole body before cutting it short', async () => {
+    const key = 'opaque-review-credential-0123456789'
+    refusing(`${'x'.repeat(485)}${key}`)
+    const error = await failure({ Authorization: `Bearer ${key}` })
+    expect(error.detail).toBe(`${'x'.repeat(485)}***`)
+    expect(error.detail).not.toContain('opaque')
+    refusing(`${'y'.repeat(498)}${key}`)
+    const cut = await failure({ Authorization: `Bearer ${key}` })
+    expect(cut.detail).toHaveLength(DETAIL_MAX)
+    expect(cut.detail).not.toMatch(/op$|o$/)
+  })
+
+  it('masks a longer key before a shorter one inside it', async () => {
+    bearer('review-prefix-key')
+    refusing('refused review-prefix-key-new-secret')
+    const error = await failure(bearer('review-prefix-key-new-secret'))
+    expect(error.detail).toBe('refused ***')
+    expect(maskSecrets('a review-prefix-key-new-secret b')).toBe('a *** b')
+  })
+
+  it('keeps an in-flight key masked after the note of it is gone', async () => {
+    const key = 'in-flight-opaque-credential'
+    let answer: (response: Response) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (answer = resolve)))
+    )
+    const pending = upstreamFetch('https://gw.example/v1/models', { headers: bearer(key) })
+    // Other requests push the key out of the note of keys sent lately meanwhile.
+    for (let index = 0; index < 100; index += 1) bearer(`another-key-of-the-form-${index}`)
+    expect(maskSecrets(key)).toBe(key)
+    answer(new Response(`bad ${key}`, { status: 403 }))
+    const error = await ensureOk(await pending, 'The gateway').catch((caught: unknown) => caught)
+    expect((error as UpstreamError).detail).toBe('bad ***')
+  })
+
+  it('masks gateway keys in their own headers, given secrets, and escaped spellings', async () => {
+    refusing('{"error":"X-Gateway-Key gw\\"odd\\\\key is invalid"}')
+    const error = await failure({ 'X-Gateway-Key': 'gw"odd\\key' })
+    expect(error.detail).not.toContain('odd')
+    refusing('no access for body-secret-1')
+    expect((await failure({}, ['body-secret-1'])).detail).toBe('no access for ***')
+    expect(secretsOf({ Authorization: 'Bearer abc', Accept: 'json' })).toEqual([
+      'Bearer abc',
+      'abc'
+    ])
+    expect(maskSecrets('see a%2Fb%3Dc', ['a/b=c'])).toBe('see ***')
   })
 })
 

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { UpstreamError } from '../http.js'
+import { forgetKeys, UpstreamError } from '../http.js'
 import {
   normalizeLanguage,
   parseVerboseJson,
@@ -454,6 +454,28 @@ describe('diarisation adapter (Speaches contract)', () => {
     await expect(
       diarizeFile(wav, 10, { model: 'p', speakerCount: 'auto' }, target)
     ).rejects.toMatchObject({ status: 415 })
+  })
+
+  it('masks the diarisation key in a refusal, however short, before cutting it (C-1)', async () => {
+    forgetKeys()
+    for (const [key, padding] of [
+      ['dk5', 20],
+      ['opaque-diarisation-credential-0123', 485]
+    ] as const) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(`${'x'.repeat(padding)} ${key}`, { status: 403 }))
+      )
+      forgetKeys()
+      const error = (await diarizeFile(
+        wav,
+        10,
+        { model: 'p', speakerCount: 'auto' },
+        { baseUrl: 'https://diar.test/v1', apiKey: key, backoffMs: () => 0 }
+      ).catch((caught: unknown) => caught)) as UpstreamError
+      expect(error.status).toBe(403)
+      expect(error.detail).not.toContain(key.slice(0, 3))
+    }
   })
 
   it('reads VAD regions from milliseconds and degrades to none', async () => {

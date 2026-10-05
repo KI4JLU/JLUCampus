@@ -58,6 +58,12 @@ import type { SecretDraft } from '@/lib/component-secrets'
 import { cn } from '@/lib/utils'
 import type { ComponentConfigFieldsProps } from '../types'
 import { useFetchAdminModels, useTestAdminConnection } from './api'
+import {
+  withFetchedModels,
+  withModels,
+  type DefaultModelField,
+  type ModelField
+} from './model-lists'
 
 /** Radix Select needs a non-empty value; this one stands for "no default", i.e. the first. */
 const AUTO = 'auto'
@@ -66,14 +72,6 @@ const MEBIBYTE = 1024 * 1024
 const ICON = { 'aria-hidden': true, width: '1em', height: '1em' } as const
 
 type Config = TranscriptionComponentConfig
-type ModelField = 'asrModels' | 'llmModels'
-type DefaultModelField = 'defaultAsrModel' | 'defaultCorrectionModel' | 'defaultSummaryModel'
-
-/** The defaults that name a model of each list. */
-const DEFAULTS_OF: Record<ModelField, readonly DefaultModelField[]> = {
-  asrModels: ['defaultAsrModel'],
-  llmModels: ['defaultCorrectionModel', 'defaultSummaryModel']
-}
 
 /** An empty URL field means "not set". */
 function urlOrNull(value: string): string | null {
@@ -84,53 +82,6 @@ function urlOrNull(value: string): string | null {
 function draftKey(draft: SecretDraft | undefined): string | null | undefined {
   if (draft?.remove) return null
   return draft?.value.trim() || undefined
-}
-
-/**
- * The config with `models` as the list. A default follows its model through a changed id
- * (`renamed`) and falls back to the first model when its model is gone. A default that was not
- * listed before (a fresh module's HRZ models before `Modelle abrufen`) stays while the list is
- * edited by hand; a fetched list keeps it only if the endpoint has it (`fetched`).
- */
-function withModels(
-  config: Config,
-  field: ModelField,
-  models: TranscriptionModel[],
-  renamed?: { from: string; to: string },
-  fetched = false
-): Config {
-  const next: Config = { ...config, [field]: models }
-  const listed = (list: readonly TranscriptionModel[], id: string): boolean =>
-    list.some((model) => model.id.trim() === id)
-  for (const key of DEFAULTS_OF[field]) {
-    const current = config[key]
-    if (current === null) continue
-    if (renamed && current === renamed.from) next[key] = renamed.to.trim() || null
-    else if ((fetched || listed(config[field], current)) && !listed(models, current)) {
-      next[key] = null
-    }
-  }
-  return next
-}
-
-/** The endpoint's models in place of the listed ones; display names the admin gave stay. */
-function withFetchedModels(
-  config: Config,
-  field: ModelField,
-  fetched: readonly TranscriptionModel[]
-): { config: Config; omitted: number } {
-  const labels = new Map(
-    config[field]
-      .filter((model) => model.label.trim())
-      .map((model) => [model.id.trim(), model.label])
-  )
-  const models = fetched
-    .slice(0, TRANSCRIPTION_MODELS_MAX)
-    .map((model) => ({ id: model.id, label: labels.get(model.id) ?? model.label }))
-  return {
-    config: withModels(config, field, models, undefined, true),
-    omitted: Math.max(0, fetched.length - TRANSCRIPTION_MODELS_MAX)
-  }
 }
 
 /** The first error at or below `path`, e.g. of one ICE server. */
@@ -165,7 +116,7 @@ export function TranscriptionConfigFields({
 
   const firstModel = (models: readonly TranscriptionModel[]): string | undefined =>
     models.find((model) => model.id.trim())?.id.trim()
-  // As the server picks it: never a chat model listed before the speech model.
+  // As the server picks it: the first model discovery classified as speech, in its order.
   const firstAsrModel = (models: readonly TranscriptionModel[]): string | undefined =>
     firstSpeechModel(models)?.id.trim()
 
@@ -996,7 +947,8 @@ function ModelList({
                           aria-invalid={idError ? true : undefined}
                           aria-describedby={idError ? `${rowId}-id-error` : undefined}
                           onChange={(event) =>
-                            setModel(index, { ...model, id: event.target.value })
+                            // Another id is the admin's, no longer what discovery classified.
+                            setModel(index, { id: event.target.value, label: model.label })
                           }
                         />
                         <FormMessage id={`${rowId}-id-error`} />

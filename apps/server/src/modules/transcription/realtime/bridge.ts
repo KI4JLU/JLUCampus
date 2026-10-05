@@ -8,7 +8,14 @@ import { z } from 'zod'
 
 import { reachedThroughProxy } from '../../../env.js'
 import { onpremGatewayUrl, type TranscriptionSecrets } from '../config.js'
-import { bearer, listModels, rememberKey, upstreamFetch, UpstreamError } from '../http.js'
+import {
+  bearer,
+  listModels,
+  rememberKey,
+  secretsOfResponse,
+  upstreamFetch,
+  UpstreamError
+} from '../http.js'
 import { parseSignalingAnswer, REALTIME_TIMEOUT_MS } from './upstream.js'
 
 /**
@@ -107,9 +114,10 @@ export class OnpremUnavailable extends UpstreamError {
     readonly reason: TranscriptionOnpremUnavailableReason,
     readonly model: string,
     status: number | null,
-    detail: string | null = null
+    detail: string | null = null,
+    secrets: readonly (string | null | undefined)[] = []
   ) {
-    super(unavailableMessage(reason, model), status, detail)
+    super(unavailableMessage(reason, model), status, detail, false, secrets)
     this.name = 'OnpremUnavailable'
   }
 }
@@ -156,11 +164,13 @@ export async function failureOf(
   signal?: AbortSignal
 ): Promise<UpstreamError> {
   const text = await response.text().catch(() => '')
-  const detail = text.slice(0, 500) || null
+  // The whole answer: the error masks the request's keys in it before cutting it short.
+  const detail = text || null
+  const secrets = [...secretsOfResponse(response), target.gatewayKey, target.bridgeKey]
   const fail = (reason: TranscriptionOnpremUnavailableReason): OnpremUnavailable =>
-    new OnpremUnavailable(reason, target.model, response.status, detail)
+    new OnpremUnavailable(reason, target.model, response.status, detail, secrets)
   if (response.status === 400) {
-    return new UpstreamError('The realtime bridge refused the offer', 400, detail)
+    return new UpstreamError('The realtime bridge refused the offer', 400, detail, false, secrets)
   }
   if (response.status === 401) return fail('bridgeKeyRejected')
   let body: z.infer<typeof bridgeErrorSchema> | null = null
@@ -234,7 +244,10 @@ async function bridgeFetch(
   } catch (error) {
     if (init.signal?.aborted) throw error
     const detail = error instanceof UpstreamError ? error.message : null
-    throw new OnpremUnavailable('bridgeUnreachable', target.model, null, detail)
+    throw new OnpremUnavailable('bridgeUnreachable', target.model, null, detail, [
+      target.gatewayKey,
+      target.bridgeKey
+    ])
   }
 }
 

@@ -32,7 +32,8 @@ export function loadTranscriptionRuntime(): Promise<TranscriptionRuntime | null>
 
 /**
  * The speech model jobs use: the admin's default if listed, else the first speech model of the
- * list (`firstSpeechModel`, never a chat model listed before it); `null` without one.
+ * list (`firstSpeechModel`: the first discovery classified, or whose id names one, else the
+ * first); `null` without one.
  */
 export function asrModel(config: TranscriptionComponentConfig): TranscriptionModel | null {
   return (

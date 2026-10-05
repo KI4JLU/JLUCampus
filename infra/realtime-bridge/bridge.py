@@ -4,8 +4,9 @@ Ported from HAWKI's realtime bridge (kiChat, `_docker/realtime-bridge/bridge.py`
 with the same protocol. Changes against the original, marked "Campus:" below: JSON error answers
 with the gateway's status, `POST /probe`, a connect timeout for peers that never connect, TURN
 credentials minted from a shared secret (coturn `use-auth-secret`), a mandatory BRIDGE_API_KEY,
-a session limit with idle and lifetime limits, coalesced rotations, and upstream errors masked
-before they reach a log or a client.
+a session limit with idle and lifetime limits, deadlines for the upstream handshake, the
+negotiation and the probe, coalesced rotations, and upstream errors masked before they reach a log
+or a client.
 
 Bridges browser WebRTC connections to the vLLM realtime speech-to-text WebSocket (reached through
 the LiteLLM gateway). Exists because vLLM's realtime endpoint is WebSocket-only: a browser
@@ -94,6 +95,16 @@ CONNECT_TIMEOUT_S = float(os.environ.get("CONNECT_TIMEOUT_S", "30"))
 # Campus: how long /probe waits after session.update for the upstream to refuse the model.
 PROBE_WAIT_S = float(os.environ.get("PROBE_WAIT_S", "1.5"))
 UPSTREAM_CONNECT_TIMEOUT_S = 10.0
+# Campus: deadlines before a session is connected, so a gateway (or anything in between) that
+# takes the TCP/TLS connection and then never answers the WebSocket upgrade cannot hold a slot of
+# MAX_SESSIONS. UPSTREAM_HANDSHAKE_TIMEOUT_S bounds opening one upstream stream (connection,
+# upgrade response and session.update), for sessions, rotations and probes alike;
+# NEGOTIATE_TIMEOUT_S bounds the whole answer to an offer (upstream plus WebRTC/ICE gathering),
+# below the Campus server's 15 s, so the server gets a reason instead of giving up first;
+# PROBE_TIMEOUT_S bounds a whole probe besides its own PROBE_WAIT_S.
+UPSTREAM_HANDSHAKE_TIMEOUT_S = float(os.environ.get("UPSTREAM_HANDSHAKE_TIMEOUT_S", "10"))
+NEGOTIATE_TIMEOUT_S = float(os.environ.get("NEGOTIATE_TIMEOUT_S", "14"))
+PROBE_TIMEOUT_S = float(os.environ.get("PROBE_TIMEOUT_S", "14"))
 # Campus: resource limits. Every session holds a peer connection and a gateway stream, so the
 # bridge takes at most MAX_SESSIONS at once (probes included) and answers 503 "busy" beyond.
 # A connected session ends (finalized, its transcript delivered) when no audio arrived for
@@ -137,11 +148,16 @@ _KEY_FIELD = re.compile(
 
 
 def mask(text, *secrets: str, limit: int = 300) -> str:
-    """`text` with the given secrets and anything that looks like a key masked, cut to `limit`."""
+    """`text` with the given secrets, however short, and anything that looks like a key masked,
+    cut to `limit` afterwards (cut first, the start of a key at the cut would stay). Longer
+    secrets go first, so one inside another leaves no rest of the longer one."""
     safe = str(text)
+    spellings = set()
     for secret in (BRIDGE_API_KEY, *secrets):
-        if secret and len(secret) >= 4:
-            safe = safe.replace(secret, "***")
+        if secret:
+            spellings.update((secret, json.dumps(secret)[1:-1]))
+    for secret in sorted(spellings, key=len, reverse=True):
+        safe = safe.replace(secret, "***")
     safe = _BEARER.sub("Bearer ***", safe)
     safe = _SK.sub("sk-***", safe)
     safe = _KEY_FIELD.sub(r"\1***", safe)
@@ -246,6 +262,13 @@ def realtime_url(gateway_base: str, model: str) -> str:
     return f"{ws_base}/v1/realtime?model={model}"
 
 
+class UpstreamTimeout(Exception):
+    """Campus: the gateway did not complete the realtime handshake within its deadline."""
+
+    def __init__(self, seconds: float):
+        super().__init__(f"the gateway did not complete the realtime handshake within {seconds:g}s")
+
+
 class UpstreamRejected(Exception):
     """Campus: the gateway refused the WebSocket handshake (wrong key, model not allowed)."""
 
@@ -265,21 +288,54 @@ def env_proxy(url: str):
 
 
 async def connect_upstream_ws(http: aiohttp.ClientSession, url: str, gateway_key: str):
-    """Opens the gateway's realtime WebSocket; a refused handshake raises UpstreamRejected."""
+    """Opens the gateway's realtime WebSocket; a refused handshake raises UpstreamRejected, one
+    that does not complete within UPSTREAM_HANDSHAKE_TIMEOUT_S (Campus: the upgrade response
+    included, which aiohttp's connect timeout does not cover) UpstreamTimeout."""
     headers = {"Authorization": f"Bearer {gateway_key}"} if gateway_key else {}
     proxy, proxy_auth = env_proxy(url)
     try:
-        return await http.ws_connect(
-            url,
-            headers=headers,
-            heartbeat=20,
-            max_msg_size=16 * 1024 * 1024,
-            timeout=aiohttp.ClientWSTimeout(ws_close=5.0),
-            proxy=proxy,
-            proxy_auth=proxy_auth,
-        )
+        async with asyncio.timeout(UPSTREAM_HANDSHAKE_TIMEOUT_S):
+            return await http.ws_connect(
+                url,
+                headers=headers,
+                heartbeat=20,
+                max_msg_size=16 * 1024 * 1024,
+                timeout=aiohttp.ClientWSTimeout(ws_close=5.0),
+                proxy=proxy,
+                proxy_auth=proxy_auth,
+            )
     except aiohttp.WSServerHandshakeError as exc:
         raise UpstreamRejected(exc.status) from None
+    except TimeoutError:
+        raise UpstreamTimeout(UPSTREAM_HANDSHAKE_TIMEOUT_S) from None
+
+
+async def close_quietly(ws) -> None:
+    """Closes a WebSocket, whatever state it is in (bounded by its ws_close timeout)."""
+    if ws is None or ws.closed:
+        return
+    try:
+        await ws.close()
+    except Exception:
+        pass
+
+
+async def start_stream(http: aiohttp.ClientSession, url: str, gateway_key: str, model: str):
+    """Campus: one upstream stream with its model validated (session.update), within
+    UPSTREAM_HANDSHAKE_TIMEOUT_S for each step; a stream that does not get there is closed."""
+    ws = await connect_upstream_ws(http, url, gateway_key)
+    try:
+        async with asyncio.timeout(UPSTREAM_HANDSHAKE_TIMEOUT_S):
+            # vLLM refuses audio until the model is validated via session.update
+            # (note: `model` sits at the event's top level, unlike OpenAI).
+            await ws.send_json({"type": "session.update", "model": model})
+    except TimeoutError:
+        await close_quietly(ws)
+        raise UpstreamTimeout(UPSTREAM_HANDSHAKE_TIMEOUT_S) from None
+    except BaseException:
+        await close_quietly(ws)
+        raise
+    return ws
 
 
 class OfferRefused(Exception):
@@ -459,10 +515,7 @@ class BridgeSession:
     async def _open_upstream(self, item_id: str):
         """Open one vLLM realtime stream for one item; returns (ws, done)."""
         url = realtime_url(self.gateway_base, self.model)
-        ws = await connect_upstream_ws(self.http, url, self.gateway_key)
-        # vLLM refuses audio until the model is validated via session.update
-        # (note: `model` sits at the event's top level, unlike OpenAI).
-        await ws.send_json({"type": "session.update", "model": self.model})
+        ws = await start_stream(self.http, url, self.gateway_key, self.model)
         done = asyncio.Event()
         self._spawn(self._read_upstream(ws, item_id, done))
         self.log.info("upstream connected: %s (%s)", url, item_id)
@@ -659,8 +712,10 @@ class BridgeSession:
                 next_item,
                 (self.segment_bytes + len(tail)) / (TARGET_RATE * 2),
             )
-            # Open the next stream while the current one finishes.
-            opening = asyncio.ensure_future(self._open_upstream(next_item))
+            # Open the next stream while the current one finishes. Campus: tracked, so close()
+            # cancels it too; it ends within UPSTREAM_HANDSHAKE_TIMEOUT_S anyway, so a
+            # finalization waiting for this rotation never waits behind a stalled open.
+            opening = self._spawn(self._open_upstream(next_item))
             try:
                 await self._seal(old_ws, tail)
             finally:
@@ -758,10 +813,11 @@ class BridgeSession:
         except Exception as exc:
             self.log.warning("data channel send failed: %r", exc)
 
-    def _spawn(self, coro):
+    def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.ensure_future(coro)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+        return task
 
 
 # ------------------------------------------------------------------ HTTP API
@@ -810,7 +866,17 @@ async def handle_realtime(request: web.Request) -> web.Response:
     session = BridgeSession(*gateway)
     ACTIVE_SESSIONS.add(session)
     try:
-        answer_sdp = await session.negotiate(offer_sdp)
+        # Campus: the whole negotiation has a deadline, so a stalled step frees the slot.
+        answer_sdp = await asyncio.wait_for(session.negotiate(offer_sdp), NEGOTIATE_TIMEOUT_S)
+    except (UpstreamTimeout, TimeoutError) as exc:
+        reason = (
+            str(exc)
+            if isinstance(exc, UpstreamTimeout)
+            else f"the negotiation did not complete within {NEGOTIATE_TIMEOUT_S:g}s"
+        )
+        logger.error("negotiation failed: %s", reason)
+        await session.close()
+        return error_response(504, "upstream_failed", f"upstream connection failed: {reason}")
     except UpstreamRejected as exc:
         logger.error("negotiation failed: %s", exc)
         await session.close()
@@ -896,29 +962,41 @@ async def handle_probe(request: web.Request) -> web.Response:
     global active_probes
     active_probes += 1
     try:
-        timeout = aiohttp.ClientTimeout(total=None, connect=UPSTREAM_CONNECT_TIMEOUT_S)
-        async with aiohttp.ClientSession(timeout=timeout) as http:
-            try:
-                ws = await connect_upstream_ws(
-                    http, realtime_url(gateway_base, model), gateway_key
-                )
-            except UpstreamRejected as exc:
-                return error_response(
-                    502, "upstream_rejected", str(exc), upstream_status=exc.status, model=model
-                )
-            except Exception as exc:
-                return error_response(
-                    502, "upstream_failed", f"upstream connection failed: {mask(exc, gateway_key)}"
-                )
-            try:
-                await ws.send_json({"type": "session.update", "model": model})
-                refusal = await probe_refusal(ws, model, gateway_key)
-                if refusal is not None:
-                    return refusal
-            finally:
-                await ws.close()
+        # Campus: the whole probe has a deadline besides PROBE_WAIT_S, so it always frees its slot.
+        return await asyncio.wait_for(probe(gateway_base, gateway_key, model), PROBE_TIMEOUT_S)
+    except TimeoutError:
+        logger.error("probe did not complete within %gs", PROBE_TIMEOUT_S)
+        return error_response(
+            504,
+            "upstream_failed",
+            f"upstream connection failed: the probe did not complete within {PROBE_TIMEOUT_S:g}s",
+        )
     finally:
         active_probes -= 1
+
+
+async def probe(gateway_base: str, gateway_key: str, model: str) -> web.Response:
+    """Campus: the probe itself (handle_probe), within the handshake deadlines of start_stream."""
+    timeout = aiohttp.ClientTimeout(total=None, connect=UPSTREAM_CONNECT_TIMEOUT_S)
+    async with aiohttp.ClientSession(timeout=timeout) as http:
+        try:
+            ws = await start_stream(http, realtime_url(gateway_base, model), gateway_key, model)
+        except UpstreamRejected as exc:
+            return error_response(
+                502, "upstream_rejected", str(exc), upstream_status=exc.status, model=model
+            )
+        except UpstreamTimeout as exc:
+            return error_response(504, "upstream_failed", f"upstream connection failed: {exc}")
+        except Exception as exc:
+            return error_response(
+                502, "upstream_failed", f"upstream connection failed: {mask(exc, gateway_key)}"
+            )
+        try:
+            refusal = await probe_refusal(ws, model, gateway_key)
+            if refusal is not None:
+                return refusal
+        finally:
+            await close_quietly(ws)
     return web.json_response({"ok": True, "model": model})
 
 

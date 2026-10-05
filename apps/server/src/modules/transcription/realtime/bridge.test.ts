@@ -4,12 +4,14 @@ import type { AddressInfo } from 'node:net'
 import { TRANSCRIPTION_API, TRANSCRIPTION_DEFAULT_CONFIG } from '@justcampus/shared'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { forgetKeys } from '../http.js'
 import { json, NO_SECRETS, testApp } from '../transcripts/testing.js'
 import {
   AVAILABLE_TTL_MS,
   bridgeEndpoints,
   forgetAvailability,
   gatewayBaseOf,
+  type OnpremUnavailable,
   onpremAvailability,
   onpremSignaling,
   onpremTarget,
@@ -209,6 +211,29 @@ describe('the realtime bridge proxy', () => {
     const logged = vi.mocked(console.error).mock.calls.flat().map(String).join(' ')
     expect(logged).toContain('connect failed')
     expect(logged).not.toContain('gw-reflected-key-0123')
+  })
+
+  it('masks a short gateway key and one cut at the detail limit (C-1)', async () => {
+    forgetKeys()
+    const short = onpremTarget(config(), { apiKey: 'gk7' }, 'bridge-secret-0123456789')!
+    const long = 'opaque-gateway-credential-0123456789'
+    for (const [key, padding] of [
+      ['gk7', 10],
+      [long, 480]
+    ] as const) {
+      answers['/realtime'] = () => ({
+        status: 502,
+        type: 'application/json',
+        body: JSON.stringify({ error: 'upstream_failed', message: `${'x'.repeat(padding)} ${key}` })
+      })
+      forgetKeys()
+      const chosen = key === long ? onpremTarget(config(), { apiKey: long }, 'b')! : short
+      const error = (await onpremSignaling(chosen, probeOffer()).catch(
+        (caught: unknown) => caught
+      )) as OnpremUnavailable
+      expect(error.reason).toBe('gatewayUnreachable')
+      expect(error.detail).not.toContain(key.slice(0, 3))
+    }
   })
 
   it('tells a busy bridge apart (B-3)', async () => {

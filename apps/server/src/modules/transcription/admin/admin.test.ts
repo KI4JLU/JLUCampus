@@ -1,8 +1,14 @@
 import { Readable } from 'node:stream'
 
-import { firstSpeechModel, isSpeechModelId, TRANSCRIPTION_API } from '@justcampus/shared'
+import {
+  firstSpeechModel,
+  isSpeechModelId,
+  TRANSCRIPTION_API,
+  TRANSCRIPTION_DEFAULT_CONFIG
+} from '@justcampus/shared'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { asrModel, transcriptionConfigSchema } from '../config.js'
 import { json, startUpstreamMock, testApp, type RunningMock } from '../transcripts/testing.js'
 
 import {
@@ -69,9 +75,9 @@ describe('model discovery', () => {
     // The gateway's chat model is left out by LiteLLM's mode, though its id says nothing.
     expect(await speech.json()).toEqual({
       models: [
-        { id: 'jlu/whisper-1', label: 'jlu/whisper-1' },
-        { id: 'mock-gateway', label: 'mock-gateway' },
-        { id: 'mock-fail', label: 'mock-fail' }
+        { id: 'jlu/whisper-1', label: 'jlu/whisper-1', speech: true },
+        { id: 'mock-gateway', label: 'mock-gateway', speech: true },
+        { id: 'mock-fail', label: 'mock-fail', speech: true }
       ],
       leftOut: 1
     })
@@ -128,6 +134,33 @@ describe('model discovery', () => {
     expect(firstSpeechModel([])).toBeNull()
   })
 
+  it('keeps discovery’s classification and order for the automatic speech model (C-3)', () => {
+    const list = [
+      { id: 'jlu/qwen3.8-27b', label: 'Qwen' },
+      { id: 'campus-recognizer', label: 'Campus' },
+      { id: 'whisper-1', label: 'Whisper' }
+    ]
+    const modes = new Map([
+      ['jlu/qwen3.8-27b', 'chat'],
+      ['campus-recognizer', 'audio_transcription'],
+      ['whisper-1', 'audio_transcription']
+    ])
+    const discovered = speechModels(list, modes)
+    expect(discovered).toEqual([
+      { id: 'campus-recognizer', label: 'Campus', speech: true },
+      { id: 'whisper-1', label: 'Whisper', speech: true }
+    ])
+    // The alias LiteLLM calls audio_transcription comes first, as the gateway lists it.
+    expect(firstSpeechModel(discovered)?.id).toBe('campus-recognizer')
+    // Saved, the classification stays, and the server uses the same model.
+    const config = { ...TRANSCRIPTION_DEFAULT_CONFIG, asrModels: discovered, defaultAsrModel: null }
+    expect(transcriptionConfigSchema.parse(config).asrModels).toEqual(discovered)
+    expect(asrModel(transcriptionConfigSchema.parse(config))?.id).toBe('campus-recognizer')
+    // A chat id typed alone into the speech list is the admin's choice and is used.
+    const typed = { id: 'jlu/qwen3.8-27b', label: 'Qwen' }
+    expect(firstSpeechModel([typed])).toBe(typed)
+  })
+
   it('lists the ids alone when the endpoint has no model info', async () => {
     vi.stubGlobal(
       'fetch',
@@ -143,7 +176,7 @@ describe('model discovery', () => {
       json('POST', { kind: 'asr', baseUrl: 'https://asr.example/v1' })
     )
     expect(await speech.json()).toEqual({
-      models: [{ id: 'whisper-large-v3', label: 'whisper-large-v3' }],
+      models: [{ id: 'whisper-large-v3', label: 'whisper-large-v3', speech: true }],
       leftOut: 1
     })
   })

@@ -173,14 +173,24 @@ export async function diarizeFile(
     backoffMs: target.backoffMs
   })
   const label = 'Der Diarization-Server'
+  const secrets = [target.apiKey]
   if (answer.error) {
-    throw new UpstreamError(`${label} is unreachable: ${answer.error}`, null, null, answer.timedOut)
+    throw new UpstreamError(
+      `${label} is unreachable: ${answer.error}`,
+      null,
+      null,
+      answer.timedOut,
+      secrets
+    )
   }
   if (answer.status < 200 || answer.status >= 300) {
+    // The whole body: the error masks the key in it before cutting it short.
     throw new UpstreamError(
       `${label} answered with status ${answer.status}`,
       answer.status,
-      answer.body.slice(0, 500) || null
+      answer.body || null,
+      false,
+      secrets
     )
   }
   try {

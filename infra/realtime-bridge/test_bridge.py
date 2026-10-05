@@ -34,6 +34,9 @@ class FakeGateway:
         self.closed = 0
         self.runner = None
         self.base = ""
+        # Campus: from this many connections on, the upgrade response never comes (until stop).
+        self.stall_from = None
+        self.release = asyncio.Event()
 
     async def start(self):
         app = web.Application()
@@ -46,9 +49,13 @@ class FakeGateway:
         self.base = f"http://127.0.0.1:{port}"
 
     async def stop(self):
+        self.release.set()
         await self.runner.cleanup()
 
     async def realtime(self, request):
+        if self.stall_from is not None and len(self.connections) >= self.stall_from:
+            await self.release.wait()
+            return web.Response(status=503)
         model = request.query.get("model", "")
         if request.headers.get("Authorization") != f"Bearer {GATEWAY_KEY}" or model == "denied":
             return web.Response(status=403)
@@ -94,6 +101,30 @@ class FakeGateway:
         return ws
 
 
+class StalledGateway:
+    """Campus: takes TCP connections and reads the upgrade request, but never answers it."""
+
+    def __init__(self):
+        self.server = None
+        self.base = ""
+        self.writers = []
+
+    async def start(self):
+        async def accept(reader, writer):
+            self.writers.append(writer)
+            while await reader.read(4096):
+                pass
+
+        self.server = await asyncio.start_server(accept, "127.0.0.1", 0)
+        port = self.server.sockets[0].getsockname()[1]
+        self.base = f"http://127.0.0.1:{port}"
+
+    async def stop(self):
+        for writer in self.writers:
+            writer.close()
+        self.server.close()
+
+
 class BridgeServer:
     def __init__(self):
         self.runner = None
@@ -132,6 +163,9 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         bridge.IDLE_TIMEOUT_S = 60
         bridge.MAX_SESSION_S = 3600
         bridge.WATCH_INTERVAL_S = 0.1
+        bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 10
+        bridge.NEGOTIATE_TIMEOUT_S = 14
+        bridge.PROBE_TIMEOUT_S = 14
         bridge.ACTIVE_SESSIONS.clear()
         bridge.active_probes = 0
         self.gateway = FakeGateway()
@@ -295,6 +329,84 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
             "key *** Bearer *** sk-*** api_key=***",
         )
         self.assertEqual(len(bridge.mask("x" * 1000)), 300)
+        # Campus (C-1): a secret is masked however short, longer ones first, before the cut.
+        self.assertEqual(bridge.mask("refused gk7 here", "gk7"), "refused *** here")
+        self.assertEqual(
+            bridge.mask("refused prefix-key-new-secret", "prefix-key", "prefix-key-new-secret"),
+            "refused ***",
+        )
+        secret = "opaque-gateway-credential-0123456789"
+        self.assertEqual(bridge.mask("x" * 290 + secret, secret), "x" * 290 + "***")
+        self.assertNotIn("odd", bridge.mask(json.dumps({"m": 'gw"odd'}), 'gw"odd'))
+
+    async def stalled(self):
+        gateway = StalledGateway()
+        await gateway.start()
+        self.addAsyncCleanup(gateway.stop)
+        return gateway
+
+    async def test_stalled_upgrade_frees_the_slot(self):
+        """Campus (C-2): a gateway that takes the connection but never answers the upgrade."""
+        bridge.MAX_SESSIONS = 1
+        bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 0.3
+        stalled = await self.stalled()
+        peer, _channel, sdp = await self.offer()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        async with self.http.post(
+            f"{self.bridge.url}/realtime", data=sdp, headers=gateway_headers(stalled.base)
+        ) as response:
+            self.assertEqual(response.status, 504)
+            body = await response.json()
+        await peer.close()
+        self.assertLess(loop.time() - started, 3)
+        self.assertEqual(body["error"], "upstream_failed")
+        self.assertIn("handshake", body["message"])
+        self.assertFalse(bridge.ACTIVE_SESSIONS)
+        self.assertTrue(stalled.writers)
+        async with self.http.post(
+            f"{self.bridge.url}/probe", headers=gateway_headers(stalled.base)
+        ) as response:
+            self.assertEqual(response.status, 504)
+            self.assertEqual((await response.json())["error"], "upstream_failed")
+        self.assertEqual(bridge.active_probes, 0)
+        # The slot is free for a healthy gateway.
+        async with self.http.post(
+            f"{self.bridge.url}/probe", headers=gateway_headers(self.gateway.base)
+        ) as response:
+            self.assertEqual(response.status, 200)
+
+    async def test_negotiation_and_probe_have_deadlines_of_their_own(self):
+        bridge.MAX_SESSIONS = 1
+        bridge.NEGOTIATE_TIMEOUT_S = 0.3
+        bridge.PROBE_TIMEOUT_S = 0.3
+        stalled = await self.stalled()
+        peer, _channel, sdp = await self.offer()
+        async with self.http.post(
+            f"{self.bridge.url}/realtime", data=sdp, headers=gateway_headers(stalled.base)
+        ) as response:
+            self.assertEqual(response.status, 504)
+            self.assertIn("negotiation", (await response.json())["message"])
+        await peer.close()
+        self.assertFalse(bridge.ACTIVE_SESSIONS)
+        async with self.http.post(
+            f"{self.bridge.url}/probe", headers=gateway_headers(stalled.base)
+        ) as response:
+            self.assertEqual(response.status, 504)
+            self.assertIn("probe", (await response.json())["message"])
+        self.assertEqual(bridge.active_probes, 0)
+
+    async def test_rotation_behind_a_stalled_open_ends_the_session(self):
+        bridge.UPSTREAM_HANDSHAKE_TIMEOUT_S = 0.5
+        peer, channel, events = await self.connect()
+        await wait_for(lambda: any(e["type"] == "input_audio_buffer.committed" for e in events))
+        self.gateway.stall_from = 1
+        channel.send(json.dumps({"type": "input_audio_buffer.commit", "keep_open": True}))
+        # The first item completes, the next one fails, and the session frees its slot.
+        await wait_for(lambda: not bridge.ACTIVE_SESSIONS, timeout=10)
+        await peer.close()
+        self.assertTrue(any(e["type"].endswith(".completed") for e in events))
+        self.assertTrue(any(e["type"].endswith(".failed") for e in events))
 
     async def test_sessions_are_limited_and_their_slots_freed(self):
         bridge.MAX_SESSIONS = 1
