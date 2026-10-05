@@ -39,9 +39,19 @@ without root `bun run sandbox:gvisor` sets it up for rootless Podman, see
 `.env.example`).
 
 The transcription module keeps audio in MinIO (`TRANSCRIPTION_S3_*` in
-`.env.example`) and needs `ffmpeg` on the server. `bun run mock:transcription`
-stands in for its speech, diarisation, chat and realtime services; point the
-module's admin settings at it as `infra/transcription-mock/README.md` shows.
+`.env.example`) and needs `ffmpeg` on the server. It uses the university's
+services as kiChat does: speech recognition (`jlu/whisper-1`) and the chat
+models (`jlu/qwen3.8-27b`, `jlu/qwen3.8-27b-fast`) of the HRZ gateway
+`https://api.hrz.uni-giessen.de/v1`, which a fresh module is preset to, speaker
+recognition on kiChat's Speaches server (pyannote, its own key) and, for live
+transcription, the realtime bridge in `infra/realtime-bridge` with coturn. Under
+Admin → Components → Transkription enter the API keys, press _Modelle abrufen_
+for speech and chat, check each service with _Verbindung testen_ and enable the
+module; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#backends) lists every
+setting. Behind an outbound proxy set `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1` and
+`NO_PROXY` as `.env.example` shows. `bun run mock:transcription` stands in for
+all of these in automated tests and offline development only
+(`infra/transcription-mock/README.md`).
 
 `COMPONENT_SECRETS_KEY` encrypts module secrets such as API keys. Generate a
 production value with `openssl rand -base64 32`; changing it makes stored

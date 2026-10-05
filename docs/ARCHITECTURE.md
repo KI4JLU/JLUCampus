@@ -325,6 +325,63 @@ OpenAI Realtime with ephemeral keys the server issues. `loadModuleRuntime`
 (`modules/runtime.ts`) gives the worker and sweeps a module's config and decrypted secrets
 outside a request.
 
+#### Backends
+
+The module runs against the university's services, as kiChat does. A fresh module points at the
+HRZ's LiteLLM gateway (`TRANSCRIPTION_HRZ_API_URL`, `https://api.hrz.uni-giessen.de/v1`):
+
+| Upstream            | Service and model                                                                                                                                                                                                                | Admin form (Admin → Components → Transkription)                                                                                                                                    |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Speech recognition  | HRZ gateway, `jlu/whisper-1` (Whisper large v3), `POST /audio/transcriptions` with `verbose_json`                                                                                                                                | _Spracherkennung_: address (several Speaches workers comma-separated), models, the speech key (`apiKey`)                                                                           |
+| Speaker recognition | kiChat's Speaches server `https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1`, `pyannote/speaker-diarization-community-1` (`POST /audio/diarization`, `POST /audio/speech/timestamps`); the gateway has neither              | _Sprechererkennung_: switch, address (empty: the speech server), model, its own key (`diarizationApiKey`, empty: the speech key)                                                   |
+| Chat                | HRZ gateway: `jlu/qwen3.8-27b` for summaries and section previews, `jlu/qwen3.8-27b-fast` for the quick tasks (LLM correction, speaker optimisation, title, subtitle)                                                            | _KI-Endpunkt_: address, models, the two default models, _Denkphase der Modelle abschalten_, the chat key (`llmApiKey`)                                                             |
+| Live, on-prem       | `infra/realtime-bridge` (aiortc, from kiChat's `_docker/realtime-bridge`) next to the server: browser WebRTC in, the gateway's realtime WebSocket out (`voxtral-mini-realtime`); coturn relays the media for browsers behind NAT | _Live-Transkription_: modes, signaling address of the bridge, gateway, ICE servers, TURN credentials (`ephemeral` with `TRANSCRIPTION_TURN_SECRET`, coturn's `static-auth-secret`) |
+| Live, OpenAI        | OpenAI Realtime with ephemeral keys                                                                                                                                                                                              | the OpenAI key (`openaiRealtimeApiKey`)                                                                                                                                            |
+
+Setting it up: enter the keys in the form's secret fields, press _Modelle abrufen_ for speech and
+chat (the lists come from the gateway's `GET /models`; the preset default models stay selected
+when the gateway lists them), check each upstream with _Verbindung testen_, then enable the
+module. The gateway answers `403` for models its key does not allow, so the key must include
+every model used (at the time of writing the HRZ key gets `403` for `voxtral-mini-realtime`, and
+the Speaches server needs a key of its own). A capability is offered only while its upstream is
+set up (`capabilitiesOf`); chat stays off until the model list names a model.
+
+The chat tasks use kiChat's prompts and budgets; every answer is read past thinking blocks
+(`withoutThinking`: Qwen3 reasons first, vLLM puts it in `reasoning_content` or inline as
+`<think>…</think>`) and code fences, JSON leniently. With `llmDisableThinking` (on by default)
+requests carry `chat_template_kwargs: {enable_thinking: false}`, which vLLM's Qwen3 template
+understands; endpoints that refuse unknown parameters (OpenAI) need it off.
+
+- **Title** (`transcripts/metadata.ts`, kiChat's `GenerateTranscriptionTitle`): only for a
+  made-up title; kiChat's _Name Prompt_ in the user's language on the first 500 characters,
+  20 tokens (kiChat: 10, too few for German compounds with Qwen3's tokenizer); an answer that
+  reports missing content becomes the text's first 50 characters.
+- **Subtitle** (`GenerateTranscriptionSubtitle`): kiChat's prompt on the first 200 tokens as
+  `Name: text` lines, 60 tokens, cleaned to one line of at most 80 characters.
+- **Summaries and previews** (`summaries/generate.ts`, kiChat's `summarize`): one request per AI
+  section, kiChat's system prompt, then the instruction, `TRANSKRIPT:` and the transcript;
+  previews read kiChat's reduced sample (beginning, middle, end, 2000 tokens).
+- **Speaker optimisation** (`optimize/speakers.ts`, kiChat's `optimizeTranscriptSpeakers`):
+  kiChat's prompt and `{original_index, text, speaker}` answer in batches of 150 segments. The
+  route takes only the speaker of most of each segment's text, as the client keeps text, timing
+  and redactions; `optimizeTranscriptSpeakers` restructures like kiChat (splits with
+  interpolated times, corrected text, same-speaker neighbours merged).
+
+Campus adds: the model reads redacted passages as `[AUSGEBLENDET]` (summaries then get one
+sentence not to guess them, and redacted segments keep their text), names the model invents are
+ignored, and `PROMPT_VERSION` keys stored summaries and previews to the prompts.
+
+**Outbound proxy.** Where the internet is reachable only through a proxy (the campus host), set
+`HTTPS_PROXY`/`HTTP_PROXY`, `NODE_USE_ENV_PROXY=1` and `NO_PROXY`. Node (22.21 and 24.5 or later)
+then sends `fetch` (upstreams, Keycloak) and `http`/`https` requests (the S3 client) through the
+proxy, except to the hosts of `NO_PROXY`, which must name object storage, Keycloak if it is
+internal, `localhost`/`127.0.0.1` (the container's health check) and the realtime bridge. `fetch`
+tunnels even plain-http requests with `CONNECT`. At start the server warns about proxy variables
+Node ignores and about internal hosts the proxy would get (`outboundProxyWarnings` in `env.ts`).
+
+`infra/transcription-mock` stands in for every upstream in automated tests (`startUpstreamMock`)
+and for offline development (`bun run mock:transcription`); nothing points at it by default.
+
 The web adapter (`apps/web/src/adapters/transcription/`) keeps one folder per area
 (`upload/`, `mapping/`, `result/`, `history/`, `segments/`, `export/`, `summary/`,
 `templates/`, `recording/`, `live/`, `widgets/`). `page.tsx` switches the work area
