@@ -301,7 +301,7 @@ before it is cut short (`maskSecrets` in `http.ts`): the request's own keys howe
 other requests sent lately from eight characters on, `Bearer …`, `sk-…`, `api_key=…`. Browsers
 get the server's own words; only the admin connection test shows the start of a refusal, masked.
 Failures are classified by the error's `kind` and `status`, which the raw answer decided, never
-by its masked words. The realtime bridge passes on and logs nothing the gateway says.
+by its masked words. The live relay passes on and logs nothing the gateway says.
 The analysis diarises the whole file and offers samples per voice; the transcription diarises
 again with the named voices as known speakers (`known_speaker_references`, WAV cut from the
 normalised audio) plus VAD, and maps words to speakers by time overlap (`jobs/mapping.ts`,
@@ -338,9 +338,8 @@ path prefix breaks the signatures), region, bucket, keys and path-style addressi
 a bucket the module offers no uploads. Saved transcripts stay until the user deletes them,
 unless the admin sets `transcriptRetentionHours`; unsaved, failed and cancelled jobs and
 their audio go after `unsavedJobRetentionHours` (24). Admin secrets: `apiKey` (speech),
-`diarizationApiKey`, `llmApiKey` and `openaiRealtimeApiKey`. Live transcription runs over
-WebRTC, either through the admin's on-prem bridge (the server forwards the SDP offer) or
-OpenAI Realtime with ephemeral keys the server issues. `loadModuleRuntime`
+`diarizationApiKey`, `llmApiKey` and `openaiRealtimeApiKey`. Live transcription runs over a
+WebSocket through the server (see _Live transcription_ below). `loadModuleRuntime`
 (`modules/runtime.ts`) gives the worker and sweeps a module's config and decrypted secrets
 outside a request.
 
@@ -349,13 +348,13 @@ outside a request.
 The module runs against the university's services, as kiChat does. A fresh module points at the
 HRZ's LiteLLM gateway (`TRANSCRIPTION_HRZ_API_URL`, `https://api.hrz.uni-giessen.de/v1`):
 
-| Upstream            | Service and model                                                                                                                                                                                                                | Admin form (Admin → Components → Transkription)                                                                                                                                    |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Speech recognition  | HRZ gateway, `jlu/whisper-1` (Whisper large v3), `POST /audio/transcriptions` with `verbose_json`                                                                                                                                | _Spracherkennung_: address (several Speaches workers comma-separated), models, the speech key (`apiKey`)                                                                           |
-| Speaker recognition | kiChat's Speaches server `https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1`, `pyannote/speaker-diarization-community-1` (`POST /audio/diarization`, `POST /audio/speech/timestamps`); the gateway has neither              | _Sprechererkennung_: switch, address (empty: the speech server), model, its own key (`diarizationApiKey`, empty: the speech key)                                                   |
-| Chat                | HRZ gateway: `jlu/qwen3.8-27b` for summaries and section previews, `jlu/qwen3.8-27b-fast` for the quick tasks (LLM correction, speaker optimisation, title, subtitle)                                                            | _KI-Endpunkt_: address, models, the two default models, _Denkphase der Modelle abschalten_, the chat key (`llmApiKey`)                                                             |
-| Live, on-prem       | `infra/realtime-bridge` (aiortc, from kiChat's `_docker/realtime-bridge`) next to the server: browser WebRTC in, the gateway's realtime WebSocket out (`voxtral-mini-realtime`); coturn relays the media for browsers behind NAT | _Live-Transkription_: modes, signaling address of the bridge, gateway, ICE servers, TURN credentials (`ephemeral` with `TRANSCRIPTION_TURN_SECRET`, coturn's `static-auth-secret`) |
-| Live, OpenAI        | OpenAI Realtime with ephemeral keys                                                                                                                                                                                              | the OpenAI key (`openaiRealtimeApiKey`)                                                                                                                                            |
+| Upstream            | Service and model                                                                                                                                                                                                   | Admin form (Admin → Components → Transkription)                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Speech recognition  | HRZ gateway, `jlu/whisper-1` (Whisper large v3), `POST /audio/transcriptions` with `verbose_json`                                                                                                                   | _Spracherkennung_: address (several Speaches workers comma-separated), models, the speech key (`apiKey`)                         |
+| Speaker recognition | kiChat's Speaches server `https://hrz-spark-03.hrz.uni-giessen.de/diarization/v1`, `pyannote/speaker-diarization-community-1` (`POST /audio/diarization`, `POST /audio/speech/timestamps`); the gateway has neither | _Sprechererkennung_: switch, address (empty: the speech server), model, its own key (`diarizationApiKey`, empty: the speech key) |
+| Chat                | HRZ gateway: `jlu/qwen3.8-27b` for summaries and section previews, `jlu/qwen3.8-27b-fast` for the quick tasks (LLM correction, speaker optimisation, title, subtitle)                                               | _KI-Endpunkt_: address, models, the two default models, _Denkphase der Modelle abschalten_, the chat key (`llmApiKey`)           |
+| Live, on-prem       | HRZ gateway's realtime WebSocket (vLLM, `voxtral-mini-realtime`), relayed by this server                                                                                                                            | _Live-Transkription_: modes, gateway (empty: the speech address), live model; the speech key                                     |
+| Live, OpenAI        | OpenAI Realtime's WebSocket (transcription session), relayed by this server                                                                                                                                         | the OpenAI address, model and key (`openaiRealtimeApiKey`)                                                                       |
 
 Setting it up: enter the keys in the form's secret fields, press _Modelle abrufen_ for speech and
 chat (the lists come from the gateway's `GET /models`, speech recognition models only for speech:
@@ -401,12 +400,79 @@ ignored, and `PROMPT_VERSION` keys stored summaries and previews to the prompts.
 `HTTPS_PROXY`/`HTTP_PROXY`, `NODE_USE_ENV_PROXY=1` and `NO_PROXY`. Node (22.21 and 24.5 or later)
 then sends `fetch` (upstreams, Keycloak) and `http`/`https` requests (the S3 client) through the
 proxy, except to the hosts of `NO_PROXY`, which must name object storage, Keycloak if it is
-internal, `localhost`/`127.0.0.1` (the container's health check) and the realtime bridge. `fetch`
-tunnels even plain-http requests with `CONNECT`. At start the server warns about proxy variables
-Node ignores and about internal hosts the proxy would get (`outboundProxyWarnings` in `env.ts`,
-with the production bridge `host.docker.internal:8089` once `TRANSCRIPTION_REALTIME_BRIDGE_KEY`
-is set), and once per host about a bridge address of the module's settings that would go through
-the proxy (its requests carry the gateway key).
+internal, and `localhost`/`127.0.0.1` (the container's health check). `fetch` tunnels even
+plain-http requests with `CONNECT`; the live relay's WebSocket to the gateway (the `ws` package,
+which Node's proxy support does not reach) opens the same `CONNECT` tunnel itself where `fetch`
+would use the proxy (`proxyFor` in `realtime/gateway.ts`). At start the server warns about proxy
+variables Node ignores and about internal hosts the proxy would get (`outboundProxyWarnings` in
+`env.ts`).
+
+#### Live transcription
+
+```
+Browser ──wss://<app origin>/api/modules/transcription/live?mode=… (session cookie)──▶ Campus server
+        ──wss://<gateway>/v1/realtime?model=… (Authorization: Bearer <key>)──▶ gateway
+```
+
+The browser streams the microphone to the server's own WebSocket (`TRANSCRIPTION_API.realtimeLive`,
+`realtime/index.ts`); the server opens the gateway's realtime WebSocket with the key it holds and
+relays (`realtime/relay.ts`). No port besides the app's HTTPS port, no TURN relay, and no key in
+the browser: a browser WebSocket cannot send an `Authorization` header, which is why kiChat put a
+WebRTC bridge (`_docker/realtime-bridge`) in front of the gateway; the relay takes over its
+protocol and lifecycle in the server itself.
+
+- **Upgrade.** It runs through the app's middleware like any request (`upgradeWebSocket` of
+  `@hono/node-server`, `src/websocket.ts`): the Better-Auth session from the cookie, the module
+  enabled, then the route's own checks. CORS does not cover WebSockets, so the `Origin` must be
+  one of `CORS_ORIGINS` or the API's own (`isTrustedWebSocketOrigin`); without one, or with
+  another, the upgrade gets `403`. Everything the live tab explains (mode not set up, server busy,
+  gateway refused) comes as an `error` event on the open socket, since a browser cannot read the
+  status of a refused upgrade.
+- **Browser → server.** Only `input_audio_buffer.append` (canonical base64 of whole PCM16
+  samples, at most one second; 16 kHz mono for on-prem as vLLM wants it, 24 kHz for OpenAI) and
+  `input_audio_buffer.commit` (`keep_open: true` goes on with a new item); `session.update` is
+  ignored, anything else, binary frames, or a message over 96 KiB end the session
+  (`invalid_event`, 1008; 1009 from `ws`). Audio beyond real time (a 10 s burst, then 1.5×) ends it
+  as well (`audio_rate_exceeded`).
+- **Server → gateway.** vLLM (`onprem`): `session.update {model}` (model at the top level),
+  appends, `input_audio_buffer.commit {final: false}` after 300 ms of audio to start decoding,
+  `{final: true}` to end the stream; it answers `transcription.delta`/`…done`/`error`. OpenAI
+  (`openai`): a transcription session (`?intent=transcription`, `audio/pcm` at 24 kHz, server
+  VAD), whose events already carry the browser's names.
+- **Server → browser.** `session.created` once the gateway took the session (audio starts then),
+  `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.delta`,
+  `…completed`, `…failed` and `error`, each with only the fields the web app reads, errors only with
+  the server's codes and words (`TRANSCRIPTION_LIVE_ERROR_CODES`). Of a gateway's error the
+  server keeps its code for its own decisions; logs get fixed events, close codes and byte
+  counts, never the gateway's text or a key.
+- **Lifecycle** (as kiChat's bridge, with the rules of its reviews): a slot of
+  `TRANSCRIPTION_LIVE_MAX_SESSIONS` (20) and `…_PER_USER` (2) is taken before the gateway is asked
+  and freed on every way out; the gateway handshake (connection, upgrade answer, `session.update`)
+  has 10 s. A refused handshake with 401/403 asks the gateway's model list with the same key:
+  without the model it is `model_not_allowed` (the HRZ key's `403` for `voxtral-mini-realtime`),
+  a failing list `gateway_key_rejected`. Stop (a commit) seals the open item, waits up to 15 s for
+  its transcript and closes the socket with 1000; the browser waits for that at most 20 s. A
+  `keep_open` commit seals the item and opens the next stream at once, holding the audio
+  meanwhile; commits during a rotation fold into one more, at most one per second. A session
+  without audio for 60 s or longer than 4 h is finalized like a stop (`session_idle`,
+  `session_expired`). A gateway or browser that does not read (1 MiB or 2 MiB queued) ends the
+  session, a gateway that closes the stream too (`upstream_closed`), a browser that goes closes
+  the gateway's stream; sockets that do not close in 5 s are dropped.
+- **Availability.** `GET /realtime/config` probes the on-prem gateway (open, `session.update`,
+  1.5 s for a refusal, close; cached 5 min, a refusal 30 s) and leaves on-prem out with the reason
+  while it refuses; the admin form's _Verbindung testen_ does the same with the typed values and
+  reports the handshake's status.
+- **Browser.** `live/session.ts` opens the socket, waits for `session.created` (15 s), then
+  `live/audio.ts` takes the microphone stream (`getUserMedia` with echo cancellation, noise
+  suppression and gain control) into an AudioWorklet (`live/pcm-worklet.ts`) that low-pass filters
+  and resamples to the mode's rate and posts 100 ms PCM16 frames (`live/pcm.ts`). Vite builds the
+  worklet as an asset of its own (`?worker&url`), so it loads under `script-src 'self'` in the
+  browser, the PWA and the desktop app. The local WAV take records the same stream.
+- **Reverse proxy.** It must pass WebSocket upgrades for `/api` (nginx:
+  `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`,
+  `proxy_set_header Connection $connection_upgrade`) and allow a read timeout above a minute
+  (`proxy_read_timeout`; the browser sends audio every 100 ms, the server finishes a stop within
+  15 s).
 
 `infra/transcription-mock` stands in for every upstream in automated tests (`startUpstreamMock`)
 and for offline development (`bun run mock:transcription`); nothing points at it by default.
@@ -552,10 +618,10 @@ import.meta.env.VITE_API_URL ?? ''` as base and `credentials: 'include'`.
   to `app://` by loading the URL itself if Chromium does not follow it. Only
   main-frame redirects count: embedded sites redirect inside their iframe.
 - CSP via `session.webRequest.onHeadersReceived`: `default-src 'self'`,
-  `connect-src` and `media-src` the API origin plus `JUSTCAMPUS_CONNECT_ORIGINS` (runtime)
-  or the build's `DESKTOP_CONNECT_ORIGINS`, by default the local MinIO and
-  `https://api.openai.com` (transcription storage and OpenAI Realtime; `media-src` also
-  `blob:` and `data:`), `frame-src https: http://localhost:*`,
+  `connect-src` the API origin, its WebSocket origin (`ws:`/`wss:`, live transcription) and
+  `JUSTCAMPUS_CONNECT_ORIGINS` (runtime) or the build's `DESKTOP_CONNECT_ORIGINS`, by default the
+  local MinIO (transcription storage); `media-src` the API origin, those origins, `blob:` and
+  `data:`, `frame-src https: http://localhost:*`,
   `img-src 'self' https: data:`, fonts and styles self/inline.
 - Permissions (`src/main/media-permissions.ts`): the app's own main frame may use the
   microphone (audio only) and element fullscreen, for the transcription module's recording,
