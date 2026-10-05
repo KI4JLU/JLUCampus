@@ -5,14 +5,21 @@ import { clientEvents } from './protocol.js'
  * decides what the browser hears about an item.
  *
  * An item is open from the moment audio of it is known (vLLM: its first audio or its first
- * commit; OpenAI: the gateway's `input_audio_buffer.committed`) until it ends, once, with
- * `…completed` or `…failed`; then it is retired. The browser hears `input_audio_buffer.committed`
- * at most once per item (`announce`), deltas only while it is open, and of a retired item
- * nothing again: a transcript that comes after the server failed it (`expire`) neither fails it
- * twice nor starts a fresh text the browser would append to what it showed already. Ids the
- * gateway never opened carry nothing to the browser, so whatever the browser keeps per item is
- * bounded by the open items. Open items are `max` at most; retired ids are remembered as far back
- * as four times that, so a gateway repeating an id of an item just retired cannot open it again.
+ * commit; OpenAI: the gateway's `input_audio_buffer.committed`) until it ends with `…completed`
+ * or `…failed`; then it is retired. The browser hears `input_audio_buffer.committed` at most once
+ * per item (`announce`), deltas only while it is open, and of a retired item nothing again: a
+ * transcript that comes after the server failed it (`expire`) neither fails it twice nor starts a
+ * fresh text the browser would append to what it showed already. Ids the gateway never opened
+ * carry nothing to the browser, so whatever the browser keeps per item is bounded by the open
+ * items.
+ *
+ * Both are bounded, and so is the guarantee: open items are `max` at most, retired ids are
+ * remembered for the last `4 * max` (16 at least; 128 by default) retired items. Within that
+ * window an item ends once and a repeated `…committed` of a retired id is `known`. An id retired
+ * longer ago is forgotten: the gateway committing it again opens it as a new item, which then
+ * ends once more (a second outcome, its text shown again). That takes a gateway repeating an id
+ * of over a hundred items before; remembering every id of a session instead would let a gateway
+ * grow the server's memory without bound.
  */
 
 type Emit = (event: unknown) => void
@@ -47,8 +54,8 @@ export class LiveItems {
   }
 
   /**
-   * Opens `id` (`opened`); an id open or retired already is `known` and changes nothing, one
-   * beyond `max` open items is `full` and is not opened.
+   * Opens `id` (`opened`); an id open or retired already (and still remembered) is `known` and
+   * changes nothing, one beyond `max` open items is `full` and is not opened.
    */
   track(id: string, deadline: number | null = null): OpenResult {
     if (this.open.has(id) || this.retired.has(id)) return 'known'

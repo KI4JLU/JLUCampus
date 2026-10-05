@@ -1010,7 +1010,7 @@ function inside<T>(live: LiveSession, field: string): T {
   return (live as unknown as Record<string, T>)[field]!
 }
 
-describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 … X-5)', () => {
+describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 … X-5, Y-1, Y-2)', () => {
   let logged: string[]
 
   beforeEach(() => {
@@ -1118,11 +1118,11 @@ describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 …
     expect(stream!.of('input_audio_buffer.commit')).toHaveLength(1)
     live.receive(append(100, 24_000))
     expect(stream!.of('input_audio_buffer.commit')).toHaveLength(2)
-    // Commits are counted until answered.
-    expect(inside<number>(live, 'commitsInFlight')).toBe(2)
+    // Commits are tracked until answered.
+    expect([...inside<Set<string>>(live, 'unanswered')]).toEqual(['turn_1', 'turn_2'])
     stream!.deliver(committed('item_a'))
     stream!.deliver(empty('turn_2'))
-    expect(inside<number>(live, 'commitsInFlight')).toBe(0)
+    expect(inside<Set<string>>(live, 'unanswered').size).toBe(0)
     live.close()
   })
 
@@ -1610,6 +1610,116 @@ describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 …
     expect(streams[1]!.of('input_audio_buffer.append')).toHaveLength(1)
     live.close()
   })
+
+  it('Y-1: a repeated committed answers no other commit; the unanswered last one is an error', async () => {
+    const { client, live, streams } = scripted('openai', { limits: { doneTimeoutMs: 300 } })
+    await live.start()
+    const [stream] = streams
+    const commits = (): unknown[] => stream!.of('input_audio_buffer.commit')
+    for (let index = 0; index < 10; index += 1) live.receive(append(100, 24_000))
+    expect(commits()).toEqual([{ type: 'input_audio_buffer.commit', event_id: 'turn_1' }])
+    stream!.deliver(committed('old'))
+    stream!.deliver(completed('old'))
+    live.receive(append(100, 24_000))
+    live.receive(COMMIT)
+    await waitFor(() => commits().length === 2)
+    // The answer to turn_1 once more, while final_2 waits for its own.
+    stream!.deliver(committed('old'))
+    await tick(50)
+    expect(client.closed).toBeNull()
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.error)
+    expect(client.errorCodes).toEqual(['upstream_error'])
+    expect(client.of('input_audio_buffer.committed')).toHaveLength(1)
+    expect(
+      client.of('conversation.item.input_audio_transcription.completed').map((e) => e.item_id)
+    ).toEqual(['old'])
+  })
+
+  it('Y-1: an empty buffer settles the commit it names, once', async () => {
+    const { client, live, streams } = scripted('openai', { limits: { doneTimeoutMs: 300 } })
+    await live.start()
+    const [stream] = streams
+    const commits = (): unknown[] => stream!.of('input_audio_buffer.commit')
+    for (let index = 0; index < 10; index += 1) live.receive(append(100, 24_000))
+    expect(commits()).toHaveLength(1)
+    stream!.deliver(empty('turn_1'))
+    live.receive(append(100, 24_000))
+    live.receive(COMMIT)
+    await waitFor(() => commits().length === 2)
+    // turn_1's answer again, one without an id and one for a commit never sent.
+    stream!.deliver(empty('turn_1'))
+    stream!.deliver(empty(null))
+    stream!.deliver(empty('final_9'))
+    await tick(50)
+    expect(client.closed).toBeNull()
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.error)
+    expect(client.errorCodes).toEqual(['upstream_error'])
+  })
+
+  it('Y-1: answered once each, the same commits drain normally', async () => {
+    const { client, live, streams } = scripted('openai', { limits: { doneTimeoutMs: 2000 } })
+    await live.start()
+    const [stream] = streams
+    const commits = (): unknown[] => stream!.of('input_audio_buffer.commit')
+    for (let index = 0; index < 10; index += 1) live.receive(append(100, 24_000))
+    stream!.deliver(empty('turn_1'))
+    live.receive(append(100, 24_000))
+    live.receive(COMMIT)
+    await waitFor(() => commits().length === 2)
+    stream!.deliver(committed('last'))
+    stream!.deliver(completed('last'))
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.normal)
+    expect(client.errorCodes).toEqual([])
+  })
+
+  it('Y-2: audio held for the next item fails with it when the next stream dies before the handoff', async () => {
+    const { client, live, streams } = scripted('onprem', { limits: { rotateMinIntervalMs: 10 } })
+    await live.start()
+    const [old] = streams
+    live.receive(append(100))
+    live.receive(KEEP_OPEN)
+    await waitFor(() => streams.length === 2 && old!.of('input_audio_buffer.commit').length === 2)
+    const next = streams[1]!
+    live.receive(append(100))
+    expect(next.of('input_audio_buffer.append')).toEqual([])
+    next.finish(1011)
+    await tick()
+    old!.deliver({ type: 'transcription.done', text: 'Hallo' })
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.error)
+    expect(client.errorCodes).toEqual(['upstream_closed'])
+    expect(
+      client.of('conversation.item.input_audio_transcription.completed').map((e) => e.item_id)
+    ).toEqual([`item_${live.id}`])
+    expect(
+      client.of('conversation.item.input_audio_transcription.failed').map((e) => e.item_id)
+    ).toEqual([`item_${live.id}_1`])
+  })
+
+  it('Y-2: … and a healthy rotation of short items still completes both', async () => {
+    const { client, live, streams } = scripted('onprem', { limits: { rotateMinIntervalMs: 10 } })
+    await live.start()
+    const [old] = streams
+    live.receive(append(100))
+    live.receive(KEEP_OPEN)
+    await waitFor(() => streams.length === 2 && old!.of('input_audio_buffer.commit').length === 2)
+    const next = streams[1]!
+    live.receive(append(100))
+    old!.deliver({ type: 'transcription.done', text: 'Hallo' })
+    await waitFor(() => next.of('input_audio_buffer.append').length === 1)
+    live.receive(COMMIT)
+    await waitFor(() => next.of('input_audio_buffer.commit').length === 2)
+    next.deliver({ type: 'transcription.done', text: 'Welt' })
+    await waitFor(() => client.closed !== null)
+    expect(client.closed?.code).toBe(CLOSE.normal)
+    expect(
+      client.of('conversation.item.input_audio_transcription.completed').map((e) => e.item_id)
+    ).toEqual([`item_${live.id}`, `item_${live.id}_1`])
+    expect(client.of('conversation.item.input_audio_transcription.failed')).toEqual([])
+  })
 })
 
 describe('the items of a live session', () => {
@@ -1641,6 +1751,37 @@ describe('the items of a live session', () => {
       items.fail(`x${index}`)
     }
     expect(inside<Set<string>>(items as unknown as LiveSession, 'retired').size).toBe(16)
+  })
+
+  it('Y-3: once only within the remembered window; an id evicted from it opens again', () => {
+    const sent: Record<string, unknown>[] = []
+    const items = new LiveItems((event) => sent.push(event as Record<string, unknown>), 32)
+    items.track('slow', 100)
+    items.announce('slow')
+    items.delta('slow', 'Hallo')
+    expect(items.expire(100)).toEqual(['slow'])
+    const retireOthers = (from: number, count: number): void => {
+      for (let index = from; index < from + count; index += 1) {
+        items.track(`x${index}`)
+        items.complete(`x${index}`, 'x')
+      }
+    }
+    // 128 retired ids are remembered by default: slow and 127 after it.
+    retireOthers(0, 127)
+    expect(items.track('slow')).toBe('known')
+    expect(items.complete('slow', 'Hallo Welt')).toBe(false)
+    // One more, and slow is forgotten: the gateway committing it again opens it anew (the
+    // tradeoff of a bounded history).
+    retireOthers(127, 1)
+    expect(inside<Set<string>>(items as unknown as LiveSession, 'retired').size).toBe(128)
+    expect(items.track('slow')).toBe('opened')
+    expect(items.complete('slow', 'Hallo Welt')).toBe(true)
+    expect(sent.filter((event) => event.item_id === 'slow').map((event) => event.type)).toEqual([
+      'input_audio_buffer.committed',
+      'conversation.item.input_audio_transcription.delta',
+      'conversation.item.input_audio_transcription.failed',
+      'conversation.item.input_audio_transcription.completed'
+    ])
   })
 })
 

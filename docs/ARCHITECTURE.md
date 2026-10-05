@@ -443,9 +443,11 @@ protocol and lifecycle in the server itself.
   (`openai`): a transcription session (`?intent=transcription`, `audio/pcm` at 24 kHz), whose
   events already carry the browser's names. Its turns per model: `gpt-realtime-whisper` (the
   default) has no voice detection (`turn_detection: null`), so the server commits the audio
-  itself, at a quiet frame after a second and after three seconds at the latest, and counts the
-  answers to its commits (`input_audio_buffer.committed` or `input_audio_buffer_commit_empty`);
-  other models keep `server_vad`. A gateway's messages count against a budget too (1000 at once,
+  itself, at a quiet frame after a second and after three seconds at the latest, and settles
+  each of its commits by one answer, once: an `input_audio_buffer.committed` of a new item (not
+  of an open or retired one) the oldest unanswered commit, an `input_audio_buffer_commit_empty`
+  the commit its `event_id` names if that is still unanswered; a repeated or unrelated answer
+  settles nothing. Other models keep `server_vad`. A gateway's messages count against a budget too (1000 at once,
   200 a second; 8 MiB, then 1 MiB a second).
 - **Server → browser.** `session.created` once the gateway took the session (audio starts then),
   `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.delta`,
@@ -463,16 +465,20 @@ protocol and lifecycle in the server itself.
   a failing list `gateway_key_rejected`. Stop (a commit) seals the open item, waits up to 15 s for
   its transcript and closes the socket with 1000; the browser waits for that at most 20 s. One
   item model serves both modes (`realtime/items.ts`): an item is open from its first audio or
-  commit until it ends once, with its transcript or as `…failed`; deltas reach the browser only for
-  open items, nothing of a retired one or of an id the gateway never committed. An item with audio
-  whose stream closes before its transcript, decoding or not, or without it in time, comes as
-  `…failed`. For OpenAI stop commits what is left and waits for the answer to that commit itself:
+  commit until it ends, with its transcript or as `…failed`; deltas reach the browser only for
+  open items, nothing of a retired one or of an id the gateway never committed. Retired ids are
+  remembered for the last 128 retired items (four times the open-item limit), and the once-only
+  outcome holds within that window: an id retired longer ago that the gateway commits again opens
+  as a new item and ends once more. Remembering every id instead would let a gateway grow the
+  server's memory without bound. An item with audio whose stream closes before its transcript,
+  decoding or not, or without it in time, comes as `…failed`; audio held during a rotation is the
+  next item's, which fails with its stream if that closes before the handoff. For OpenAI stop commits what is left and waits for the answer to that commit itself:
   without voice detection for the answer to every commit of the server's, with it, where commits
   of the gateway's may cross it, it commits again after each `…committed` until one of its final
   commits (by `event_id`) is answered with an empty buffer. Without that confirmation in 15 s the
   browser gets `upstream_error` and 1011, not a normal close. OpenAI items awaiting their
   transcript are 32 at most (beyond, the session ends with `upstream_error`) and fail after 30 s;
-  what the gateway sends for them afterwards is dropped. A
+  what the gateway sends for them afterwards, within the remembered window, is dropped. A
   `keep_open` commit seals the item and opens the next stream at once, holding the audio
   meanwhile; commits during a rotation fold into one more, at most one per second. A session
   without audio for 60 s or longer than 4 h is finalized like a stop (`session_idle`,

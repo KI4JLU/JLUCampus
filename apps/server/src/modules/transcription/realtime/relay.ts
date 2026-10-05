@@ -42,19 +42,22 @@ import {
  *
  * What the browser hears of an item, in either mode, `LiveItems` decides (`items.ts`): an item is
  * open from its first audio or commit until it ends, once, with its transcript or as failed; of a
- * retired item and of ids the gateway never opened nothing reaches the browser, and open items
- * are `pendingMax` at most.
+ * retired item it still remembers and of ids the gateway never opened nothing reaches the browser,
+ * and open items are `pendingMax` at most.
  *
  * vLLM (`onprem`) streams one item per gateway stream: decoding starts after 300 ms of audio
  * (`input_audio_buffer.committed` tells the browser what it may wait for), a final commit ends the
  * stream with `transcription.done`. A `keep_open` commit seals the item and opens the next stream
- * at once; audio meanwhile is held and goes to the next item. An item with audio whose stream
- * closes before its transcript came, decoding or not, is reported as failed.
+ * at once; audio meanwhile is held and is the next item's, also when the next stream fails before
+ * it gets there. An item with audio whose stream closes before its transcript came, decoding or
+ * not, is reported as failed.
  *
  * OpenAI (`openai`) runs one stream. A model with voice detection finds the items itself; for one
  * without (`gpt-realtime-whisper`) the server commits the audio itself, at a quiet frame after
- * `openaiCommitMinMs` and at the latest after `openaiCommitMaxMs`, and counts the answers to its
- * commits. Committed items fail after `itemTimeoutMs` without their transcript.
+ * `openaiCommitMinMs` and at the latest after `openaiCommitMaxMs`, and settles each of its commits
+ * by one answer, once: a `…committed` of a new item (not of an open or retired one) the oldest
+ * unanswered, an empty buffer the one its `event_id` names if that is unanswered. Committed items
+ * fail after `itemTimeoutMs` without their transcript.
  *
  * Stopping (a commit without `keep_open`) seals what is open, waits up to `doneTimeoutMs` for its
  * transcript and closes the browser's socket normally (1000); an item without its transcript by
@@ -302,6 +305,8 @@ export class LiveSession {
 
   /** vLLM: the item audio goes to; `null` while a rotation opens the next. */
   private item: Item | null = null
+  /** vLLM: during a rotation the next item's id, which audio held meanwhile belongs to. */
+  private nextItemId: string | null = null
   private itemSeq = 0
   /** A rotation or the finalization, one at a time. */
   private segment: Promise<void> = Promise.resolve()
@@ -319,9 +324,13 @@ export class LiveSession {
   /** Audio sent since the server's last commit. */
   private uncommitted = 0
   private commitSeq = 0
-  /** Without voice detection: the server's commits the gateway has not answered yet. */
-  private commitsInFlight = 0
-  /** `input_audio_buffer.committed` events so far. */
+  /**
+   * Without voice detection: the `event_id`s of the server's commits the gateway has not answered
+   * yet, oldest first. Each answer settles one of them, once: a `…committed` of a new item the
+   * oldest, an empty buffer the one it names.
+   */
+  private readonly unanswered = new Set<string>()
+  /** `input_audio_buffer.committed` events of new items so far. */
   private committedCount = 0
   /** With voice detection: the final commits, and whether one of them got an empty buffer. */
   private readonly finalCommits = new Set<string>()
@@ -457,6 +466,9 @@ export class LiveSession {
     }
     chunk.bytes += chunk.buffer.write(frame.audio, chunk.bytes, 'base64')
     this.holdBytes += frame.bytes
+    // Held during a rotation, it is the next item's audio and has an outcome from now on, even if
+    // the next stream fails before it gets there.
+    if (this.nextItemId) this.openItem(this.nextItemId, null)
   }
 
   /** The held audio as frames, in order; the hold is empty afterwards. */
@@ -506,15 +518,16 @@ export class LiveSession {
   }
 
   /**
-   * Opens an item (a known one stays as it is); beyond `pendingMax` open items the gateway
-   * leaves too many open, and the session ends.
+   * Opens an item (`opened`; a known one stays as it is, `known`); beyond `pendingMax` open items
+   * the gateway leaves too many open, and the session ends (`null`).
    */
-  private openItem(id: string, deadline: number | null): boolean {
-    if (this.items.track(id, deadline) !== 'full') return true
+  private openItem(id: string, deadline: number | null): 'opened' | 'known' | null {
+    const result = this.items.track(id, deadline)
+    if (result !== 'full') return result
     this.log('gateway leaves too many items open', { items: this.items.size })
     this.items.failAll()
     this.end(CLOSE.error, 'upstream_error')
-    return false
+    return null
   }
 
   /** OpenAI without voice detection: a turn ends at a quiet frame, or after the longest turn. */
@@ -533,9 +546,9 @@ export class LiveSession {
     if (!this.upstreamSend(stream, openaiCommitEvent(eventId))) return null
     this.uncommitted = 0
     if (!this.vad) {
-      this.commitsInFlight += 1
-      if (this.commitsInFlight > this.limits.pendingMax) {
-        this.log('gateway does not answer commits', { commits: this.commitsInFlight })
+      this.unanswered.add(eventId)
+      if (this.unanswered.size > this.limits.pendingMax) {
+        this.log('gateway does not answer commits', { commits: this.unanswered.size })
         this.end(CLOSE.error, 'upstream_error')
         return null
       }
@@ -674,14 +687,18 @@ export class LiveSession {
   private openaiEvent(event: UpstreamEvent | null): void {
     if (!event || this.closed) return
     switch (event.type) {
-      case 'committed':
+      case 'committed': {
+        // A repeated or retired id changes nothing, and answers no commit of the server's.
+        const opened = this.openItem(event.itemId, Date.now() + this.limits.itemTimeoutMs)
+        if (opened !== 'opened') return
         this.committedCount += 1
-        if (!this.vad && this.commitsInFlight > 0) this.commitsInFlight -= 1
-        // A repeated or retired id changes nothing.
-        if (!this.openItem(event.itemId, Date.now() + this.limits.itemTimeoutMs)) return
+        // OpenAI answers commits in order; the event does not name the commit.
+        const oldest = this.unanswered.values().next()
+        if (!oldest.done) this.unanswered.delete(oldest.value)
         this.items.announce(event.itemId)
         this.notify()
         return
+      }
       case 'delta':
         // Only for an open item: ids the gateway never committed, or that are retired, keep no
         // state anywhere.
@@ -697,10 +714,14 @@ export class LiveSession {
         return
       case 'error':
         if (event.code === OPENAI_COMMIT_EMPTY) {
-          // The answer to a commit of the server's without audio left; nothing went wrong.
-          if (!this.vad && this.commitsInFlight > 0) this.commitsInFlight -= 1
-          // Only the answer to a final commit (its `event_id`) confirms the end of the audio.
-          if (event.eventId !== null && this.finalCommits.has(event.eventId)) this.finalEmpty = true
+          // The answer to a commit of the server's without audio left; nothing went wrong. It
+          // settles the commit it names (`event_id`), if that is unanswered, once; another,
+          // repeated or without one settles nothing.
+          if (event.eventId !== null) this.unanswered.delete(event.eventId)
+          // Only the answer to a final commit confirms the end of the audio.
+          if (event.eventId !== null && this.finalCommits.delete(event.eventId)) {
+            this.finalEmpty = true
+          }
           this.notify()
           return
         }
@@ -801,28 +822,34 @@ export class LiveSession {
     this.log('rotating', { seconds: Math.round(old.bytes / this.rate) })
     const opening = this.openStream(nextId)
     opening.catch(() => undefined)
-    await this.seal(old)
-    let next: Item | null
+    this.nextItemId = nextId
     try {
-      next = (await opening).item
-    } catch (error) {
-      if (this.closed) return
-      this.log('next stream failed', { failure: failureText(error) })
-      this.items.track(nextId)
-      this.items.fail(nextId)
-      this.end(CLOSE.error, 'upstream_error')
-      return
+      await this.seal(old)
+      let next: Item | null
+      try {
+        next = (await opening).item
+      } catch (error) {
+        if (this.closed) return
+        this.log('next stream failed', { failure: failureText(error) })
+        this.items.track(nextId)
+        this.items.fail(nextId)
+        this.end(CLOSE.error, 'upstream_error')
+        return
+      }
+      if (this.closed || !next) {
+        if (next) closeGateway(next.socket, this.limits.closeMs)
+        return
+      }
+      this.item = next
+      if (next.socket.readyState !== WebSocket.OPEN) {
+        // Fails the next item too if audio was held for it.
+        this.streamClosed(1006)
+        return
+      }
+      this.flushHold()
+    } finally {
+      this.nextItemId = null
     }
-    if (this.closed || !next) {
-      if (next) closeGateway(next.socket, this.limits.closeMs)
-      return
-    }
-    this.item = next
-    if (next.socket.readyState !== WebSocket.OPEN) {
-      this.streamClosed(1006)
-      return
-    }
-    this.flushHold()
   }
 
   /**
@@ -919,16 +946,16 @@ export class LiveSession {
 
   /**
    * Whether the gateway confirmed in time that all audio sent is in items. Without voice
-   * detection the server commits what is left and counts the answers to its commits; with it, a
-   * commit of the gateway's may cross the server's, so the server commits again after every
-   * `input_audio_buffer.committed` until a final commit of its own is answered with an empty
-   * buffer. The answer of a commit of the gateway's, however many, confirms nothing.
+   * detection the server commits what is left and waits until each of its commits is settled;
+   * with it, a commit of the gateway's may cross the server's, so the server commits again after
+   * every `input_audio_buffer.committed` of a new item until a final commit of its own is answered
+   * with an empty buffer. The answer of a commit of the gateway's, however many, confirms nothing.
    */
   private async audioCommitted(deadline: number): Promise<boolean> {
     if (!this.vad) {
       if (this.uncommitted > 0 && !this.openaiCommit('final')) return false
-      await this.until(() => this.streamGone || this.commitsInFlight === 0, deadline)
-      return !this.closed && this.commitsInFlight === 0
+      await this.until(() => this.streamGone || this.unanswered.size === 0, deadline)
+      return !this.closed && this.unanswered.size === 0
     }
     const rounds = this.limits.pendingMax + FINAL_COMMIT_SPARE_ROUNDS
     for (let round = 0; !this.finalEmpty; round += 1) {
