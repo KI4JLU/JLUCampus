@@ -17,7 +17,6 @@ import {
 import type { FolderTemplate } from '@justcampus/shared'
 import { AdminFolderRow } from '@/components/admin-folder-row'
 import { AdminGuard } from '@/components/admin-guard'
-import { AdminNav } from '@/components/admin-nav'
 import { DeleteFolderTemplateDialog } from '@/components/delete-folder-template-dialog'
 import { FolderTemplateFormDialog } from '@/components/folder-template-form-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -85,7 +84,6 @@ function FolderTemplates(): React.JSX.Element {
           </Button>
         }
       />
-      <AdminNav />
       <Card>
         <div className="overflow-x-auto">
           {isPending ? (

@@ -16,7 +16,6 @@ import {
 } from '@ki4jlu/design-system'
 import type { LayoutPreset } from '@justcampus/shared'
 import { AdminGuard } from '@/components/admin-guard'
-import { AdminNav } from '@/components/admin-nav'
 import { AdminPresetRow } from '@/components/admin-preset-row'
 import { DeletePresetDialog } from '@/components/delete-preset-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -67,7 +66,6 @@ function Presets(): React.JSX.Element {
           </Button>
         }
       />
-      <AdminNav />
       <Card>
         <div className="overflow-x-auto">
           {isPending ? (

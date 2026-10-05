@@ -18,7 +18,6 @@ import {
 import type { AdminComponent } from '@justcampus/shared'
 import { AdminComponentRow } from '@/components/admin-component-row'
 import { AdminGuard } from '@/components/admin-guard'
-import { AdminNav } from '@/components/admin-nav'
 import { DeleteComponentDialog } from '@/components/delete-component-dialog'
 import { PageHeader } from '@/components/page-header'
 import { PageLoading } from '@/components/page-message'
@@ -81,7 +80,6 @@ function ComponentCatalogue(): React.JSX.Element {
           </Button>
         }
       />
-      <AdminNav />
       <Card>
         <div className="overflow-x-auto">
           {isPending ? (

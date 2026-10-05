@@ -665,10 +665,13 @@
     "forbiddenDescription": "The administration area is only available to administrators.",
     "nav": {
       "label": "Administration",
+      "back": "Back to app",
+      "manage": "Management",
       "components": "Components",
       "folders": "Folder templates",
       "presets": "Layout presets",
-      "users": "Users"
+      "users": "Users",
+      "modules": "Modules"
     },
     "table": {
       "caption": "All components in catalogue order",

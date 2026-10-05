@@ -13,10 +13,12 @@ import {
   type MobilePaneTab
 } from '@ki4jlu/design-system'
 import type { Component, Me } from '@justcampus/shared'
+import { isAdminPath } from '@/lib/admin-nav'
 import { PageHeaderSlotsContext } from '@/lib/page-header-slots'
 import { PageSidePanelContext } from '@/lib/page-side-panel'
 import { cn } from '@/lib/utils'
 import { AccountMenu } from './account-menu'
+import { AdminSidebar } from './admin-sidebar'
 import { MoreAppsButton } from './more-apps'
 import { SidebarComponents } from './sidebar-editor'
 
@@ -40,13 +42,17 @@ interface AppFrameProps {
  * The chrome around every signed-in page: column with navigation and account, one <main>,
  * and one top bar that carries the page's title and actions (see `PageHeader`). A page can add
  * a column on the right (see `PageSidePanel`). The dashboard has no top bar; its few actions
- * sit on the page.
+ * sit on the page. In the admin area the column holds the admin navigation instead.
  */
 export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): React.JSX.Element {
   const { t } = useTranslation()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   // "More apps" is open, and with it the sidebar's rows are being edited.
   const [moreAppsOpen, setMoreAppsOpen] = useState(false)
+  // Others get the admin pages' "admins only" message under their own sidebar.
+  const admin = me.role === 'admin' && isAdminPath(pathname)
+  // The admin column has no sidebar rows to edit, so entering it (also by "back") closes the panel.
+  if (admin && moreAppsOpen) setMoreAppsOpen(false)
   const [leftOpen, setLeftOpenState] = useStoredOpen(LEFT_OPEN_KEY, true)
   // The panel was placed against the open column, so collapsing the column closes it.
   const setLeftOpen = useCallback(
@@ -76,7 +82,9 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
     { id: 'page', icon: <PanelsTopLeftIcon />, label: t('shell.tabPage'), pane: 'main' }
   ]
 
-  const nav = (
+  const nav = admin ? (
+    <AdminSidebar pathname={pathname} />
+  ) : (
     <>
       <NavItem asChild label={t('nav.dashboard')} active={pathname === '/'}>
         <Link to="/">
@@ -104,8 +112,8 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
         )}
         logo={<Logo product="Campus" size="sm" />}
         nav={nav}
-        navLabel={t('shell.navLabel')}
-        sidebarFooter={<SidebarFooter me={me} />}
+        navLabel={admin ? t('admin.nav.label') : t('shell.navLabel')}
+        sidebarFooter={<SidebarFooter me={me} admin={admin} />}
         rightPanel={
           sideLabel === null
             ? undefined
@@ -166,12 +174,12 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
   )
 }
 
-/** The foot of the column: "More apps", then the user's menu. */
-function SidebarFooter({ me }: { me: Me }): React.JSX.Element {
+/** The foot of the column: "More apps", then the user's menu. The admin area has only the menu. */
+function SidebarFooter({ me, admin }: { me: Me; admin: boolean }): React.JSX.Element {
   const collapsed = useSidebarCollapsed()
   return (
     <div className={cn('flex flex-col gap-2', collapsed && 'items-center')}>
-      <MoreAppsButton />
+      {admin ? null : <MoreAppsButton />}
       <AccountMenu me={me} />
     </div>
   )

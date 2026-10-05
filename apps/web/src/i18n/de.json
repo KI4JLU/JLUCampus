@@ -665,10 +665,13 @@
     "forbiddenDescription": "Der Adminbereich steht nur Administratorinnen und Administratoren zur Verfügung.",
     "nav": {
       "label": "Adminbereich",
+      "back": "Zurück zur App",
+      "manage": "Verwaltung",
       "components": "Komponenten",
       "folders": "Ordner-Vorlagen",
       "presets": "Layout-Vorlagen",
-      "users": "Nutzende"
+      "users": "Nutzende",
+      "modules": "Module"
     },
     "table": {
       "caption": "Alle Komponenten in Katalogreihenfolge",

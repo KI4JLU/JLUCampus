@@ -43,7 +43,6 @@ import {
 import { isSecretSet, secretKeysOf } from '@/lib/component-secrets'
 import { queryKeys, useCreateComponent, useUpdateComponent } from '@/lib/queries'
 import { toast } from '@/lib/toast'
-import { AdminNav } from './admin-nav'
 import { DeleteComponentDialog } from './delete-component-dialog'
 import { Field } from './field'
 import { FormSection } from './form-section'
@@ -181,7 +180,6 @@ export function ComponentEditor({ component }: ComponentEditorProps): React.JSX.
           </>
         }
       />
-      <AdminNav />
       <form ref={formRef} noValidate onSubmit={handleSubmit} className="flex flex-col gap-gutter">
         <FormSection title={t('admin.form.general')} description={t('admin.form.description')}>
           <div className="grid items-start gap-stack-md md:grid-cols-2">
