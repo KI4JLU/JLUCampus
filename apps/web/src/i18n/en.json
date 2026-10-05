@@ -105,8 +105,6 @@
     "notFoundTitle": "Component not found",
     "notFoundDescription": "This component no longer exists or has been disabled.",
     "iframe": {
-      "openInNewTab": "Open in new tab",
-      "embedHint": "Some websites cannot be embedded. If this area stays empty, open the page in a new tab.",
       "urlLabel": "Address (URL)",
       "urlHint": "The website embedded on the component's page. https only; http is allowed for localhost."
     },

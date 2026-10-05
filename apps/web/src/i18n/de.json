@@ -105,8 +105,6 @@
     "notFoundTitle": "Komponente nicht gefunden",
     "notFoundDescription": "Diese Komponente gibt es nicht mehr oder sie wurde deaktiviert.",
     "iframe": {
-      "openInNewTab": "In neuem Tab öffnen",
-      "embedHint": "Manche Websites lassen sich nicht einbetten. Bleibt der Bereich leer, öffnen Sie die Seite in einem neuen Tab.",
       "urlLabel": "Adresse (URL)",
       "urlHint": "Die Website, die auf der Seite der Komponente eingebettet wird. Nur https, http nur für localhost."
     },

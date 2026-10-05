@@ -603,8 +603,11 @@ strings).
   the sidebar editor: its panel lists the components not in the sidebar with a
   search, as rows that open nothing, and while it is open the sidebar's links
   turn into sortable rows; components drag between the two or join and leave
-  with the rows' buttons. The dashboard
-  hides the shell's top bar; its edit actions sit above the grid.
+  with the rows' buttons. The shell's top bar is hidden on every page (the
+  template cannot omit it); pages carry their own `PageHeader`, the dashboard
+  its edit actions above the grid. IFrame pages are only the iframe and fold
+  the navigation column while open (`useCollapsedSidebar`), without storing
+  that as the user's choice.
 - Dashboard: `react-grid-layout` (v2), 12 columns (`DASHBOARD_COLS`), row
   height `DASHBOARD_ROW_HEIGHT`, edit mode toggles drag/resize, "add widget"
   dialog lists the widgets of enabled components, tile header opens the
