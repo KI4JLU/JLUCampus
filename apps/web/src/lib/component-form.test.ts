@@ -4,6 +4,7 @@ import type { AdminComponent } from '@justcampus/shared'
 import { ApiRequestError } from './api'
 import {
   initialFormState,
+  isFormDirty,
   selectableTypes,
   serverFieldErrors,
   validateComponentForm
@@ -55,6 +56,47 @@ describe('selectableTypes', () => {
     expect(selectableTypes({ ...translator, type: 'files', config: {}, secrets: {} })).toEqual([
       'files'
     ])
+  })
+})
+
+describe('isFormDirty', () => {
+  const baseline = initialFormState(translator)
+
+  it('sees a changed field, deep inside the config too', () => {
+    expect(isFormDirty(baseline, baseline)).toBe(false)
+    expect(isFormDirty({ ...baseline, name: 'Translator' }, baseline)).toBe(true)
+    expect(
+      isFormDirty(
+        {
+          ...baseline,
+          config: { ...translator.config, llmModels: [{ id: 'llama', label: 'Llama' }] }
+        },
+        baseline
+      )
+    ).toBe(true)
+  })
+
+  it('forgets an edit that was undone', () => {
+    const edited = { ...baseline, name: 'Translator', config: { ...translator.config } }
+    expect(isFormDirty({ ...edited, name: translator.name }, baseline)).toBe(false)
+  })
+
+  it('counts a secret only when saving would change it', () => {
+    expect(
+      isFormDirty(
+        { ...baseline, secrets: { deeplApiKey: { value: ' ', remove: false } } },
+        baseline
+      )
+    ).toBe(false)
+    expect(
+      isFormDirty(
+        { ...baseline, secrets: { deeplApiKey: { value: 'key', remove: false } } },
+        baseline
+      )
+    ).toBe(true)
+    expect(
+      isFormDirty({ ...baseline, secrets: { llmApiKey: { value: '', remove: true } } }, baseline)
+    ).toBe(true)
   })
 })
 

@@ -486,6 +486,11 @@
         "exportEmpty": "Please enter text",
         "exportFailed": "{{format}}-Export fehlgeschlagen."
       },
+      "configSections": {
+        "deepl": "DeepL",
+        "llm": "AI models",
+        "defaults": "Defaults"
+      },
       "defaultTargetLabel": "Default target language",
       "defaultTargetHint": "The language users translate into until they choose another.",
       "secrets": {
@@ -687,8 +692,13 @@
     },
     "form": {
       "createTitle": "New component",
-      "editTitle": "Edit component",
+      "editTitle": "Edit component: {{name}}",
       "description": "The name and icon appear in the sidebar and on the component's widgets.",
+      "back": "All components",
+      "general": "General",
+      "credentials": "Credentials",
+      "credentialsDescription": "Keys are stored encrypted and never shown again.",
+      "configuration": "Configuration",
       "type": "Type",
       "moduleTypeHint": "Modules are built into JLU Campus; their type cannot be changed.",
       "name": "Name",
@@ -714,6 +724,16 @@
       "saveFailed": "The component could not be saved.",
       "created": "Component created.",
       "updated": "Component saved.",
+      "notFoundTitle": "Component not found",
+      "notFoundDescription": "This component no longer exists.",
+      "loadFailedTitle": "The component could not be loaded.",
+      "loadFailedDescription": "The server is not responding. Please try again.",
+      "unsaved": {
+        "title": "Discard changes?",
+        "description": "Your changes to this component are not saved yet. If you leave the page, they are lost.",
+        "stay": "Keep editing",
+        "leave": "Discard"
+      },
       "errors": {
         "type": "Choose a type.",
         "name": "Enter a name of at most 80 characters.",

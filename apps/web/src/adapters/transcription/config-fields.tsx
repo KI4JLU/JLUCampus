@@ -10,7 +10,6 @@ import {
   FormMessage,
   Input,
   Label,
-  PanelSection,
   Select,
   SelectContent,
   SelectItem,
@@ -49,6 +48,7 @@ import {
   transcriptionUrls
 } from '@justcampus/shared'
 import { Field } from '@/components/field'
+import { FormSection } from '@/components/form-section'
 import { ApiRequestError } from '@/lib/api'
 import type { SecretDraft } from '@/lib/component-secrets'
 import { cn } from '@/lib/utils'
@@ -83,9 +83,9 @@ function draftKey(draft: SecretDraft | undefined): string | null | undefined {
 /**
  * The transcription module's part of the admin form: speech recognition, speaker recognition and
  * the AI endpoint with their models (fetched from the endpoints) and connection tests, the defaults
- * of new uploads, limits, retention, and live transcription. The four API keys follow as secret
- * fields of the form (`COMPONENT_SECRETS.transcription`); model discovery and tests use the key as
- * typed, else the saved one.
+ * of new uploads, limits, retention, and live transcription, one card each. The four API keys are
+ * the form's secret fields (`COMPONENT_SECRETS.transcription`); model discovery and tests use the
+ * key as typed, else the saved one.
  */
 export function TranscriptionConfigFields({
   config,
@@ -111,477 +111,460 @@ export function TranscriptionConfigFields({
 
   return (
     <>
-      <PanelSection title={t('transcription.recording.admin.sections.asr')}>
-        <div className="flex flex-col gap-stack-md">
-          <UrlField
-            id={id('asr-base-url')}
-            name="asrBaseUrl"
-            value={config.asrBaseUrl}
-            error={errors.asrBaseUrl}
-            onChange={(asrBaseUrl) => update({ asrBaseUrl })}
-          />
-          <Field
-            id={id('provider-name')}
-            label={t('transcription.recording.admin.providerName.label')}
-            hint={t('transcription.recording.admin.providerName.hint')}
-            error={errors.providerName}
-          >
-            {(control) => (
-              <Input
-                {...control}
-                maxLength={80}
-                placeholder="KI@JLU"
-                value={config.providerName ?? ''}
-                onChange={(event) =>
-                  update({ providerName: event.target.value.trim() ? event.target.value : null })
-                }
-              />
-            )}
-          </Field>
-          <ModelList
-            id={id('asr-models')}
-            kind="asr"
-            field="asrModels"
-            config={config}
-            latest={latest}
-            onChange={onChange}
-            errors={errors}
-            apiKey={draftKey(secrets.apiKey)}
-          />
-          <DefaultModelSelect
-            id={id('default-asr-model')}
-            name="defaultAsrModel"
-            models={config.asrModels}
-            value={config.defaultAsrModel}
-            error={errors.defaultAsrModel}
-            onChange={(defaultAsrModel) => update({ defaultAsrModel })}
-          />
-          <NumberField
-            id={id('asr-concurrency')}
-            name="asrConcurrency"
-            value={config.asrConcurrency}
-            min={1}
-            max={32}
-            error={errors.asrConcurrency}
-            onChange={(value) => update({ asrConcurrency: value ?? Number.NaN })}
-          />
-          <ConnectionTest
-            target="asr"
-            disabled={!config.asrBaseUrl}
-            request={() => ({
-              target: 'asr',
-              // Several workers: the first is checked.
-              url: transcriptionUrls(config.asrBaseUrl)[0],
-              apiKey: draftKey(secrets.apiKey),
-              model: config.defaultAsrModel ?? firstAsrModel(config.asrModels)
-            })}
-          />
-        </div>
-      </PanelSection>
+      <FormSection title={t('transcription.recording.admin.sections.asr')}>
+        <UrlField
+          id={id('asr-base-url')}
+          name="asrBaseUrl"
+          value={config.asrBaseUrl}
+          error={errors.asrBaseUrl}
+          onChange={(asrBaseUrl) => update({ asrBaseUrl })}
+        />
+        <Field
+          id={id('provider-name')}
+          label={t('transcription.recording.admin.providerName.label')}
+          hint={t('transcription.recording.admin.providerName.hint')}
+          error={errors.providerName}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              maxLength={80}
+              placeholder="KI@JLU"
+              value={config.providerName ?? ''}
+              onChange={(event) =>
+                update({ providerName: event.target.value.trim() ? event.target.value : null })
+              }
+            />
+          )}
+        </Field>
+        <ModelList
+          id={id('asr-models')}
+          kind="asr"
+          field="asrModels"
+          config={config}
+          latest={latest}
+          onChange={onChange}
+          errors={errors}
+          apiKey={draftKey(secrets.apiKey)}
+        />
+        <DefaultModelSelect
+          id={id('default-asr-model')}
+          name="defaultAsrModel"
+          models={config.asrModels}
+          value={config.defaultAsrModel}
+          error={errors.defaultAsrModel}
+          onChange={(defaultAsrModel) => update({ defaultAsrModel })}
+        />
+        <NumberField
+          id={id('asr-concurrency')}
+          name="asrConcurrency"
+          value={config.asrConcurrency}
+          min={1}
+          max={32}
+          error={errors.asrConcurrency}
+          onChange={(value) => update({ asrConcurrency: value ?? Number.NaN })}
+        />
+        <ConnectionTest
+          target="asr"
+          disabled={!config.asrBaseUrl}
+          request={() => ({
+            target: 'asr',
+            // Several workers: the first is checked.
+            url: transcriptionUrls(config.asrBaseUrl)[0],
+            apiKey: draftKey(secrets.apiKey),
+            model: config.defaultAsrModel ?? firstAsrModel(config.asrModels)
+          })}
+        />
+      </FormSection>
 
-      <PanelSection title={t('transcription.recording.admin.sections.diarization')}>
-        <div className="flex flex-col gap-stack-md">
-          <SwitchField
-            id={id('diarization-enabled')}
-            name="diarizationEnabled"
-            checked={config.diarizationEnabled}
-            onChange={(diarizationEnabled) => update({ diarizationEnabled })}
-          />
-          <UrlField
-            id={id('diarization-url')}
-            name="diarizationUrl"
-            value={config.diarizationUrl}
-            // Empty: the speech recognition address, its first worker (kiChat's fallback).
-            placeholder={transcriptionUrls(config.asrBaseUrl)[0] || 'https://'}
-            error={errors.diarizationUrl}
-            onChange={(diarizationUrl) => update({ diarizationUrl })}
-          />
-          <Field
-            id={id('diarization-model')}
-            label={t('transcription.recording.admin.diarizationModel.label')}
-            hint={t('transcription.recording.admin.diarizationModel.hint')}
-            error={errors.diarizationModel}
-          >
-            {(control) => (
-              <Input
-                {...control}
-                maxLength={200}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder={TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL}
-                value={config.diarizationModel ?? ''}
-                onChange={(event) =>
-                  update({
-                    diarizationModel: event.target.value.trim() ? event.target.value : null
-                  })
-                }
-              />
-            )}
-          </Field>
-          <ConnectionTest
-            target="diarization"
-            disabled={!config.diarizationUrl && !config.asrBaseUrl}
-            request={() => ({
-              target: 'diarization',
-              // Left out, the server asks the speech recognition address, as jobs do.
-              url: config.diarizationUrl ?? undefined,
-              // Without a key of its own, the server uses the speech recognition key.
-              apiKey: draftKey(secrets.diarizationApiKey),
-              model: config.diarizationModel?.trim() || undefined
-            })}
-          />
-        </div>
-      </PanelSection>
+      <FormSection title={t('transcription.recording.admin.sections.diarization')}>
+        <SwitchField
+          id={id('diarization-enabled')}
+          name="diarizationEnabled"
+          checked={config.diarizationEnabled}
+          onChange={(diarizationEnabled) => update({ diarizationEnabled })}
+        />
+        <UrlField
+          id={id('diarization-url')}
+          name="diarizationUrl"
+          value={config.diarizationUrl}
+          // Empty: the speech recognition address, its first worker (kiChat's fallback).
+          placeholder={transcriptionUrls(config.asrBaseUrl)[0] || 'https://'}
+          error={errors.diarizationUrl}
+          onChange={(diarizationUrl) => update({ diarizationUrl })}
+        />
+        <Field
+          id={id('diarization-model')}
+          label={t('transcription.recording.admin.diarizationModel.label')}
+          hint={t('transcription.recording.admin.diarizationModel.hint')}
+          error={errors.diarizationModel}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              maxLength={200}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder={TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL}
+              value={config.diarizationModel ?? ''}
+              onChange={(event) =>
+                update({
+                  diarizationModel: event.target.value.trim() ? event.target.value : null
+                })
+              }
+            />
+          )}
+        </Field>
+        <ConnectionTest
+          target="diarization"
+          disabled={!config.diarizationUrl && !config.asrBaseUrl}
+          request={() => ({
+            target: 'diarization',
+            // Left out, the server asks the speech recognition address, as jobs do.
+            url: config.diarizationUrl ?? undefined,
+            // Without a key of its own, the server uses the speech recognition key.
+            apiKey: draftKey(secrets.diarizationApiKey),
+            model: config.diarizationModel?.trim() || undefined
+          })}
+        />
+      </FormSection>
 
-      <PanelSection title={t('transcription.recording.admin.sections.llm')}>
-        <div className="flex flex-col gap-stack-md">
-          <UrlField
-            id={id('llm-base-url')}
-            name="llmBaseUrl"
-            value={config.llmBaseUrl}
-            error={errors.llmBaseUrl}
-            onChange={(llmBaseUrl) => update({ llmBaseUrl })}
-          />
-          <ModelList
-            id={id('llm-models')}
-            kind="llm"
-            field="llmModels"
-            config={config}
-            latest={latest}
-            onChange={onChange}
-            errors={errors}
-            apiKey={draftKey(secrets.llmApiKey)}
-          />
-          <DefaultModelSelect
-            id={id('default-correction-model')}
-            name="defaultCorrectionModel"
-            models={config.llmModels}
-            value={config.defaultCorrectionModel}
-            error={errors.defaultCorrectionModel}
-            onChange={(defaultCorrectionModel) => update({ defaultCorrectionModel })}
-          />
-          <DefaultModelSelect
-            id={id('default-summary-model')}
-            name="defaultSummaryModel"
-            models={config.llmModels}
-            value={config.defaultSummaryModel}
-            error={errors.defaultSummaryModel}
-            onChange={(defaultSummaryModel) => update({ defaultSummaryModel })}
-          />
-          <SwitchField
-            id={id('llm-disable-thinking')}
-            name="llmDisableThinking"
-            checked={config.llmDisableThinking}
-            onChange={(llmDisableThinking) => update({ llmDisableThinking })}
-          />
-          <ConnectionTest
-            target="llm"
-            disabled={!config.llmBaseUrl}
-            request={() => ({
-              target: 'llm',
-              url: config.llmBaseUrl ?? undefined,
-              apiKey: draftKey(secrets.llmApiKey),
-              model: config.defaultCorrectionModel ?? firstModel(config.llmModels),
-              disableThinking: config.llmDisableThinking
-            })}
-          />
-        </div>
-      </PanelSection>
+      <FormSection title={t('transcription.recording.admin.sections.llm')}>
+        <UrlField
+          id={id('llm-base-url')}
+          name="llmBaseUrl"
+          value={config.llmBaseUrl}
+          error={errors.llmBaseUrl}
+          onChange={(llmBaseUrl) => update({ llmBaseUrl })}
+        />
+        <ModelList
+          id={id('llm-models')}
+          kind="llm"
+          field="llmModels"
+          config={config}
+          latest={latest}
+          onChange={onChange}
+          errors={errors}
+          apiKey={draftKey(secrets.llmApiKey)}
+        />
+        <DefaultModelSelect
+          id={id('default-correction-model')}
+          name="defaultCorrectionModel"
+          models={config.llmModels}
+          value={config.defaultCorrectionModel}
+          error={errors.defaultCorrectionModel}
+          onChange={(defaultCorrectionModel) => update({ defaultCorrectionModel })}
+        />
+        <DefaultModelSelect
+          id={id('default-summary-model')}
+          name="defaultSummaryModel"
+          models={config.llmModels}
+          value={config.defaultSummaryModel}
+          error={errors.defaultSummaryModel}
+          onChange={(defaultSummaryModel) => update({ defaultSummaryModel })}
+        />
+        <SwitchField
+          id={id('llm-disable-thinking')}
+          name="llmDisableThinking"
+          checked={config.llmDisableThinking}
+          onChange={(llmDisableThinking) => update({ llmDisableThinking })}
+        />
+        <ConnectionTest
+          target="llm"
+          disabled={!config.llmBaseUrl}
+          request={() => ({
+            target: 'llm',
+            url: config.llmBaseUrl ?? undefined,
+            apiKey: draftKey(secrets.llmApiKey),
+            model: config.defaultCorrectionModel ?? firstModel(config.llmModels),
+            disableThinking: config.llmDisableThinking
+          })}
+        />
+      </FormSection>
 
-      <PanelSection title={t('transcription.recording.admin.sections.defaults')}>
-        <div className="flex flex-col gap-stack-md">
-          <Field
-            id={id('default-language')}
-            label={t('transcription.recording.admin.defaultLanguage.label')}
-            hint={t('transcription.recording.admin.defaultLanguage.hint')}
-            error={errors.defaultLanguage}
-          >
-            {(control) => (
-              <Select
-                value={config.defaultLanguage}
-                onValueChange={(value) =>
-                  update({ defaultLanguage: value as TranscriptionLanguage })
-                }
-              >
-                <SelectTrigger {...control}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TRANSCRIPTION_LANGUAGES.map((language) => (
-                    <SelectItem key={language} value={language}>
-                      {t(`transcription.recording.admin.languages.${language}`)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </Field>
-          <Field
-            id={id('default-speaker-count')}
-            label={t('transcription.recording.admin.defaultSpeakerCount.label')}
-            hint={t('transcription.recording.admin.defaultSpeakerCount.hint')}
-            error={errors.defaultSpeakerCount}
-          >
-            {(control) => (
-              <Select
-                value={config.defaultSpeakerCount}
-                onValueChange={(value) =>
-                  update({ defaultSpeakerCount: value as TranscriptionSpeakerCount })
-                }
-              >
-                <SelectTrigger {...control}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TRANSCRIPTION_SPEAKER_COUNTS.map((count) => (
-                    <SelectItem key={count} value={count}>
-                      {t(`transcription.recording.admin.speakerCounts.${count}`)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </Field>
-          <SwitchField
-            id={id('default-llm-correction')}
-            name="defaultLlmCorrection"
-            checked={config.defaultLlmCorrection}
-            onChange={(defaultLlmCorrection) => update({ defaultLlmCorrection })}
-          />
-        </div>
-      </PanelSection>
-
-      <PanelSection title={t('transcription.recording.admin.sections.limits')}>
-        <div className="flex flex-col gap-stack-md">
-          <NumberField
-            id={id('max-file-megabytes')}
-            name="maxFileMegabytes"
-            value={Math.round((config.maxFileBytes / MEBIBYTE) * 100) / 100}
-            min={1}
-            max={10_240}
-            error={errors.maxFileBytes}
-            onChange={(megabytes) =>
-              update({
-                maxFileBytes: megabytes === null ? Number.NaN : Math.round(megabytes * MEBIBYTE)
-              })
-            }
-          />
-          <NumberField
-            id={id('max-duration-minutes')}
-            name="maxDurationMinutes"
-            value={config.maxDurationSeconds === null ? null : config.maxDurationSeconds / 60}
-            min={1}
-            nullable
-            error={errors.maxDurationSeconds}
-            onChange={(minutes) =>
-              update({ maxDurationSeconds: minutes === null ? null : Math.round(minutes * 60) })
-            }
-          />
-          <NumberField
-            id={id('max-files-per-group')}
-            name="maxFilesPerGroup"
-            value={config.maxFilesPerGroup}
-            min={1}
-            max={TRANSCRIPTION_GROUP_FILES_MAX}
-            nullable
-            error={errors.maxFilesPerGroup}
-            onChange={(maxFilesPerGroup) => update({ maxFilesPerGroup })}
-          />
-          <NumberField
-            id={id('max-active-jobs')}
-            name="maxActiveJobsPerUser"
-            value={config.maxActiveJobsPerUser}
-            min={1}
-            max={1000}
-            error={errors.maxActiveJobsPerUser}
-            onChange={(value) => update({ maxActiveJobsPerUser: value ?? Number.NaN })}
-          />
-          <NumberField
-            id={id('worker-concurrency')}
-            name="workerConcurrency"
-            value={config.workerConcurrency}
-            min={1}
-            max={16}
-            error={errors.workerConcurrency}
-            onChange={(value) => update({ workerConcurrency: value ?? Number.NaN })}
-          />
-          <NumberField
-            id={id('chunk-seconds')}
-            name="chunkSeconds"
-            value={config.chunkSeconds}
-            min={30}
-            max={3600}
-            error={errors.chunkSeconds}
-            onChange={(value) => update({ chunkSeconds: value ?? Number.NaN })}
-          />
-          <NumberField
-            id={id('upstream-timeout')}
-            name="upstreamTimeoutSeconds"
-            value={config.upstreamTimeoutSeconds}
-            min={10}
-            max={3600}
-            error={errors.upstreamTimeoutSeconds}
-            onChange={(value) => update({ upstreamTimeoutSeconds: value ?? Number.NaN })}
-          />
-        </div>
-      </PanelSection>
-
-      <PanelSection title={t('transcription.recording.admin.sections.retention')}>
-        <div className="flex flex-col gap-stack-md">
-          <NumberField
-            id={id('transcript-retention')}
-            name="transcriptRetentionHours"
-            value={config.transcriptRetentionHours}
-            min={1}
-            max={87_600}
-            nullable
-            error={errors.transcriptRetentionHours}
-            onChange={(transcriptRetentionHours) => update({ transcriptRetentionHours })}
-          />
-          <NumberField
-            id={id('unsaved-job-retention')}
-            name="unsavedJobRetentionHours"
-            value={config.unsavedJobRetentionHours}
-            min={1}
-            max={720}
-            error={errors.unsavedJobRetentionHours}
-            onChange={(value) => update({ unsavedJobRetentionHours: value ?? Number.NaN })}
-          />
-        </div>
-      </PanelSection>
-
-      <PanelSection title={t('transcription.recording.admin.sections.live')}>
-        <div className="flex flex-col gap-stack-md">
-          <RealtimeModesField
-            id={id('realtime-modes')}
-            modes={config.realtimeModes}
-            error={errors.realtimeModes}
-            onChange={(realtimeModes) =>
-              update({
-                realtimeModes,
-                defaultRealtimeMode:
-                  config.defaultRealtimeMode && realtimeModes.includes(config.defaultRealtimeMode)
-                    ? config.defaultRealtimeMode
-                    : null
-              })
-            }
-          />
-          <Field
-            id={id('default-realtime-mode')}
-            label={t('transcription.recording.admin.defaultRealtimeMode.label')}
-            hint={t('transcription.recording.admin.defaultRealtimeMode.hint')}
-            error={errors.defaultRealtimeMode}
-          >
-            {(control) => (
-              <Select
-                value={config.defaultRealtimeMode ?? AUTO}
-                onValueChange={(value) =>
-                  update({
-                    defaultRealtimeMode:
-                      value === AUTO ? null : (value as TranscriptionRealtimeMode)
-                  })
-                }
-              >
-                <SelectTrigger {...control}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={AUTO}>
-                    {t('transcription.recording.admin.defaultRealtimeMode.auto')}
+      <FormSection title={t('transcription.recording.admin.sections.defaults')}>
+        <Field
+          id={id('default-language')}
+          label={t('transcription.recording.admin.defaultLanguage.label')}
+          hint={t('transcription.recording.admin.defaultLanguage.hint')}
+          error={errors.defaultLanguage}
+        >
+          {(control) => (
+            <Select
+              value={config.defaultLanguage}
+              onValueChange={(value) => update({ defaultLanguage: value as TranscriptionLanguage })}
+            >
+              <SelectTrigger {...control}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRANSCRIPTION_LANGUAGES.map((language) => (
+                  <SelectItem key={language} value={language}>
+                    {t(`transcription.recording.admin.languages.${language}`)}
                   </SelectItem>
-                  {config.realtimeModes.map((mode) => (
-                    <SelectItem key={mode} value={mode}>
-                      {t(`transcription.recording.admin.modes.${mode}`)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </Field>
-          <UrlField
-            id={id('onprem-gateway-url')}
-            name="onpremGatewayUrl"
-            value={config.onpremGatewayUrl}
-            // Empty: the speech recognition address, its first worker.
-            placeholder={config.asrBaseUrl?.split(',')[0]?.trim() || 'https://'}
-            error={errors.onpremGatewayUrl}
-            onChange={(onpremGatewayUrl) => update({ onpremGatewayUrl })}
-          />
-          <Field
-            id={id('onprem-realtime-model')}
-            label={t('transcription.recording.admin.onpremRealtimeModel.label')}
-            hint={t('transcription.recording.admin.onpremRealtimeModel.hint')}
-            error={errors.onpremRealtimeModel}
-          >
-            {(control) => (
-              <Input
-                {...control}
-                maxLength={200}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder={TRANSCRIPTION_DEFAULT_REALTIME_MODEL}
-                value={config.onpremRealtimeModel}
-                onChange={(event) => update({ onpremRealtimeModel: event.target.value })}
-              />
-            )}
-          </Field>
-          <ConnectionTest
-            target="realtimeOnprem"
-            disabled={!config.onpremGatewayUrl && !config.asrBaseUrl}
-            request={() => ({
-              target: 'realtimeOnprem',
-              gatewayUrl: config.onpremGatewayUrl,
-              // The gateway takes the speech recognition key.
-              apiKey: draftKey(secrets.apiKey),
-              model: config.onpremRealtimeModel.trim() || undefined
-            })}
-          />
-          <UrlField
-            id={id('openai-realtime-url')}
-            name="openaiRealtimeUrl"
-            value={config.openaiRealtimeUrl}
-            placeholder="https://api.openai.com/v1"
-            error={errors.openaiRealtimeUrl}
-            // Required: an emptied field fails validation rather than turning into "not set".
-            onChange={(value) => update({ openaiRealtimeUrl: value ?? '' })}
-          />
-          <Field
-            id={id('openai-realtime-model')}
-            label={t('transcription.recording.admin.openaiRealtimeModel.label')}
-            hint={t('transcription.recording.admin.openaiRealtimeModel.hint')}
-            error={errors.openaiRealtimeModel}
-          >
-            {(control) => (
-              <Input
-                {...control}
-                maxLength={200}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder="gpt-realtime-whisper"
-                value={config.openaiRealtimeModel}
-                onChange={(event) => update({ openaiRealtimeModel: event.target.value })}
-              />
-            )}
-          </Field>
-          <ConnectionTest
-            target="realtimeOpenai"
-            disabled={!config.openaiRealtimeUrl}
-            request={() => ({
-              target: 'realtimeOpenai',
-              url: config.openaiRealtimeUrl || undefined,
-              apiKey: draftKey(secrets.openaiRealtimeApiKey),
-              model: config.openaiRealtimeModel.trim() || undefined
-            })}
-          />
-        </div>
-      </PanelSection>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <Field
+          id={id('default-speaker-count')}
+          label={t('transcription.recording.admin.defaultSpeakerCount.label')}
+          hint={t('transcription.recording.admin.defaultSpeakerCount.hint')}
+          error={errors.defaultSpeakerCount}
+        >
+          {(control) => (
+            <Select
+              value={config.defaultSpeakerCount}
+              onValueChange={(value) =>
+                update({ defaultSpeakerCount: value as TranscriptionSpeakerCount })
+              }
+            >
+              <SelectTrigger {...control}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRANSCRIPTION_SPEAKER_COUNTS.map((count) => (
+                  <SelectItem key={count} value={count}>
+                    {t(`transcription.recording.admin.speakerCounts.${count}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <SwitchField
+          id={id('default-llm-correction')}
+          name="defaultLlmCorrection"
+          checked={config.defaultLlmCorrection}
+          onChange={(defaultLlmCorrection) => update({ defaultLlmCorrection })}
+        />
+      </FormSection>
 
-      <PanelSection
+      <FormSection title={t('transcription.recording.admin.sections.limits')}>
+        <NumberField
+          id={id('max-file-megabytes')}
+          name="maxFileMegabytes"
+          value={Math.round((config.maxFileBytes / MEBIBYTE) * 100) / 100}
+          min={1}
+          max={10_240}
+          error={errors.maxFileBytes}
+          onChange={(megabytes) =>
+            update({
+              maxFileBytes: megabytes === null ? Number.NaN : Math.round(megabytes * MEBIBYTE)
+            })
+          }
+        />
+        <NumberField
+          id={id('max-duration-minutes')}
+          name="maxDurationMinutes"
+          value={config.maxDurationSeconds === null ? null : config.maxDurationSeconds / 60}
+          min={1}
+          nullable
+          error={errors.maxDurationSeconds}
+          onChange={(minutes) =>
+            update({ maxDurationSeconds: minutes === null ? null : Math.round(minutes * 60) })
+          }
+        />
+        <NumberField
+          id={id('max-files-per-group')}
+          name="maxFilesPerGroup"
+          value={config.maxFilesPerGroup}
+          min={1}
+          max={TRANSCRIPTION_GROUP_FILES_MAX}
+          nullable
+          error={errors.maxFilesPerGroup}
+          onChange={(maxFilesPerGroup) => update({ maxFilesPerGroup })}
+        />
+        <NumberField
+          id={id('max-active-jobs')}
+          name="maxActiveJobsPerUser"
+          value={config.maxActiveJobsPerUser}
+          min={1}
+          max={1000}
+          error={errors.maxActiveJobsPerUser}
+          onChange={(value) => update({ maxActiveJobsPerUser: value ?? Number.NaN })}
+        />
+        <NumberField
+          id={id('worker-concurrency')}
+          name="workerConcurrency"
+          value={config.workerConcurrency}
+          min={1}
+          max={16}
+          error={errors.workerConcurrency}
+          onChange={(value) => update({ workerConcurrency: value ?? Number.NaN })}
+        />
+        <NumberField
+          id={id('chunk-seconds')}
+          name="chunkSeconds"
+          value={config.chunkSeconds}
+          min={30}
+          max={3600}
+          error={errors.chunkSeconds}
+          onChange={(value) => update({ chunkSeconds: value ?? Number.NaN })}
+        />
+        <NumberField
+          id={id('upstream-timeout')}
+          name="upstreamTimeoutSeconds"
+          value={config.upstreamTimeoutSeconds}
+          min={10}
+          max={3600}
+          error={errors.upstreamTimeoutSeconds}
+          onChange={(value) => update({ upstreamTimeoutSeconds: value ?? Number.NaN })}
+        />
+      </FormSection>
+
+      <FormSection title={t('transcription.recording.admin.sections.retention')}>
+        <NumberField
+          id={id('transcript-retention')}
+          name="transcriptRetentionHours"
+          value={config.transcriptRetentionHours}
+          min={1}
+          max={87_600}
+          nullable
+          error={errors.transcriptRetentionHours}
+          onChange={(transcriptRetentionHours) => update({ transcriptRetentionHours })}
+        />
+        <NumberField
+          id={id('unsaved-job-retention')}
+          name="unsavedJobRetentionHours"
+          value={config.unsavedJobRetentionHours}
+          min={1}
+          max={720}
+          error={errors.unsavedJobRetentionHours}
+          onChange={(value) => update({ unsavedJobRetentionHours: value ?? Number.NaN })}
+        />
+      </FormSection>
+
+      <FormSection title={t('transcription.recording.admin.sections.live')}>
+        <RealtimeModesField
+          id={id('realtime-modes')}
+          modes={config.realtimeModes}
+          error={errors.realtimeModes}
+          onChange={(realtimeModes) =>
+            update({
+              realtimeModes,
+              defaultRealtimeMode:
+                config.defaultRealtimeMode && realtimeModes.includes(config.defaultRealtimeMode)
+                  ? config.defaultRealtimeMode
+                  : null
+            })
+          }
+        />
+        <Field
+          id={id('default-realtime-mode')}
+          label={t('transcription.recording.admin.defaultRealtimeMode.label')}
+          hint={t('transcription.recording.admin.defaultRealtimeMode.hint')}
+          error={errors.defaultRealtimeMode}
+        >
+          {(control) => (
+            <Select
+              value={config.defaultRealtimeMode ?? AUTO}
+              onValueChange={(value) =>
+                update({
+                  defaultRealtimeMode: value === AUTO ? null : (value as TranscriptionRealtimeMode)
+                })
+              }
+            >
+              <SelectTrigger {...control}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTO}>
+                  {t('transcription.recording.admin.defaultRealtimeMode.auto')}
+                </SelectItem>
+                {config.realtimeModes.map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {t(`transcription.recording.admin.modes.${mode}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <UrlField
+          id={id('onprem-gateway-url')}
+          name="onpremGatewayUrl"
+          value={config.onpremGatewayUrl}
+          // Empty: the speech recognition address, its first worker.
+          placeholder={config.asrBaseUrl?.split(',')[0]?.trim() || 'https://'}
+          error={errors.onpremGatewayUrl}
+          onChange={(onpremGatewayUrl) => update({ onpremGatewayUrl })}
+        />
+        <Field
+          id={id('onprem-realtime-model')}
+          label={t('transcription.recording.admin.onpremRealtimeModel.label')}
+          hint={t('transcription.recording.admin.onpremRealtimeModel.hint')}
+          error={errors.onpremRealtimeModel}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              maxLength={200}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder={TRANSCRIPTION_DEFAULT_REALTIME_MODEL}
+              value={config.onpremRealtimeModel}
+              onChange={(event) => update({ onpremRealtimeModel: event.target.value })}
+            />
+          )}
+        </Field>
+        <ConnectionTest
+          target="realtimeOnprem"
+          disabled={!config.onpremGatewayUrl && !config.asrBaseUrl}
+          request={() => ({
+            target: 'realtimeOnprem',
+            gatewayUrl: config.onpremGatewayUrl,
+            // The gateway takes the speech recognition key.
+            apiKey: draftKey(secrets.apiKey),
+            model: config.onpremRealtimeModel.trim() || undefined
+          })}
+        />
+        <UrlField
+          id={id('openai-realtime-url')}
+          name="openaiRealtimeUrl"
+          value={config.openaiRealtimeUrl}
+          placeholder="https://api.openai.com/v1"
+          error={errors.openaiRealtimeUrl}
+          // Required: an emptied field fails validation rather than turning into "not set".
+          onChange={(value) => update({ openaiRealtimeUrl: value ?? '' })}
+        />
+        <Field
+          id={id('openai-realtime-model')}
+          label={t('transcription.recording.admin.openaiRealtimeModel.label')}
+          hint={t('transcription.recording.admin.openaiRealtimeModel.hint')}
+          error={errors.openaiRealtimeModel}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              maxLength={200}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="gpt-realtime-whisper"
+              value={config.openaiRealtimeModel}
+              onChange={(event) => update({ openaiRealtimeModel: event.target.value })}
+            />
+          )}
+        </Field>
+        <ConnectionTest
+          target="realtimeOpenai"
+          disabled={!config.openaiRealtimeUrl}
+          request={() => ({
+            target: 'realtimeOpenai',
+            url: config.openaiRealtimeUrl || undefined,
+            apiKey: draftKey(secrets.openaiRealtimeApiKey),
+            model: config.openaiRealtimeModel.trim() || undefined
+          })}
+        />
+      </FormSection>
+
+      <FormSection
         title={t('transcription.recording.admin.sections.storage')}
-        hint={t('transcription.recording.admin.storageHint')}
+        description={t('transcription.recording.admin.storageHint')}
       >
         <ConnectionTest target="storage" request={() => ({ target: 'storage' })} />
-      </PanelSection>
+      </FormSection>
     </>
   )
 }
@@ -836,6 +819,8 @@ function ModelList({
     <FormItem error={groupError}>
       <fieldset
         aria-describedby={[groupError && `${id}-error`, `${id}-hint`].filter(Boolean).join(' ')}
+        // Focusable while it has an error, so the editor can take the admin to it.
+        tabIndex={groupError ? -1 : undefined}
         className="flex min-w-0 flex-col gap-2"
       >
         {/* DS gap: no legend for a group of fields; `Label` gives it the label's look. */}

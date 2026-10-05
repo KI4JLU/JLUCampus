@@ -17,11 +17,14 @@ interface DeleteComponentDialogProps {
   /** The component to delete; `null` closes the dialog. */
   component: Component | null
   onClose: () => void
+  /** After the component is gone, e.g. to leave its editor. */
+  onDeleted?: () => void
 }
 
 export function DeleteComponentDialog({
   component,
-  onClose
+  onClose,
+  onDeleted
 }: DeleteComponentDialogProps): React.JSX.Element {
   const { t } = useTranslation()
   const remove = useDeleteComponent()
@@ -32,6 +35,7 @@ export function DeleteComponentDialog({
       onSuccess: () => {
         toast({ variant: 'success', title: t('admin.delete.done', { name: component.name }) })
         onClose()
+        onDeleted?.()
       },
       onError: () => toast({ variant: 'error', title: t('admin.delete.failed') })
     })

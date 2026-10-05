@@ -486,6 +486,11 @@
         "exportEmpty": "Bitte geben Sie Text ein",
         "exportFailed": "{{format}}-Export fehlgeschlagen."
       },
+      "configSections": {
+        "deepl": "DeepL",
+        "llm": "KI-Modelle",
+        "defaults": "Voreinstellungen"
+      },
       "defaultTargetLabel": "Standard-Zielsprache",
       "defaultTargetHint": "In diese Sprache übersetzen Nutzende, bis sie eine andere wählen.",
       "secrets": {
@@ -687,8 +692,13 @@
     },
     "form": {
       "createTitle": "Neue Komponente",
-      "editTitle": "Komponente bearbeiten",
+      "editTitle": "Komponente bearbeiten: {{name}}",
       "description": "Name und Symbol erscheinen in der Seitenleiste und auf den Widgets der Komponente.",
+      "back": "Alle Komponenten",
+      "general": "Allgemein",
+      "credentials": "Zugangsdaten",
+      "credentialsDescription": "Schlüssel werden verschlüsselt gespeichert und nie wieder angezeigt.",
+      "configuration": "Konfiguration",
       "type": "Typ",
       "moduleTypeHint": "Module sind in JLU Campus eingebaut; ihr Typ lässt sich nicht ändern.",
       "name": "Name",
@@ -714,6 +724,16 @@
       "saveFailed": "Die Komponente konnte nicht gespeichert werden.",
       "created": "Komponente angelegt.",
       "updated": "Komponente gespeichert.",
+      "notFoundTitle": "Komponente nicht gefunden",
+      "notFoundDescription": "Diese Komponente gibt es nicht mehr.",
+      "loadFailedTitle": "Die Komponente konnte nicht geladen werden.",
+      "loadFailedDescription": "Der Server antwortet nicht. Bitte versuchen Sie es erneut.",
+      "unsaved": {
+        "title": "Änderungen verwerfen?",
+        "description": "Ihre Änderungen an dieser Komponente sind noch nicht gespeichert. Wenn Sie die Seite verlassen, gehen sie verloren.",
+        "stay": "Weiter bearbeiten",
+        "leave": "Verwerfen"
+      },
       "errors": {
         "type": "Wählen Sie einen Typ.",
         "name": "Geben Sie einen Namen mit höchstens 80 Zeichen ein.",
