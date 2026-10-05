@@ -15,6 +15,7 @@ import {
   onpremTarget,
   rememberAvailability,
   UNAVAILABLE_TTL_MS,
+  warnIfProxied,
   type OnpremTarget
 } from './bridge.js'
 import { realtimeRouter } from './index.js'
@@ -183,6 +184,65 @@ describe('the realtime bridge proxy', () => {
     expect(JSON.parse(failure)).toMatchObject({
       error: { message: 'The realtime bridge cannot reach the gateway' }
     })
+  })
+
+  it('logs what the bridge says without the gateway key it may reflect (B-1)', async () => {
+    const app = testApp(realtimeRouter, {
+      config: config(),
+      secrets: { apiKey: 'gw-reflected-key-0123' }
+    })
+    vi.mocked(console.error).mockClear()
+    answers['/realtime'] = () => ({
+      status: 502,
+      type: 'application/json',
+      body: JSON.stringify({
+        error: 'upstream_failed',
+        message: 'connect failed for X-Gateway-Key gw-reflected-key-0123'
+      })
+    })
+    const failed = await app.request(
+      relative(TRANSCRIPTION_API.realtimeOnpremSignaling),
+      json('POST', { sdp: probeOffer() })
+    )
+    expect(failed.status).toBe(502)
+    expect(await failed.text()).not.toContain('gw-reflected-key-0123')
+    const logged = vi.mocked(console.error).mock.calls.flat().map(String).join(' ')
+    expect(logged).toContain('connect failed')
+    expect(logged).not.toContain('gw-reflected-key-0123')
+  })
+
+  it('tells a busy bridge apart (B-3)', async () => {
+    answers['/realtime'] = () => ({
+      status: 503,
+      type: 'application/json',
+      body: JSON.stringify({ error: 'busy', message: 'the bridge holds as many sessions' })
+    })
+    await expect(onpremSignaling(target(), probeOffer())).rejects.toMatchObject({
+      reason: 'bridgeBusy'
+    })
+  })
+
+  it('warns once when the bridge would be reached through the proxy (B-6)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const environment = {
+      HTTP_PROXY: 'http://proxy.example:3128',
+      NODE_USE_ENV_PROXY: '1',
+      NO_PROXY: 'localhost,127.0.0.1,minio'
+    }
+    expect(warnIfProxied('http://host.docker.internal:8089', environment, [])).toBe(true)
+    expect(warnIfProxied('http://host.docker.internal:8089/realtime', environment, [])).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0])).toContain('host.docker.internal:8089')
+    expect(String(warn.mock.calls[0])).not.toContain('proxy.example')
+    expect(
+      warnIfProxied(
+        'http://host.docker.internal:8089',
+        { ...environment, NO_PROXY: `${environment.NO_PROXY},host.docker.internal` },
+        []
+      )
+    ).toBe(false)
+    expect(warnIfProxied('http://localhost:8089', environment, [])).toBe(false)
+    warn.mockRestore()
   })
 
   it('tells a model the key may not use from a refused key by the model list', async () => {

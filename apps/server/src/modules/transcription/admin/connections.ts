@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import type { Readable } from 'node:stream'
 
 import {
+  firstSpeechModel,
+  isSpeechModelId,
   TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL,
   type TRANSCRIPTION_CONNECTION_ANSWERS,
   type TranscriptionConnectionFinding,
@@ -14,7 +16,14 @@ import { z } from 'zod'
 import { env } from '../../../env.js'
 import type { TranscriptionRuntime } from '../config.js'
 import { asrBaseUrls, openaiRealtimeEndpoints } from '../config.js'
-import { bearer, listModels, upstreamFetch, UpstreamError, upstreamUrl } from '../http.js'
+import {
+  bearer,
+  listModels,
+  maskSecrets,
+  upstreamFetch,
+  UpstreamError,
+  upstreamUrl
+} from '../http.js'
 import { parseVerboseJson, transcriptionForm } from '../jobs/asr.js'
 import { diarizationForm, parseDiarization } from '../jobs/diarization.js'
 import {
@@ -44,22 +53,82 @@ export function chatModels(models: readonly TranscriptionModel[]): Transcription
   return models.filter((model) => !nonChatModel.test(model.id))
 }
 
-/** The models of an OpenAI-compatible endpoint, chat models only for `llm`. */
+const modelInfoSchema = z.object({
+  data: z.array(
+    z.object({
+      model_name: z.string(),
+      model_info: z.object({ mode: z.string().nullish() }).nullish()
+    })
+  )
+})
+
+/**
+ * LiteLLM's `GET <baseUrl>/model/info`: the mode of each model it names (`chat`, `embedding`,
+ * `audio_transcription`, …), where it has one. Empty for an endpoint without it (not LiteLLM) or
+ * when it fails: the ids decide then.
+ */
+export async function modelModes(
+  baseUrl: string,
+  apiKey: string | null,
+  signal?: AbortSignal
+): Promise<Map<string, string>> {
+  const modes = new Map<string, string>()
+  try {
+    const response = await upstreamFetch(upstreamUrl(baseUrl, 'model/info'), {
+      headers: { Accept: 'application/json', ...bearer(apiKey) },
+      timeoutMs: 5000,
+      signal
+    })
+    if (!response.ok) {
+      await response.body?.cancel()
+      return modes
+    }
+    const parsed = modelInfoSchema.safeParse(await response.json())
+    if (!parsed.success) return modes
+    for (const entry of parsed.data.data) {
+      const mode = entry.model_info?.mode
+      if (mode) modes.set(entry.model_name.trim(), mode)
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error
+  }
+  return modes
+}
+
+/**
+ * The speech recognition models of a list: LiteLLM's `audio_transcription` mode where the
+ * endpoint names a mode, else by id (`isSpeechModelId`). A chat model never makes it in, so the
+ * first model of the list cannot be one.
+ */
+export function speechModels(
+  models: readonly TranscriptionModel[],
+  modes: ReadonlyMap<string, string> = new Map()
+): TranscriptionModel[] {
+  return models.filter((model) => {
+    const mode = modes.get(model.id)
+    return mode ? mode === 'audio_transcription' : isSpeechModelId(model.id)
+  })
+}
+
+/**
+ * The models of an OpenAI-compatible endpoint of the kind asked for: speech recognition models
+ * for `asr`, chat models for `llm`; `leftOut` counts the others.
+ */
 export async function discoverModels(
   kind: 'asr' | 'llm',
   baseUrl: string,
   apiKey: string | null,
   signal?: AbortSignal
-): Promise<TranscriptionModel[]> {
-  const models = await listModels(baseUrl, apiKey, signal)
-  return kind === 'llm' ? chatModels(models) : models
+): Promise<{ models: TranscriptionModel[]; leftOut: number }> {
+  const all = await listModels(baseUrl, apiKey, signal)
+  const models =
+    kind === 'llm' ? chatModels(all) : speechModels(all, await modelModes(baseUrl, apiKey, signal))
+  return { models, leftOut: all.length - models.length }
 }
 
 /** Masks every key in a message and keeps it short. */
 export function safeMessage(message: string, keys: readonly (string | null | undefined)[]): string {
-  let safe = message
-  for (const key of keys) if (key && key.length >= 4) safe = safe.split(key).join('***')
-  return safe.replace(/Bearer\s+[\w.~+/=-]+/gi, 'Bearer ***').slice(0, 300)
+  return maskSecrets(message, keys).slice(0, 300)
 }
 
 /** Silence as a 16 kHz mono PCM WAV, for the speech and diarisation tests. */
@@ -157,7 +226,9 @@ async function listedModels(
 ): Promise<void> {
   let models: TranscriptionModel[]
   try {
-    models = await discoverModels(kind, baseUrl, apiKey, signal)
+    // The whole speech list: the model chosen may be an id the admin typed.
+    const all = await listModels(baseUrl, apiKey, signal)
+    models = kind === 'llm' ? chatModels(all) : all
   } catch (error) {
     if (signal?.aborted) throw error
     checks.push({ kind: 'modelsUnlisted' })
@@ -372,7 +443,8 @@ export async function testConnection(
         const url = input.url ?? asrBaseUrls(config)[0]
         if (!url) return notSetUp()
         const apiKey = keyOf(secrets.apiKey)
-        const model = input.model ?? config.defaultAsrModel ?? config.asrModels[0]?.id ?? null
+        const model =
+          input.model ?? config.defaultAsrModel ?? firstSpeechModel(config.asrModels)?.id ?? null
         await listedModels(checks, url, apiKey, model, 'asr', signal)
         if (!model) return noModel()
         return passed(await checkTranscription(checks, url, apiKey, model, signal))

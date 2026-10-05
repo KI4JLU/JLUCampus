@@ -59,9 +59,15 @@
     "gatewayRefused": "Local live transcription is unavailable right now: the gateway refuses a live session with {{model}}.",
     "gatewayUnreachable": "Local live transcription is unavailable right now: the realtime bridge cannot reach the gateway.",
     "bridgeUnreachable": "Local live transcription is unavailable right now: the realtime bridge does not answer.",
-    "bridgeKeyRejected": "Local live transcription is unavailable right now: the realtime bridge refuses the server."
+    "bridgeKeyRejected": "Local live transcription is unavailable right now: the realtime bridge refuses the server.",
+    "bridgeBusy": "Local live transcription is busy right now: the realtime bridge takes no more sessions. Please try again shortly."
   },
   "liveTranscript": "Live transcript",
+  "liveBridgeErrors": {
+    "session_idle": "Live transcription ended because no audio arrived for too long.",
+    "session_expired": "Live transcription reached its maximum length and ended.",
+    "upstream_error": "The gateway reported an error during live transcription."
+  },
   "liveServiceError": "Live transcription error: {{message}}",
   "appearance": "Appearance",
   "fontSizeValue": "{{size}}px",
@@ -121,7 +127,7 @@
     },
     "asrModels": {
       "label": "Speech models",
-      "hint": "At most {{max}}. The list can be fetched from the endpoint; display names you gave stay."
+      "hint": "At most {{max}}. “Fetch models” takes the endpoint’s speech recognition models (by their mode with LiteLLM, else by id); display names you gave stay. Add other ids with “Add model”."
     },
     "defaultAsrModel": {
       "label": "Speech model of jobs",
@@ -159,6 +165,7 @@
       "label": "Turn off the models’ thinking",
       "hint": "Sends chat_template_kwargs.enable_thinking = false, which vLLM servers with Qwen3 models understand (HRZ gateway): the models answer at once instead of reasoning first. Turn it off for endpoints that refuse unknown parameters, such as OpenAI."
     },
+    "firstSpeechModel": "First speech model of the list",
     "firstModel": "First model of the list",
     "unlistedModel": "{{id}} (not in the list)",
     "modelId": "Model ID",
@@ -172,7 +179,19 @@
     "fetchedModels_other": "{{count}} models taken over.",
     "fetchedModelsOmitted_one": "{{count}} more above the maximum of {{max}} left out.",
     "fetchedModelsOmitted_other": "{{count}} more above the maximum of {{max}} left out.",
+    "fetchedModelsLeftOut": {
+      "asr_one": "Left out {{count}} model without speech recognition (such as chat or embeddings).",
+      "asr_other": "Left out {{count}} models without speech recognition (such as chat or embeddings).",
+      "llm_one": "Left out {{count}} model that does not chat (embeddings, speech, images).",
+      "llm_other": "Left out {{count}} models that do not chat (embeddings, speech, images)."
+    },
     "fetchModelsErrors": {
+      "noneOfKind": {
+        "asr_one": "The endpoint lists no speech recognition model, only {{count}} other one. Add an id by hand with “Add model”.",
+        "asr_other": "The endpoint lists no speech recognition model, only {{count}} others. Add an id by hand with “Add model”.",
+        "llm_one": "The endpoint lists no chat model, only {{count}} other one. Add an id by hand with “Add model”.",
+        "llm_other": "The endpoint lists no chat model, only {{count}} others. Add an id by hand with “Add model”."
+      },
       "empty": "The endpoint names no models.",
       "invalidUrl": "The address is not valid.",
       "failed": "The models could not be fetched. Check the address and the API key."
@@ -310,7 +329,8 @@
           "gatewayRefused": "The gateway refuses a live session with {{model}}.",
           "gatewayUnreachable": "The realtime bridge cannot reach the gateway.",
           "bridgeUnreachable": "The realtime bridge is unreachable.",
-          "bridgeKeyRejected": "The realtime bridge refuses the server: TRANSCRIPTION_REALTIME_BRIDGE_KEY must equal its BRIDGE_API_KEY."
+          "bridgeKeyRejected": "The realtime bridge refuses the server: TRANSCRIPTION_REALTIME_BRIDGE_KEY must equal its BRIDGE_API_KEY.",
+          "bridgeBusy": "The realtime bridge is busy: it already holds as many sessions as MAX_SESSIONS allows."
         },
         "keyIssued": "OpenAI issued a short-lived key for {{model}} (not shown)",
         "signedRoundTrip": "A test file was uploaded, read back and deleted through signed URLs in bucket {{bucket}}",

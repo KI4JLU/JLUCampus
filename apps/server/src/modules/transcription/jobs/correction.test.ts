@@ -1,4 +1,8 @@
-import type { TranscriptionSegment } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_SEGMENT_TEXT_MAX,
+  transcriptionSegmentsSchema,
+  type TranscriptionSegment
+} from '@justcampus/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -103,6 +107,17 @@ describe('applying the answer', () => {
     ])
   })
 
+  it('stops merging where a segment would outgrow the text limit (B-4)', () => {
+    const merged = mergeSpeakerRuns([
+      segment(1, 0, 60, 'a'.repeat(12_000), 'A'),
+      segment(2, 60, 120, 'b'.repeat(12_000), 'A'),
+      segment(3, 120, 121, 'c'.repeat(100), 'A')
+    ])
+    expect(merged.map((part) => part.text.length)).toEqual([12_000, 12_101])
+    expect(merged.every((part) => part.text.length <= TRANSCRIPTION_SEGMENT_TEXT_MAX)).toBe(true)
+    expect(transcriptionSegmentsSchema.safeParse(merged).success).toBe(true)
+  })
+
   it('batches by count and size, in order', () => {
     const many = Array.from({ length: 320 }, (_, index) => ({ text: `Satz ${index}` }))
     expect(correctionBatches(many).map((batch) => batch.length)).toEqual([150, 150, 20])
@@ -155,6 +170,72 @@ describe('correctSegments', () => {
     expect(body.messages[0]).toEqual({ role: 'system', content: CORRECTION_SYSTEM_PROMPT })
     expect(body.messages[1]!.content).toContain(
       'Segment [1] (Stimme 2): Wir sprechen über projektfönix.'
+    )
+  })
+
+  const target = {
+    baseUrl: 'https://llm.test/v1',
+    apiKey: null,
+    model: 'jlu/qwen3.8-27b-fast',
+    timeoutMs: 1000,
+    disableThinking: false
+  }
+  /** A model that returns every segment of the request unchanged. */
+  const echo = (): void => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const prompt = (JSON.parse(String(init.body)) as { messages: { content: string }[] })
+          .messages[1]!.content
+        const content = JSON.stringify(
+          [...prompt.matchAll(/^Segment \[(\d+)\] \((.*?)\): (.*)$/gm)].map((match) => ({
+            original_index: Number(match[1]),
+            speaker: match[2],
+            text: match[3]
+          }))
+        )
+        return Response.json({ choices: [{ message: { content } }] })
+      })
+    )
+  }
+
+  it('keeps a long one-voice monologue valid across batches (B-4)', async () => {
+    echo()
+    // One voice, no pauses: 40 segments of 1,500 characters go in three batches of 20,000.
+    const monologue = Array.from({ length: 40 }, (_, index) =>
+      segment(index + 1, index * 10, index * 10 + 10, `${index} `.padEnd(1500, 'x'), 'Stimme 1')
+    )
+    const progress: number[] = []
+    const corrected = await correctSegments(monologue, target, {
+      onBatch: (_done, total) => void progress.push(total)
+    })
+    expect(progress[0]).toBeGreaterThan(1)
+    expect(transcriptionSegmentsSchema.safeParse(corrected).success).toBe(true)
+    expect(corrected.length).toBeGreaterThan(1)
+    expect(corrected.map((part) => part.text).join(' ')).toBe(
+      monologue.map((part) => part.text).join(' ')
+    )
+  })
+
+  it('refuses corrections a transcript cannot hold, so the caller keeps the text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  { original_index: 0, text: 'x'.repeat(25_000), speaker: 'Stimme 1' }
+                ])
+              }
+            }
+          ]
+        })
+      )
+    )
+    await expect(correctSegments([segments[0]!], target)).rejects.toBeInstanceOf(
+      InvalidCorrectionError
     )
   })
 })

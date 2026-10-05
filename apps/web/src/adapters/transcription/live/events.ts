@@ -30,10 +30,28 @@ function stringField(fields: Fields, key: string): string | null {
   return typeof value === 'string' ? value : null
 }
 
+/**
+ * Codes of the on-prem bridge's errors, which the web app words itself: a session without audio
+ * or beyond its lifetime that the bridge finalized, and a gateway error the bridge does not pass on.
+ */
+export const LIVE_BRIDGE_ERROR_CODES = [
+  'session_idle',
+  'session_expired',
+  'upstream_error'
+] as const
+export type LiveBridgeErrorCode = (typeof LIVE_BRIDGE_ERROR_CODES)[number]
+
+export function isLiveBridgeErrorCode(value: string): value is LiveBridgeErrorCode {
+  return (LIVE_BRIDGE_ERROR_CODES as readonly string[]).includes(value)
+}
+
+/** An event's error as text to show; one of the bridge's codes as the code itself. */
 function errorMessage(value: unknown): string | null {
   if (typeof value === 'string') return value || null
-  if (isFields(value)) return stringField(value, 'message')
-  return null
+  if (!isFields(value)) return null
+  const code = stringField(value, 'code')
+  if (code && isLiveBridgeErrorCode(code)) return code
+  return stringField(value, 'message')
 }
 
 export class LiveEventProcessor {

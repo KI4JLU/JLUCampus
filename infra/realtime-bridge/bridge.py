@@ -2,8 +2,10 @@
 
 Ported from HAWKI's realtime bridge (kiChat, `_docker/realtime-bridge/bridge.py`, GNU GPL v3),
 with the same protocol. Changes against the original, marked "Campus:" below: JSON error answers
-with the gateway's status, `POST /probe`, a connect timeout for peers that never connect, and
-TURN credentials minted from a shared secret (coturn `use-auth-secret`).
+with the gateway's status, `POST /probe`, a connect timeout for peers that never connect, TURN
+credentials minted from a shared secret (coturn `use-auth-secret`), a mandatory BRIDGE_API_KEY,
+a session limit with idle and lifetime limits, coalesced rotations, and upstream errors masked
+before they reach a log or a client.
 
 Bridges browser WebRTC connections to the vLLM realtime speech-to-text WebSocket (reached through
 the LiteLLM gateway). Exists because vLLM's realtime endpoint is WebSocket-only: a browser
@@ -17,6 +19,10 @@ kiChat's realtime_transcription.js and the Campus web app handle them:
   -> conversation.item.input_audio_transcription.delta
   -> conversation.item.input_audio_transcription.completed
   -> conversation.item.input_audio_transcription.failed
+                                               (Campus: error {code: "upstream_error"}, never
+                                                the gateway's own words)
+  -> error {code: session_idle|session_expired} (Campus: the session is finalized for lack of
+                                                audio or at its maximum length)
   <- input_audio_buffer.commit                 (client asks to finalize; the session closes
                                                 afterwards)
   <- input_audio_buffer.commit {keep_open: true}
@@ -40,7 +46,9 @@ HTTP API (signaling is reached by the Campus server only, never by browsers):
 
 Per-request configuration comes from the Campus server via headers (X-Gateway-Base, X-Gateway-Key,
 X-Model), so the module's settings stay the single source of truth for gateway credentials. The
-bridge itself holds no gateway secrets; BRIDGE_API_KEY (optional) fences the HTTP API.
+bridge itself holds no gateway secrets; BRIDGE_API_KEY fences the HTTP API. Campus: the bridge
+does not start without it, unless BRIDGE_ALLOW_UNAUTHENTICATED=1 with a loopback HOST
+(development), and then takes requests from loopback only.
 """
 
 import asyncio
@@ -50,6 +58,8 @@ import hmac
 import json
 import logging
 import os
+import re
+import sys
 import time
 import uuid
 
@@ -84,8 +94,73 @@ CONNECT_TIMEOUT_S = float(os.environ.get("CONNECT_TIMEOUT_S", "30"))
 # Campus: how long /probe waits after session.update for the upstream to refuse the model.
 PROBE_WAIT_S = float(os.environ.get("PROBE_WAIT_S", "1.5"))
 UPSTREAM_CONNECT_TIMEOUT_S = 10.0
+# Campus: resource limits. Every session holds a peer connection and a gateway stream, so the
+# bridge takes at most MAX_SESSIONS at once (probes included) and answers 503 "busy" beyond.
+# A connected session ends (finalized, its transcript delivered) when no audio arrived for
+# IDLE_TIMEOUT_S or after MAX_SESSION_S in all.
+MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", "20"))
+IDLE_TIMEOUT_S = float(os.environ.get("IDLE_TIMEOUT_S", "60"))
+MAX_SESSION_S = float(os.environ.get("MAX_SESSION_S", str(4 * 3600)))
+# How often a session's watchdog checks the limits above.
+WATCH_INTERVAL_S = 1.0
+# Rotations (keep_open commits) of one session start at most this often; one more asked for
+# meanwhile waits, any further ones are folded into it.
+ROTATE_MIN_INTERVAL_S = float(os.environ.get("ROTATE_MIN_INTERVAL_S", "1"))
 
 BRIDGE_API_KEY = os.environ.get("BRIDGE_API_KEY", "")
+# Campus: development without a key, only with a loopback HOST and only for loopback clients.
+ALLOW_UNAUTHENTICATED = os.environ.get("BRIDGE_ALLOW_UNAUTHENTICATED", "") == "1"
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+# Sessions holding a slot of MAX_SESSIONS, and probes in flight (they hold one each too).
+ACTIVE_SESSIONS: set = set()
+active_probes = 0
+
+
+def capacity_left() -> bool:
+    """Campus: whether one more session or probe fits into MAX_SESSIONS."""
+    return len(ACTIVE_SESSIONS) + active_probes < MAX_SESSIONS
+
+
+# ---------------------------------------------------------------------------
+# Masking
+# ---------------------------------------------------------------------------
+# Campus: a gateway may reflect the key it refused in its error. Nothing the upstream says
+# reaches a log or a client unmasked; clients only get fixed messages.
+_BEARER = re.compile(r"Bearer\s+(?!\*\*\*)[^\s\"',;)\]}]+", re.IGNORECASE)
+_SK = re.compile(r"\bsk-(?!\*\*\*)[\w-]{6,}")
+_KEY_FIELD = re.compile(
+    r"((?:api[_-]?key|access[_-]?token|x-gateway-key|authorization)[\"']?\s*[:=]\s*[\"']?)"
+    r"(?!\*\*\*|Bearer)[^\s\"',;)\]}]+",
+    re.IGNORECASE,
+)
+
+
+def mask(text, *secrets: str, limit: int = 300) -> str:
+    """`text` with the given secrets and anything that looks like a key masked, cut to `limit`."""
+    safe = str(text)
+    for secret in (BRIDGE_API_KEY, *secrets):
+        if secret and len(secret) >= 4:
+            safe = safe.replace(secret, "***")
+    safe = _BEARER.sub("Bearer ***", safe)
+    safe = _SK.sub("sk-***", safe)
+    safe = _KEY_FIELD.sub(r"\1***", safe)
+    return safe[:limit]
+
+
+def upstream_error_detail(event: dict, *secrets: str) -> str:
+    """Campus: an upstream `error` event as one masked line for the log."""
+    error = event.get("error")
+    if isinstance(error, dict):
+        code = error.get("code") or error.get("type") or "error"
+        detail = f"{code}: {error.get('message', '')}"
+    else:
+        detail = str(error or event.get("message") or "error")
+    return mask(detail, *secrets)
+
+
+# What clients learn about an upstream failure (data channel); never the upstream's own words.
+CLIENT_UPSTREAM_ERROR = {"code": "upstream_error", "message": "the gateway reported an error"}
 
 # ---------------------------------------------------------------------------
 # ICE / TURN
@@ -247,6 +322,15 @@ class BridgeSession:
         self.hold = bytearray()
         self.segment_lock = asyncio.Lock()
         self.closed = False
+        # Campus: one rotation at a time and at most one more waiting (`rotation_again`), one
+        # finalization, and the watchdog's clock.
+        self.rotation_pending = False
+        self.rotation_again = False
+        self.last_rotation_at = float("-inf")
+        self.finalize_requested = False
+        self.connected_once = False
+        self.opened_at = time.monotonic()
+        self.last_audio_at = self.opened_at
 
         self.pc.on("datachannel", self._on_datachannel)
         self.pc.on("track", self._on_track)
@@ -270,15 +354,46 @@ class BridgeSession:
             # Campus: an offer aiortc cannot take is the client's fault, not the gateway's.
             raise OfferRefused(str(exc) or exc.__class__.__name__) from exc
         self.log.info("negotiated (model=%s)", self.model)
-        self._spawn(self._expire_unconnected())
+        self._spawn(self._watch())
         return self.pc.localDescription.sdp
 
-    async def _expire_unconnected(self):
-        """Campus: closes a peer that does not connect within CONNECT_TIMEOUT_S."""
-        await asyncio.sleep(CONNECT_TIMEOUT_S)
-        if not self.closed and self.pc.connectionState != "connected":
-            self.log.info("not connected after %.0fs, closing", CONNECT_TIMEOUT_S)
-            await self.close()
+    def watch_verdict(self, now: float) -> str | None:
+        """Campus: why the session must end now, if it must: `unconnected` (never connected
+        within CONNECT_TIMEOUT_S), `idle` (no audio for IDLE_TIMEOUT_S once connected) or
+        `expired` (MAX_SESSION_S in all)."""
+        if not self.connected_once:
+            return "unconnected" if now - self.opened_at >= CONNECT_TIMEOUT_S else None
+        if now - self.opened_at >= MAX_SESSION_S:
+            return "expired"
+        if now - self.last_audio_at >= IDLE_TIMEOUT_S:
+            return "idle"
+        return None
+
+    async def _watch(self):
+        """Campus: closes a peer that never connects, and finalizes a connected one that sends
+        no audio or outlives its lifetime, telling its client why."""
+        while not self.closed and not self.finalize_requested:
+            await asyncio.sleep(WATCH_INTERVAL_S)
+            if self.closed or self.finalize_requested:
+                return
+            verdict = self.watch_verdict(time.monotonic())
+            if verdict is None:
+                continue
+            if verdict == "unconnected":
+                self.log.info("not connected after %.0fs, closing", CONNECT_TIMEOUT_S)
+                await self.close()
+                return
+            self.log.info("session %s, finalizing", verdict)
+            message = (
+                "no audio arrived for too long"
+                if verdict == "idle"
+                else "the session reached its maximum length"
+            )
+            self._channel_send(
+                {"type": "error", "error": {"code": f"session_{verdict}", "message": message}}
+            )
+            self._request_finalize()
+            return
 
     def _on_datachannel(self, channel):
         self.log.info("data channel opened: %s", channel.label)
@@ -297,11 +412,20 @@ class BridgeSession:
             # keep_open, to close the current item and continue with the next
             # one. Any session.update or other client events are intentionally
             # ignored: the upstream session is bridge-managed.
+            # Campus: rotations asked for while one runs fold into a single next one, which
+            # starts ROTATE_MIN_INTERVAL_S after the last, so a flood of commits can neither
+            # queue up work nor open gateway streams faster than that.
             if data.get("type") == "input_audio_buffer.commit":
                 if data.get("keep_open"):
+                    if self.finalize_requested:
+                        return
+                    if self.rotation_pending:
+                        self.rotation_again = True
+                        return
+                    self.rotation_pending = True
                     self._spawn(self._rotate())
                 else:
-                    self._spawn(self._finalize())
+                    self._request_finalize()
 
     def _on_track(self, track):
         if track.kind != "audio":
@@ -312,6 +436,9 @@ class BridgeSession:
     def _on_connection_state(self):
         state = self.pc.connectionState
         self.log.info("connection state: %s", state)
+        if state == "connected" and not self.connected_once:
+            self.connected_once = True
+            self.last_audio_at = time.monotonic()
         if state in ("failed", "closed"):
             self._spawn(self.close())
 
@@ -373,12 +500,15 @@ class BridgeSession:
                     )
                     done.set()
                 elif etype == "error":
-                    self.log.error("upstream error: %s", event)
+                    # Campus: masked in the log, a fixed message for the client.
+                    self.log.error(
+                        "upstream error: %s", upstream_error_detail(event, self.gateway_key)
+                    )
                     self._channel_send(
                         {
                             "type": "conversation.item.input_audio_transcription.failed",
                             "item_id": item_id,
-                            "error": event.get("error"),
+                            "error": CLIENT_UPSTREAM_ERROR,
                         }
                     )
                     # The item is resolved for the client - don't make a
@@ -386,7 +516,7 @@ class BridgeSession:
                     done.set()
         except Exception as exc:
             if not self.closed:
-                self.log.warning("upstream reader ended: %r", exc)
+                self.log.warning("upstream reader ended: %s", mask(repr(exc), self.gateway_key))
         finally:
             done.set()
 
@@ -399,6 +529,7 @@ class BridgeSession:
         try:
             while not self.finalizing:
                 frame = await track.recv()
+                self.last_audio_at = time.monotonic()
                 if pump_start is None:
                     pump_start = time.monotonic()
                     self.log.info("first audio frame received")
@@ -425,7 +556,7 @@ class BridgeSession:
             # the track without asking to finalize (e.g. tab closed).
             if not self.finalizing and not self.closed:
                 self.log.info("audio track ended (%r), finalizing", exc)
-                self._spawn(self._finalize())
+                self._request_finalize()
 
     async def _send_audio(self, chunk: bytes):
         if self.rotating:
@@ -494,6 +625,23 @@ class BridgeSession:
         """keep_open commit: finalize the current item, continue with the next
         one. The WebRTC connection stays up; audio arriving meanwhile is held
         and handed to the next item, so nothing said after the send is lost."""
+        try:
+            while True:
+                wait = self.last_rotation_at + ROTATE_MIN_INTERVAL_S - time.monotonic()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                if self.finalize_requested or self.closed:
+                    return
+                self.last_rotation_at = time.monotonic()
+                await self._rotate_item()
+                if not self.rotation_again:
+                    return
+                self.rotation_again = False
+        finally:
+            self.rotation_pending = False
+            self.rotation_again = False
+
+    async def _rotate_item(self):
         async with self.segment_lock:
             if self.finalizing or self.closed:
                 return
@@ -525,7 +673,7 @@ class BridgeSession:
             try:
                 new_ws, new_done = await opening
             except Exception as exc:
-                self.log.error("next upstream failed: %r", exc)
+                self.log.error("next upstream failed: %s", mask(repr(exc), self.gateway_key))
                 self._channel_send(
                     {
                         "type": "conversation.item.input_audio_transcription.failed",
@@ -550,6 +698,13 @@ class BridgeSession:
             self.upstream = new_ws
             self.rotating = False
 
+    def _request_finalize(self):
+        """Campus: finalizes once, however often the client or the watchdog asks."""
+        if self.finalize_requested or self.closed:
+            return
+        self.finalize_requested = True
+        self._spawn(self._finalize())
+
     async def _finalize(self):
         if self.finalizing:
             return
@@ -573,6 +728,7 @@ class BridgeSession:
         if self.closed:
             return
         self.closed = True
+        ACTIVE_SESSIONS.discard(self)
         self.log.info("closing session")
         for task in list(self.tasks):
             if task is not asyncio.current_task():
@@ -618,8 +774,10 @@ def error_response(status: int, error: str, message: str, **extra) -> web.Respon
 
 
 def authorized(request: web.Request) -> bool:
+    """The Campus server's bearer. Campus: without BRIDGE_API_KEY nothing passes, unless the
+    development mode allows it, and then only from loopback (main() refuses any other HOST)."""
     if not BRIDGE_API_KEY:
-        return True
+        return ALLOW_UNAUTHENTICATED and request.remote in ("127.0.0.1", "::1")
     auth = request.headers.get("Authorization", "")
     return hmac.compare_digest(auth.encode(), f"Bearer {BRIDGE_API_KEY}".encode())
 
@@ -645,7 +803,12 @@ async def handle_realtime(request: web.Request) -> web.Response:
     if not offer_sdp.startswith("v="):
         return error_response(400, "bad_request", "body must be an SDP offer")
 
+    # Campus: the slot is taken before anything opens and freed by close() on every path.
+    if not capacity_left():
+        logger.warning("session refused: %d sessions open (MAX_SESSIONS)", len(ACTIVE_SESSIONS))
+        return error_response(503, "busy", "the bridge holds as many sessions as it takes")
     session = BridgeSession(*gateway)
+    ACTIVE_SESSIONS.add(session)
     try:
         answer_sdp = await session.negotiate(offer_sdp)
     except UpstreamRejected as exc:
@@ -659,14 +822,20 @@ async def handle_realtime(request: web.Request) -> web.Response:
         await session.close()
         return error_response(400, "bad_offer", f"the offer cannot be negotiated: {exc}"[:300])
     except Exception as exc:
-        logger.error("negotiation failed: %r", exc)
+        detail = mask(repr(exc), gateway[1])
+        logger.error("negotiation failed: %s", detail)
         await session.close()
-        return error_response(502, "upstream_failed", f"upstream connection failed: {exc}")
+        return error_response(
+            502, "upstream_failed", f"upstream connection failed: {mask(exc, gateway[1])}"
+        )
+    except BaseException:
+        await session.close()
+        raise
 
     return web.Response(content_type="application/sdp", text=answer_sdp)
 
 
-async def probe_refusal(ws, model: str) -> web.Response | None:
+async def probe_refusal(ws, model: str, gateway_key: str = "") -> web.Response | None:
     """Campus: the upstream's refusal of the model within PROBE_WAIT_S, as an error answer, or
     None when it refuses nothing (vLLM answers a valid session.update with nothing or with a
     session event; `session.created` may come first)."""
@@ -691,7 +860,10 @@ async def probe_refusal(ws, model: str) -> web.Response | None:
                 error = event.get("error")
                 detail = error.get("message") if isinstance(error, dict) else error
                 return error_response(
-                    502, "upstream_error", str(detail or "upstream error")[:300], model=model
+                    502,
+                    "upstream_error",
+                    mask(detail or "upstream error", gateway_key),
+                    model=model,
                 )
         elif msg.type in (
             aiohttp.WSMsgType.CLOSE,
@@ -703,7 +875,7 @@ async def probe_refusal(ws, model: str) -> web.Response | None:
             return error_response(
                 502,
                 "upstream_closed",
-                (reason or "the gateway closed the realtime connection")[:300],
+                mask(reason or "the gateway closed the realtime connection", gateway_key),
                 model=model,
             )
 
@@ -718,24 +890,35 @@ async def handle_probe(request: web.Request) -> web.Response:
     if gateway is None:
         return error_response(400, "bad_request", "X-Gateway-Base and X-Model are required")
     gateway_base, gateway_key, model = gateway
+    if not capacity_left():
+        return error_response(503, "busy", "the bridge holds as many sessions as it takes")
 
-    timeout = aiohttp.ClientTimeout(total=None, connect=UPSTREAM_CONNECT_TIMEOUT_S)
-    async with aiohttp.ClientSession(timeout=timeout) as http:
-        try:
-            ws = await connect_upstream_ws(http, realtime_url(gateway_base, model), gateway_key)
-        except UpstreamRejected as exc:
-            return error_response(
-                502, "upstream_rejected", str(exc), upstream_status=exc.status, model=model
-            )
-        except Exception as exc:
-            return error_response(502, "upstream_failed", f"upstream connection failed: {exc}")
-        try:
-            await ws.send_json({"type": "session.update", "model": model})
-            refusal = await probe_refusal(ws, model)
-            if refusal is not None:
-                return refusal
-        finally:
-            await ws.close()
+    global active_probes
+    active_probes += 1
+    try:
+        timeout = aiohttp.ClientTimeout(total=None, connect=UPSTREAM_CONNECT_TIMEOUT_S)
+        async with aiohttp.ClientSession(timeout=timeout) as http:
+            try:
+                ws = await connect_upstream_ws(
+                    http, realtime_url(gateway_base, model), gateway_key
+                )
+            except UpstreamRejected as exc:
+                return error_response(
+                    502, "upstream_rejected", str(exc), upstream_status=exc.status, model=model
+                )
+            except Exception as exc:
+                return error_response(
+                    502, "upstream_failed", f"upstream connection failed: {mask(exc, gateway_key)}"
+                )
+            try:
+                await ws.send_json({"type": "session.update", "model": model})
+                refusal = await probe_refusal(ws, model, gateway_key)
+                if refusal is not None:
+                    return refusal
+            finally:
+                await ws.close()
+    finally:
+        active_probes -= 1
     return web.json_response({"ok": True, "model": model})
 
 
@@ -751,16 +934,36 @@ def make_app() -> web.Application:
     return app
 
 
+def startup_problem(key: str, allow_unauthenticated: bool, host: str) -> str | None:
+    """Campus: why the bridge must not start, if it must not. Without BRIDGE_API_KEY anyone who
+    reaches the port could make it connect wherever X-Gateway-Base points."""
+    if key:
+        return None
+    if not allow_unauthenticated:
+        return (
+            "BRIDGE_API_KEY is not set: set it to the server's TRANSCRIPTION_REALTIME_BRIDGE_KEY "
+            "(for development on this machine only: BRIDGE_ALLOW_UNAUTHENTICATED=1 with "
+            "HOST=127.0.0.1)"
+        )
+    if host not in LOOPBACK_HOSTS:
+        return (
+            f"BRIDGE_ALLOW_UNAUTHENTICATED=1 needs a loopback HOST, not {host}: "
+            "set BRIDGE_API_KEY instead"
+        )
+    return None
+
+
 def main():
     port = int(os.environ.get("PORT", "8089"))
     host = os.environ.get("HOST", "0.0.0.0")
-    if not BRIDGE_API_KEY and host not in ("127.0.0.1", "::1", "localhost"):
+    problem = startup_problem(BRIDGE_API_KEY, ALLOW_UNAUTHENTICATED, host)
+    if problem:
+        logger.error("refusing to start: %s", problem)
+        sys.exit(1)
+    if not BRIDGE_API_KEY:
         logger.warning(
-            "BRIDGE_API_KEY is not set while the API listens on %s - anyone reaching port %d "
-            "can open gateway sessions with keys of their own; set it (and the server's "
-            "TRANSCRIPTION_REALTIME_BRIDGE_KEY) or firewall the port",
-            host,
-            port,
+            "BRIDGE_API_KEY is not set: requests from loopback pass unauthenticated "
+            "(BRIDGE_ALLOW_UNAUTHENTICATED=1, development only)"
         )
     logger.info("JLU Campus realtime bridge listening on %s:%d", host, port)
     web.run_app(make_app(), host=host, port=port, print=None)

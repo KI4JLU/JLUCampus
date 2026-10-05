@@ -89,6 +89,7 @@
   "legendAuto": "wird automatisch ausgefüllt",
   "library": "Bibliothek",
   "minutesShort": "{{minutes}} Min",
+  "underMinute": "< 1 Min",
   "moveDown": "Nach unten verschieben",
   "moveUp": "Nach oben verschieben",
   "myTemplates": "Meine Vorlagen",

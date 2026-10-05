@@ -20,8 +20,8 @@ export const adminRouter = new Hono<AppEnvironment>()
 
 /**
  * The models of the speech or chat endpoint, in its order, with the key typed in the form or the
- * saved one of that endpoint. Speech lists are taken whole; chat lists lose embedding, speech and
- * image models, as in the translator.
+ * saved one of that endpoint. Speech lists keep speech recognition models only (`speechModels`),
+ * chat lists lose embedding, speech and image models, as in the translator.
  */
 adminRouter.post('/models', async (context) => {
   const input = await parseBody(context, transcriptionModelsRequestSchema)
@@ -29,8 +29,8 @@ adminRouter.post('/models', async (context) => {
   const saved = input.kind === 'asr' ? secrets.apiKey : secrets.llmApiKey
   const apiKey = input.apiKey === undefined ? saved : input.apiKey
   try {
-    const models = await discoverModels(input.kind, input.baseUrl, apiKey, context.req.raw.signal)
-    return context.json(transcriptionModelListSchema.parse({ models }))
+    const found = await discoverModels(input.kind, input.baseUrl, apiKey, context.req.raw.signal)
+    return context.json(transcriptionModelListSchema.parse(found))
   } catch (error) {
     console.error(
       'Transcription model discovery failed',

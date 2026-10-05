@@ -59,10 +59,16 @@
     "gatewayRefused": "Die lokale Live-Transkription ist gerade nicht verfügbar: Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
     "gatewayUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge erreicht das Gateway nicht.",
     "bridgeUnreachable": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge antwortet nicht.",
-    "bridgeKeyRejected": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge lehnt den Server ab."
+    "bridgeKeyRejected": "Die lokale Live-Transkription ist gerade nicht verfügbar: Die Realtime-Bridge lehnt den Server ab.",
+    "bridgeBusy": "Die lokale Live-Transkription ist gerade ausgelastet: Die Realtime-Bridge nimmt keine weiteren Sitzungen an. Bitte gleich noch einmal versuchen."
   },
   "liveTranscript": "Live-Transkript",
   "liveServiceError": "Fehler der Live-Transkription: {{message}}",
+  "liveBridgeErrors": {
+    "session_idle": "Die Live-Transkription wurde beendet, weil zu lange kein Ton ankam.",
+    "session_expired": "Die Live-Transkription hat ihre Höchstdauer erreicht und wurde beendet.",
+    "upstream_error": "Das Gateway hat bei der Live-Transkription einen Fehler gemeldet."
+  },
   "appearance": "Darstellung",
   "fontSizeValue": "{{size}}px",
   "resetAppearance": "Darstellung zurücksetzen",
@@ -121,7 +127,7 @@
     },
     "asrModels": {
       "label": "Sprachmodelle",
-      "hint": "Höchstens {{max}}. Die Liste lässt sich vom Endpunkt abrufen; vergebene Anzeigenamen bleiben."
+      "hint": "Höchstens {{max}}. „Modelle abrufen“ übernimmt die Spracherkennungsmodelle des Endpunkts (bei LiteLLM nach ihrem Modus, sonst nach der ID); vergebene Anzeigenamen bleiben. Andere IDs lassen sich mit „Modell hinzufügen“ eintragen."
     },
     "defaultAsrModel": {
       "label": "Sprachmodell der Aufträge",
@@ -160,6 +166,7 @@
       "hint": "Sendet chat_template_kwargs.enable_thinking = false, das vLLM-Server mit Qwen3-Modellen verstehen (HRZ-Gateway): Die Modelle antworten sofort, statt erst nachzudenken. Ausschalten für Endpunkte, die unbekannte Parameter ablehnen, etwa OpenAI."
     },
     "firstModel": "Erstes Modell der Liste",
+    "firstSpeechModel": "Erstes Spracherkennungsmodell der Liste",
     "unlistedModel": "{{id}} (nicht in der Liste)",
     "modelId": "Modell-ID",
     "modelLabel": "Anzeigename",
@@ -172,7 +179,19 @@
     "fetchedModels_other": "{{count}} Modelle übernommen.",
     "fetchedModelsOmitted_one": "{{count}} weiteres über dem Höchstwert von {{max}} ausgelassen.",
     "fetchedModelsOmitted_other": "{{count}} weitere über dem Höchstwert von {{max}} ausgelassen.",
+    "fetchedModelsLeftOut": {
+      "asr_one": "{{count}} Modell ohne Spracherkennung (etwa Chat oder Embeddings) ausgelassen.",
+      "asr_other": "{{count}} Modelle ohne Spracherkennung (etwa Chat oder Embeddings) ausgelassen.",
+      "llm_one": "{{count}} Modell, das nicht chattet (Embeddings, Sprache, Bilder), ausgelassen.",
+      "llm_other": "{{count}} Modelle, die nicht chatten (Embeddings, Sprache, Bilder), ausgelassen."
+    },
     "fetchModelsErrors": {
+      "noneOfKind": {
+        "asr_one": "Der Endpunkt nennt kein Spracherkennungsmodell, nur {{count}} anderes. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen.",
+        "asr_other": "Der Endpunkt nennt kein Spracherkennungsmodell, nur {{count}} andere. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen.",
+        "llm_one": "Der Endpunkt nennt kein Chat-Modell, nur {{count}} anderes. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen.",
+        "llm_other": "Der Endpunkt nennt kein Chat-Modell, nur {{count}} andere. Eine ID lässt sich mit „Modell hinzufügen“ von Hand eintragen."
+      },
       "empty": "Der Endpunkt nennt keine Modelle.",
       "invalidUrl": "Die Adresse ist ungültig.",
       "failed": "Die Modelle konnten nicht abgerufen werden. Prüfen Sie Adresse und API-Schlüssel."
@@ -310,7 +329,8 @@
           "gatewayRefused": "Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
           "gatewayUnreachable": "Die Realtime-Bridge erreicht das Gateway nicht.",
           "bridgeUnreachable": "Die Realtime-Bridge ist nicht erreichbar.",
-          "bridgeKeyRejected": "Die Realtime-Bridge lehnt den Server ab: TRANSCRIPTION_REALTIME_BRIDGE_KEY muss ihrem BRIDGE_API_KEY gleichen."
+          "bridgeKeyRejected": "Die Realtime-Bridge lehnt den Server ab: TRANSCRIPTION_REALTIME_BRIDGE_KEY muss ihrem BRIDGE_API_KEY gleichen.",
+          "bridgeBusy": "Die Realtime-Bridge ist ausgelastet: Sie hält schon so viele Sitzungen, wie MAX_SESSIONS erlaubt."
         },
         "keyIssued": "OpenAI hat einen kurzlebigen Schlüssel für {{model}} ausgegeben (nicht angezeigt)",
         "signedRoundTrip": "Eine Testdatei wurde über signierte URLs in Bucket {{bucket}} hochgeladen, zurückgelesen und gelöscht",

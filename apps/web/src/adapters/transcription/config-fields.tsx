@@ -49,6 +49,7 @@ import {
   type TranscriptionRealtimeMode,
   type TranscriptionSpeakerCount,
   type TranscriptionTurnAuth,
+  firstSpeechModel,
   transcriptionUrls
 } from '@justcampus/shared'
 import { Field } from '@/components/field'
@@ -164,6 +165,9 @@ export function TranscriptionConfigFields({
 
   const firstModel = (models: readonly TranscriptionModel[]): string | undefined =>
     models.find((model) => model.id.trim())?.id.trim()
+  // As the server picks it: never a chat model listed before the speech model.
+  const firstAsrModel = (models: readonly TranscriptionModel[]): string | undefined =>
+    firstSpeechModel(models)?.id.trim()
 
   return (
     <>
@@ -229,7 +233,7 @@ export function TranscriptionConfigFields({
               // Several workers: the first is checked.
               url: transcriptionUrls(config.asrBaseUrl)[0],
               apiKey: draftKey(secrets.apiKey),
-              model: config.defaultAsrModel ?? firstModel(config.asrModels)
+              model: config.defaultAsrModel ?? firstAsrModel(config.asrModels)
             })}
           />
         </div>
@@ -863,7 +867,8 @@ function ModelList({
   const { t } = useTranslation()
   const fetchModels = useFetchAdminModels()
   const [status, setStatus] = useState<
-    | { kind: 'fetched'; count: number; omitted: number }
+    | { kind: 'fetched'; count: number; omitted: number; leftOut: number }
+    | { kind: 'noneOfKind'; leftOut: number }
     | { kind: 'empty' | 'invalidUrl' | 'failed' }
     | null
   >(null)
@@ -885,16 +890,21 @@ function ModelList({
           const now =
             kind === 'asr' ? (transcriptionUrls(current.asrBaseUrl)[0] ?? null) : current.llmBaseUrl
           if (now !== baseUrl) return
-          if (fetched.length === 0) {
-            setStatus({ kind: 'empty' })
+          if (fetched.models.length === 0) {
+            setStatus(
+              fetched.leftOut > 0
+                ? { kind: 'noneOfKind', leftOut: fetched.leftOut }
+                : { kind: 'empty' }
+            )
             return
           }
-          const result = withFetchedModels(current, field, fetched)
+          const result = withFetchedModels(current, field, fetched.models)
           onChange(result.config)
           setStatus({
             kind: 'fetched',
             count: result.config[field].length,
-            omitted: result.omitted
+            omitted: result.omitted,
+            leftOut: fetched.leftOut
           })
         },
         onError: (error) =>
@@ -1069,11 +1079,22 @@ function ModelList({
                       count: status.omitted,
                       max: TRANSCRIPTION_MODELS_MAX
                     })
+                  : null,
+                status.leftOut > 0
+                  ? t(`transcription.recording.admin.fetchedModelsLeftOut.${kind}`, {
+                      count: status.leftOut
+                    })
                   : null
               ]
                 .filter(Boolean)
                 .join(' ')}
             </FormDescription>
+          ) : status?.kind === 'noneOfKind' ? (
+            <FormMessage>
+              {t(`transcription.recording.admin.fetchModelsErrors.noneOfKind.${kind}`, {
+                count: status.leftOut
+              })}
+            </FormMessage>
           ) : status ? (
             <FormMessage>
               {t(`transcription.recording.admin.fetchModelsErrors.${status.kind}`)}
@@ -1120,7 +1141,13 @@ function DefaultModelSelect({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={AUTO}>{t('transcription.recording.admin.firstModel')}</SelectItem>
+            <SelectItem value={AUTO}>
+              {t(
+                name === 'defaultAsrModel'
+                  ? 'transcription.recording.admin.firstSpeechModel'
+                  : 'transcription.recording.admin.firstModel'
+              )}
+            </SelectItem>
             {value !== null && !models.some((model) => model.id.trim() === value) ? (
               <SelectItem value={value}>
                 {t('transcription.recording.admin.unlistedModel', { id: value })}

@@ -9,6 +9,7 @@ import {
   onpremSignaling,
   useRealtimeConfig
 } from '../api'
+import { isLiveBridgeErrorCode } from '../live/events'
 import { RealtimeError, RealtimeSession, type RealtimeDependencies } from '../live/session'
 import { useMemoryCell } from '../page-memory'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -281,7 +282,11 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
           {
             onText: (chunk) => setText((current) => current + chunk),
             onServiceError: (message) =>
-              setServiceError(t('transcription.recording.liveServiceError', { message })),
+              setServiceError(
+                isLiveBridgeErrorCode(message)
+                  ? t(`transcription.recording.liveBridgeErrors.${message}`)
+                  : t('transcription.recording.liveServiceError', { message })
+              ),
             onConnectionLost: (code) =>
               void finishRef.current(t(`transcription.recording.errors.${code}`))
           },

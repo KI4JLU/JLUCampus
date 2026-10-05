@@ -20,14 +20,14 @@ from aiortc.mediastreams import AudioStreamTrack  # noqa: E402
 
 import bridge  # noqa: E402
 
-GATEWAY_KEY = "test-gateway-key"
+GATEWAY_KEY = "test-gateway-key-0123456789"
 MODEL = "voxtral-mini-realtime"
 
 
 class FakeGateway:
     """The gateway's `/v1/realtime`: 403 for a wrong key or a model the key may not use, an
-    `error` event for an unknown model, else deltas while audio arrives and `transcription.done`
-    on the final commit."""
+    `error` event for an unknown model (`reflect`: one that repeats the key, as a careless gateway
+    might), else deltas while audio arrives and `transcription.done` on the final commit."""
 
     def __init__(self):
         self.connections = []
@@ -69,6 +69,16 @@ class FakeGateway:
                 connection["session_model"] = event.get("model")
                 if event.get("model") == "unknown":
                     await ws.send_json({"type": "error", "error": {"message": "Unknown model"}})
+                if event.get("model") == "reflect":
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "error": {
+                                "code": "invalid_key",
+                                "message": f"Key {GATEWAY_KEY} (Bearer {GATEWAY_KEY}) is invalid",
+                            },
+                        }
+                    )
             elif event["type"] == "input_audio_buffer.append":
                 connection["bytes"] += len(event["audio"]) * 3 // 4
                 # A word for every half second of decoded audio.
@@ -116,7 +126,14 @@ async def wait_for(predicate, timeout=10.0):
 class BridgeTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         bridge.BRIDGE_API_KEY = ""
+        bridge.ALLOW_UNAUTHENTICATED = True
         bridge.CONNECT_TIMEOUT_S = 30
+        bridge.MAX_SESSIONS = 20
+        bridge.IDLE_TIMEOUT_S = 60
+        bridge.MAX_SESSION_S = 3600
+        bridge.WATCH_INTERVAL_S = 0.1
+        bridge.ACTIVE_SESSIONS.clear()
+        bridge.active_probes = 0
         self.gateway = FakeGateway()
         await self.gateway.start()
         self.bridge = BridgeServer()
@@ -128,13 +145,34 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         await self.bridge.stop()
         await self.gateway.stop()
 
-    async def offer(self):
-        """A client peer like the browser's, with its offer after ICE gathering."""
+    async def offer(self, audio=True):
+        """A client peer like the browser's, with its offer after ICE gathering. Without `audio`
+        it negotiates an audio stream but never sends any."""
         peer = RTCPeerConnection()
         channel = peer.createDataChannel("oai-events")
-        peer.addTrack(AudioStreamTrack())
+        if audio:
+            peer.addTrack(AudioStreamTrack())
+        else:
+            peer.addTransceiver("audio", direction="sendonly")
         await peer.setLocalDescription(await peer.createOffer())
         return peer, channel, peer.localDescription.sdp
+
+    async def connect(self, model=MODEL, audio=True):
+        """A connected session: the peer, its channel and the events it receives."""
+        peer, channel, sdp = await self.offer(audio)
+        events = []
+        channel.on("message", lambda message: events.append(json.loads(message)))
+        async with self.http.post(
+            f"{self.bridge.url}/realtime",
+            data=sdp,
+            headers=gateway_headers(self.gateway.base, model=model),
+        ) as response:
+            self.assertEqual(response.status, 200)
+            answer = await response.text()
+        await peer.setRemoteDescription(RTCSessionDescription(sdp=answer, type="answer"))
+        await wait_for(lambda: peer.connectionState == "connected")
+        await wait_for(lambda: channel.readyState == "open")
+        return peer, channel, events
 
     async def test_streams_deltas_and_completes_on_commit(self):
         peer, channel, sdp = await self.offer()
@@ -227,6 +265,129 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await response.json())["error"], "bad_offer")
         # Its upstream stream is closed at once.
         await wait_for(lambda: self.gateway.closed == 1)
+
+    async def test_upstream_errors_never_carry_the_key(self):
+        with self.assertLogs(level="DEBUG") as logs:
+            peer, _channel, events = await self.connect(model="reflect")
+            await wait_for(lambda: any(e["type"].endswith(".failed") for e in events))
+            async with self.http.post(
+                f"{self.bridge.url}/probe", headers=gateway_headers(self.gateway.base, "reflect")
+            ) as response:
+                self.assertEqual(response.status, 502)
+                body = await response.json()
+            await peer.close()
+        failed = next(e for e in events if e["type"].endswith(".failed"))
+        # The client gets a fixed message, the log and the probe a masked one.
+        self.assertEqual(failed["error"], bridge.CLIENT_UPSTREAM_ERROR)
+        self.assertNotIn(GATEWAY_KEY, json.dumps(events))
+        self.assertEqual(body["error"], "upstream_error")
+        self.assertNotIn(GATEWAY_KEY, json.dumps(body))
+        self.assertIn("***", body["message"])
+        log = "\n".join(logs.output)
+        self.assertIn("invalid_key", log)
+        self.assertNotIn(GATEWAY_KEY, log)
+
+    def test_mask(self):
+        self.assertEqual(
+            bridge.mask(
+                "key secret-key-1 Bearer abc.def sk-abcdef123 api_key=xyz1", "secret-key-1"
+            ),
+            "key *** Bearer *** sk-*** api_key=***",
+        )
+        self.assertEqual(len(bridge.mask("x" * 1000)), 300)
+
+    async def test_sessions_are_limited_and_their_slots_freed(self):
+        bridge.MAX_SESSIONS = 1
+        bridge.CONNECT_TIMEOUT_S = 4
+        # Both offers first: gathering takes a while, and the first must still be open.
+        first, _channel, first_sdp = await self.offer()
+        second, _channel, sdp = await self.offer()
+        async with self.http.post(
+            f"{self.bridge.url}/realtime",
+            data=first_sdp,
+            headers=gateway_headers(self.gateway.base),
+        ) as response:
+            self.assertEqual(response.status, 200)
+        async with self.http.post(
+            f"{self.bridge.url}/realtime", data=sdp, headers=gateway_headers(self.gateway.base)
+        ) as response:
+            self.assertEqual(response.status, 503)
+            self.assertEqual((await response.json())["error"], "busy")
+        async with self.http.post(
+            f"{self.bridge.url}/probe", headers=gateway_headers(self.gateway.base)
+        ) as response:
+            self.assertEqual(response.status, 503)
+        # No second gateway stream was opened for the refused offer.
+        self.assertEqual(len(self.gateway.connections), 1)
+        # The unconnected first session expires and frees its slot.
+        await wait_for(lambda: not bridge.ACTIVE_SESSIONS, timeout=10)
+        async with self.http.post(
+            f"{self.bridge.url}/probe", headers=gateway_headers(self.gateway.base)
+        ) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(bridge.active_probes, 0)
+        # A failed negotiation frees its slot at once.
+        async with self.http.post(
+            f"{self.bridge.url}/realtime",
+            data=sdp,
+            headers=gateway_headers(self.gateway.base, model="denied"),
+        ) as response:
+            self.assertEqual(response.status, 502)
+        self.assertFalse(bridge.ACTIVE_SESSIONS)
+        await first.close()
+        await second.close()
+
+    async def test_connected_peer_without_audio_is_finalized(self):
+        bridge.IDLE_TIMEOUT_S = 0.5
+        peer, _channel, events = await self.connect(audio=False)
+        await wait_for(lambda: self.gateway.closed == 1, timeout=10)
+        await peer.close()
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(errors[0]["error"]["code"], "session_idle")
+        # The item is resolved for the client, and the slot is free.
+        self.assertTrue(any(e["type"].endswith((".completed", ".failed")) for e in events))
+        await wait_for(lambda: not bridge.ACTIVE_SESSIONS)
+
+    async def test_connected_session_has_a_maximum_length(self):
+        bridge.MAX_SESSION_S = 1.5
+        peer, _channel, events = await self.connect()
+        await wait_for(lambda: self.gateway.closed == 1, timeout=10)
+        await peer.close()
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(errors[0]["error"]["code"], "session_expired")
+        self.assertTrue(any(e["type"].endswith(".completed") for e in events))
+
+    async def test_commit_flood_is_coalesced(self):
+        peer, channel, events = await self.connect()
+        await wait_for(lambda: any(e["type"] == "input_audio_buffer.committed" for e in events))
+        session = next(iter(bridge.ACTIVE_SESSIONS))
+        for _ in range(200):
+            channel.send(json.dumps({"type": "input_audio_buffer.commit", "keep_open": True}))
+        await asyncio.sleep(0.5)
+        # One rotation ran at once, one more waits; no task queue built up.
+        self.assertEqual(len(self.gateway.connections), 2)
+        self.assertLess(len(session.tasks), 10)
+        await asyncio.sleep(1.5)
+        # The waiting one ran a second later; the other 198 were folded into it.
+        self.assertEqual(len(self.gateway.connections), 3)
+        channel.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        await wait_for(lambda: not bridge.ACTIVE_SESSIONS, timeout=15)
+        await peer.close()
+        self.assertTrue(any(e["type"].endswith(".completed") for e in events))
+
+    async def test_no_key_without_the_development_mode_refuses_everything(self):
+        bridge.ALLOW_UNAUTHENTICATED = False
+        async with self.http.post(
+            f"{self.bridge.url}/probe", headers=gateway_headers(self.gateway.base)
+        ) as response:
+            self.assertEqual(response.status, 401)
+
+    def test_startup_needs_a_key_outside_loopback_development(self):
+        self.assertIsNone(bridge.startup_problem("k" * 32, False, "0.0.0.0"))
+        self.assertIn("BRIDGE_API_KEY", bridge.startup_problem("", False, "0.0.0.0"))
+        self.assertIn("BRIDGE_API_KEY", bridge.startup_problem("", False, "127.0.0.1"))
+        self.assertIn("loopback", bridge.startup_problem("", True, "0.0.0.0"))
+        self.assertIsNone(bridge.startup_problem("", True, "127.0.0.1"))
 
     async def test_bridge_key_and_headers(self):
         bridge.BRIDGE_API_KEY = "bridge-secret"

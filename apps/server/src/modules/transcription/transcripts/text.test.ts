@@ -95,6 +95,10 @@ describe('participants and placeholders', () => {
     expect(germanDate(new Date('2026-10-04T22:30:00Z'))).toBe('05.10.2026')
     expect(minutesText(2700)).toBe('45 Min')
     expect(minutesText(null)).toBe('–')
+    // Campus: under a minute is `< 1 Min`, where kiChat says `0 Min`.
+    expect(minutesText(0)).toBe('< 1 Min')
+    expect(minutesText(42)).toBe('< 1 Min')
+    expect(minutesText(60)).toBe('1 Min')
     expect(
       placeholderValues({
         title: 'T',

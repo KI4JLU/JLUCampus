@@ -152,36 +152,65 @@ export function noProxyCovers(noProxy: string | null, url: string): boolean {
     })
 }
 
+/** Whether Node uses the proxy variables: `NODE_USE_ENV_PROXY=1` or `--use-env-proxy`. */
+function envProxyEnabled(environment: NodeJS.ProcessEnv, execArgv: readonly string[]): boolean {
+  return (
+    environment.NODE_USE_ENV_PROXY === '1' ||
+    [...execArgv, ...(environment.NODE_OPTIONS?.split(/\s+/) ?? [])].includes('--use-env-proxy')
+  )
+}
+
+/**
+ * Whether a request to `url` goes through the proxy: Node uses the proxy variables, one is set
+ * for the URL's scheme and `NO_PROXY` does not cover its host.
+ */
+export function reachedThroughProxy(
+  environment: NodeJS.ProcessEnv,
+  url: string,
+  execArgv: readonly string[] = []
+): boolean {
+  if (!envProxyEnabled(environment, execArgv)) return false
+  const protocol = new URL(url).protocol
+  const proxy =
+    protocol === 'https:'
+      ? proxyVariable(environment, 'HTTPS_PROXY')
+      : protocol === 'http:'
+        ? proxyVariable(environment, 'HTTP_PROXY')
+        : null
+  return Boolean(proxy) && !noProxyCovers(proxyVariable(environment, 'NO_PROXY'), url)
+}
+
 /**
  * What the server warns about at start: proxy variables Node ignores without
- * `NODE_USE_ENV_PROXY=1`, and `internalUrls` (object storage, Keycloak, the server itself) that
- * the proxy would get. Never names the proxy, whose URL may hold credentials.
+ * `NODE_USE_ENV_PROXY=1`, and `internalUrls` (object storage, Keycloak, the server itself, the
+ * realtime bridge) that the proxy would get. Never names the proxy, whose URL may hold
+ * credentials.
  */
 export function outboundProxyWarnings(
   environment: NodeJS.ProcessEnv,
   internalUrls: readonly string[],
   execArgv: readonly string[] = []
 ): string[] {
-  const proxies = {
-    'http:': proxyVariable(environment, 'HTTP_PROXY'),
-    'https:': proxyVariable(environment, 'HTTPS_PROXY')
+  if (!proxyVariable(environment, 'HTTP_PROXY') && !proxyVariable(environment, 'HTTPS_PROXY')) {
+    return []
   }
-  if (!proxies['http:'] && !proxies['https:']) return []
-  const enabled =
-    environment.NODE_USE_ENV_PROXY === '1' ||
-    [...execArgv, ...(environment.NODE_OPTIONS?.split(/\s+/) ?? [])].includes('--use-env-proxy')
-  if (!enabled) {
+  if (!envProxyEnabled(environment, execArgv)) {
     return [
       'HTTPS_PROXY/HTTP_PROXY is set but Node ignores it without NODE_USE_ENV_PROXY=1: outbound requests go direct.'
     ]
   }
-  const noProxy = proxyVariable(environment, 'NO_PROXY')
-  return internalUrls.flatMap((url) => {
-    const protocol = new URL(url).protocol as keyof typeof proxies
-    if (!proxies[protocol] || noProxyCovers(noProxy, url)) return []
-    return [`${new URL(url).host} would be reached through the proxy: add it to NO_PROXY.`]
-  })
+  return internalUrls.flatMap((url) =>
+    reachedThroughProxy(environment, url, execArgv)
+      ? [`${new URL(url).host} would be reached through the proxy: add it to NO_PROXY.`]
+      : []
+  )
 }
+
+/**
+ * Where the production app container reaches the realtime bridge on the host
+ * (`docker-compose.prod.yml`, host networking); checked at start once the bridge has a key.
+ */
+export const PRODUCTION_BRIDGE_URL = 'http://host.docker.internal:8089'
 
 for (const warning of outboundProxyWarnings(
   process.env,
@@ -189,7 +218,8 @@ for (const warning of outboundProxyWarnings(
     `http://127.0.0.1:${env.PORT}`,
     `http://localhost:${env.PORT}`,
     env.KEYCLOAK_ISSUER,
-    env.TRANSCRIPTION_S3_ENDPOINT
+    env.TRANSCRIPTION_S3_ENDPOINT,
+    env.TRANSCRIPTION_REALTIME_BRIDGE_KEY ? PRODUCTION_BRIDGE_URL : undefined
   ].filter((url): url is string => Boolean(url)),
   process.execArgv
 )) {

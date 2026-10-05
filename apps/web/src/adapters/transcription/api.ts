@@ -46,7 +46,7 @@ import {
   type TranscriptionJobCreated,
   type TranscriptionJobPeaks,
   type TranscriptionMediaUrl,
-  type TranscriptionModel,
+  type TranscriptionModelList,
   type TranscriptionModelsRequest,
   type TranscriptionRealtimeConfig,
   type TranscriptionRealtimeIce,
@@ -383,10 +383,10 @@ export async function createRealtimeSession(
 /** Admin only: the models of a speech or chat endpoint, for the admin form. */
 export async function fetchAdminModels(
   input: TranscriptionModelsRequest
-): Promise<TranscriptionModel[]> {
+): Promise<TranscriptionModelList> {
   return transcriptionModelListSchema.parse(
     await apiFetch<unknown>(TRANSCRIPTION_API.adminModels, { ...post, json: input })
-  ).models
+  )
 }
 
 /** Admin only: checks one upstream with the values in the form. */
@@ -835,7 +835,7 @@ export function useCreateRealtimeSession(): UseMutationResult<
 
 /** The models of an endpoint, for the admin form. */
 export function useFetchAdminModels(): UseMutationResult<
-  TranscriptionModel[],
+  TranscriptionModelList,
   Error,
   TranscriptionModelsRequest
 > {

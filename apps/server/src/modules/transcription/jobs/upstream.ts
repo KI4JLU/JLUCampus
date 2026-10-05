@@ -3,9 +3,17 @@ import { upstreamLimiter, type ConcurrencyLimiter } from './limiter.js'
 
 /**
  * Requests to the speech and diarisation servers as kiChat's `CustomSpeachesProvider` sends them:
- * every request holds a permit of the shared budget (`upstreamLimiter`), transient failures are
- * retried, and a request that ran out of time while the server was still working on it is not
- * (the identical request would only burn the same time again).
+ * every request holds a permit of the shared budget (`upstreamLimiter`) and transient failures
+ * are retried, with kiChat's two policies:
+ *
+ * - A speech chunk (`transcribeAudioParallel`, `withRetry` with `isRetryable`) is tried again
+ *   after every transport failure, a timeout included (Laravel's `ConnectionException`), and 5xx.
+ * - Diarisation and VAD (`postToServer`) are tried again after transport failures and 5xx, but
+ *   not after a processing timeout: kiChat's cURL timed out after connecting, so the server had
+ *   the request, and the identical request would burn the same time again. Node's fetch cannot
+ *   tell when it connected; undici gives up connecting after 10 s with a transport error (which
+ *   is retried), and these deadlines are far longer, so a passed deadline stands in for kiChat's
+ *   processing timeout. It does not prove that the server was still working on the audio.
  */
 
 /** kiChat's `transcription.retry_times`: attempts of a chunk's transcription in all. */
@@ -31,12 +39,20 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Whether kiChat tries a failed request again: transport errors and `5xx`, never a processing
- * timeout or a `4xx` answer (those will not change).
+ * Whether kiChat's parallel transcription tries a chunk again (its `retry` callback): every
+ * transport failure, a timeout included, and `5xx`; never a `4xx` answer (that will not change).
  */
 export function isRetryable(error: unknown): boolean {
-  if (!(error instanceof UpstreamError) || error.timedOut) return false
-  return error.status === null || error.status >= 500
+  return error instanceof UpstreamError && (error.status === null || error.status >= 500)
+}
+
+/**
+ * `isRetryable` without requests that ran past their deadline, for the correction's chat
+ * requests (a Campus addition, kiChat does not retry them): a long answer that timed out would
+ * only take as long again.
+ */
+export function isRetryableInTime(error: unknown): boolean {
+  return isRetryable(error) && !(error as UpstreamError).timedOut
 }
 
 /** What `postToServer` answers: the body and status, or the transport error it ended with. */
@@ -135,18 +151,29 @@ export async function postToServer(
 
 /**
  * Laravel's `retry($times, $sleepMs, $when)` as kiChat's parallel transcription uses it: `call`
- * runs up to `times` times with `delayMs` between, again only for what `isRetryable` accepts.
+ * runs up to `times` times with `delayMs` between, again only for what `when` accepts
+ * (`isRetryable`, as kiChat's speech chunks).
  */
 export async function withRetry<T>(
   call: () => Promise<T>,
-  options: { times?: number; delayMs?: number; signal?: AbortSignal } = {}
+  options: {
+    times?: number
+    delayMs?: number
+    signal?: AbortSignal
+    when?: (error: unknown) => boolean
+  } = {}
 ): Promise<T> {
-  const { times = ASR_RETRY_TIMES, delayMs = ASR_RETRY_DELAY_MS, signal } = options
+  const {
+    times = ASR_RETRY_TIMES,
+    delayMs = ASR_RETRY_DELAY_MS,
+    signal,
+    when = isRetryable
+  } = options
   for (let attempt = 1; ; attempt++) {
     try {
       return await call()
     } catch (error) {
-      if (signal?.aborted || attempt >= Math.max(1, times) || !isRetryable(error)) throw error
+      if (signal?.aborted || attempt >= Math.max(1, times) || !when(error)) throw error
       await sleep(delayMs, signal)
     }
   }

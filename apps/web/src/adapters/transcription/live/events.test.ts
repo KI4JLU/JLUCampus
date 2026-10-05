@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LiveEventProcessor } from './events'
+import { isLiveBridgeErrorCode, LiveEventProcessor } from './events'
 
 const delta = (itemId: string, text: string): unknown => ({
   type: 'conversation.item.input_audio_transcription.delta',
@@ -89,5 +89,26 @@ describe('LiveEventProcessor', () => {
     expect(processor.handle(null).text).toBeNull()
     expect(processor.handle({ type: 'session.created' }).text).toBeNull()
     expect(processor.handle(delta('a', '')).text).toBeNull()
+  })
+
+  it('passes the bridge’s own error codes for the app to word (B-1, B-3)', () => {
+    const processor = new LiveEventProcessor()
+    expect(
+      processor.handle({
+        type: 'error',
+        error: { code: 'session_idle', message: 'no audio arrived for too long' }
+      }).error
+    ).toBe('session_idle')
+    expect(
+      processor.handle({
+        type: 'conversation.item.input_audio_transcription.failed',
+        item_id: 'item_1',
+        error: { code: 'upstream_error', message: 'the gateway reported an error' }
+      }).error
+    ).toBe('upstream_error')
+    expect(isLiveBridgeErrorCode('session_expired')).toBe(true)
+    expect(
+      processor.handle({ type: 'error', error: { code: 'other', message: 'Rate limit' } }).error
+    ).toBe('Rate limit')
   })
 })

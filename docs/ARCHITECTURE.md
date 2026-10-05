@@ -293,7 +293,11 @@ the text with an OpenAI-compatible chat endpoint, which also writes summaries, s
 and speaker optimisations. This is kiChat's batch pipeline (`jobs/`): `asrBaseUrl` takes up to
 ten comma-separated speech workers, which take the chunks in parallel waves; one budget of
 `asrConcurrency` requests per server process (`jobs/limiter.ts`) covers transcription,
-diarisation and VAD; transport errors and `5xx` are retried three times (`jobs/upstream.ts`).
+diarisation and VAD; transport errors and `5xx` are retried three times (`jobs/upstream.ts`),
+a speech chunk also after a timeout (kiChat's `ConnectionException`), diarisation and VAD not
+(kiChat's processing timeout; Node's fetch cannot tell when it connected, so the passed deadline
+stands in for it). Every upstream answer is masked before it reaches an error, a log or a
+client (`maskSecrets` in `http.ts`): the keys sent lately, `Bearer …`, `sk-…`, `api_key=…`.
 The analysis diarises the whole file and offers samples per voice; the transcription diarises
 again with the named voices as known speakers (`known_speaker_references`, WAV cut from the
 normalised audio) plus VAD, and maps words to speakers by time overlap (`jobs/mapping.ts`,
@@ -350,8 +354,11 @@ HRZ's LiteLLM gateway (`TRANSCRIPTION_HRZ_API_URL`, `https://api.hrz.uni-giessen
 | Live, OpenAI        | OpenAI Realtime with ephemeral keys                                                                                                                                                                                              | the OpenAI key (`openaiRealtimeApiKey`)                                                                                                                                            |
 
 Setting it up: enter the keys in the form's secret fields, press _Modelle abrufen_ for speech and
-chat (the lists come from the gateway's `GET /models`; the preset default models stay selected
-when the gateway lists them), check each upstream with _Verbindung testen_, then enable the
+chat (the lists come from the gateway's `GET /models`, speech recognition models only for speech:
+LiteLLM's `mode: audio_transcription` from `GET /model/info` where it names one, else the id, such
+as Whisper, `…transcribe`, STT, Voxtral, Parakeet or Canary; other ids can be added by hand, and
+without a default the first speech model of the list is used, never a chat model listed before
+it; the preset default models stay selected when the gateway lists them), check each upstream with _Verbindung testen_, then enable the
 module. The gateway answers `403` for models its key does not allow, so the key must include
 every model used (at the time of writing the HRZ key gets `403` for `voxtral-mini-realtime`, and
 the Speaches server needs a key of its own). A capability is offered only while its upstream is
@@ -375,7 +382,9 @@ understands; endpoints that refuse unknown parameters (OpenAI) need it off.
 - **LLM correction** (`jobs/correction.ts`, kiChat's `optimizeTranscriptSpeakers` after
   recognition): kiChat's prompt and `{original_index, text, speaker}` answer, in batches of 150
   segments or 20,000 characters; splits timed by text length, speaker labels removed,
-  same-speaker neighbours under 3 s apart merged. A failure leaves the text uncorrected.
+  same-speaker neighbours under 3 s apart merged up to a segment's limits (20,000 characters,
+  5,000 words). A failure, or corrections a transcript cannot hold, leave the text uncorrected
+  with a notice.
 - **Speaker optimisation** (`optimize/speakers.ts`, the result view's button): the same prompt
   and answer; the route takes only the speaker of most of each segment's text, as the client
   keeps text, timing and redactions.
@@ -390,7 +399,10 @@ then sends `fetch` (upstreams, Keycloak) and `http`/`https` requests (the S3 cli
 proxy, except to the hosts of `NO_PROXY`, which must name object storage, Keycloak if it is
 internal, `localhost`/`127.0.0.1` (the container's health check) and the realtime bridge. `fetch`
 tunnels even plain-http requests with `CONNECT`. At start the server warns about proxy variables
-Node ignores and about internal hosts the proxy would get (`outboundProxyWarnings` in `env.ts`).
+Node ignores and about internal hosts the proxy would get (`outboundProxyWarnings` in `env.ts`,
+with the production bridge `host.docker.internal:8089` once `TRANSCRIPTION_REALTIME_BRIDGE_KEY`
+is set), and once per host about a bridge address of the module's settings that would go through
+the proxy (its requests carry the gateway key).
 
 `infra/transcription-mock` stands in for every upstream in automated tests (`startUpstreamMock`)
 and for offline development (`bun run mock:transcription`); nothing points at it by default.

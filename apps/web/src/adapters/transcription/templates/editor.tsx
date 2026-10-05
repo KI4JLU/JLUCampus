@@ -183,6 +183,7 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
         i18n.language,
         {
           minutes: (minutes) => t('transcription.export.minutesShort', { minutes }),
+          underMinute: t('transcription.export.underMinute'),
           unknown: t('transcription.common.unknown')
         }
       ),

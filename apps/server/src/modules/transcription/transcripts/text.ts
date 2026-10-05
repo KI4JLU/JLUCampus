@@ -110,9 +110,13 @@ export function germanDate(date: Date): string {
   })
 }
 
-/** kiChat's `{minutes} Min`, rounded; `–` without a duration. */
+/**
+ * kiChat's `{minutes} Min`, rounded; `< 1 Min` below a minute (kiChat says `0 Min` there), `–`
+ * without a duration.
+ */
 export function minutesText(seconds: number | null): string {
-  return seconds === null ? '–' : `${Math.round(seconds / 60)} Min`
+  if (seconds === null) return '–'
+  return seconds < 60 ? '< 1 Min' : `${Math.round(seconds / 60)} Min`
 }
 
 export type PlaceholderValues = Record<TranscriptionPlaceholder, string>

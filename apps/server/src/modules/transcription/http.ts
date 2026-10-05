@@ -5,26 +5,73 @@ import { ApiError } from '../../api.js'
 
 /**
  * Requests to the module's upstreams (speech, diarisation, chat, realtime): no redirects, a
- * timeout, and cancelled with the caller's signal. Keys go in `Authorization` only and never into
- * errors or logs.
+ * timeout, and cancelled with the caller's signal. Keys go in `Authorization` only; what an
+ * upstream answers is masked before it reaches an error (`maskSecrets`), so errors may be logged.
  */
 
-/** An upstream that did not answer, answered with an error status or with something unexpected. */
+/** Keys this server sent to upstreams lately, newest last; `maskSecrets` hides them. */
+const sentKeys = new Set<string>()
+/** Enough for every key of the module's settings and the admin form's tries. */
+const SENT_KEYS_MAX = 64
+/** Shorter strings are no keys and would mask ordinary text. */
+const KEY_MIN = 8
+
+/** Notes a key that goes to an upstream, so errors and logs that reflect it mask it. */
+export function rememberKey(key: string | null | undefined): void {
+  if (!key || key.length < KEY_MIN) return
+  sentKeys.delete(key)
+  sentKeys.add(key)
+  if (sentKeys.size > SENT_KEYS_MAX) sentKeys.delete(sentKeys.values().next().value!)
+}
+
+/** Forgets the keys noted (tests). */
+export function forgetKeys(): void {
+  sentKeys.clear()
+}
+
+/**
+ * `text` with every key masked: those given, every key sent to an upstream lately (`bearer`), and
+ * anything that looks like one (`Bearer …`, `sk-…`, `api_key=…`). For upstream answers before they
+ * reach a log, an error detail or a client: a gateway may reflect the key it refused.
+ */
+export function maskSecrets(
+  text: string,
+  keys: readonly (string | null | undefined)[] = []
+): string {
+  let safe = text
+  for (const key of keys) if (key && key.length >= 4) safe = safe.split(key).join('***')
+  for (const key of sentKeys) safe = safe.split(key).join('***')
+  return safe
+    .replace(/Bearer\s+(?!\*\*\*)[^\s"',;)\]}]+/gi, 'Bearer ***')
+    .replace(/\bsk-(?!\*\*\*)[\w-]{6,}/g, 'sk-***')
+    .replace(
+      /((?:api[_-]?key|access[_-]?token|x-gateway-key|authorization)["']?\s*[:=]\s*["']?)(?!\*\*\*|Bearer)[^\s"',;)\]}]+/gi,
+      '$1***'
+    )
+}
+
+/**
+ * An upstream that did not answer, answered with an error status or with something unexpected.
+ * Message and detail are masked (`maskSecrets`), so the error can be logged as it is.
+ */
 export class UpstreamError extends Error {
+  /** The start of its answer, masked, for logs and safe error detail. */
+  readonly detail: string | null
+
   constructor(
     message: string,
     /** The upstream's HTTP status, if it answered. */
     readonly status: number | null = null,
-    /** The start of its answer, for logs and safe error detail. */
-    readonly detail: string | null = null,
+    detail: string | null = null,
     /**
-     * The request ran out of its time while the upstream was still working on it (kiChat's
-     * processing timeout): the same request again would take as long, so it is not retried.
+     * The request ran past its deadline (`timeoutMs`). Whether that is worth another attempt
+     * depends on the request: kiChat retries a speech chunk that timed out, not a diarisation.
      */
     readonly timedOut = false
   ) {
-    super(message)
+    super(maskSecrets(message))
     this.name = 'UpstreamError'
+    this.detail = detail === null ? null : maskSecrets(detail)
   }
 }
 
@@ -43,8 +90,9 @@ export function upstreamUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
 }
 
-/** `Authorization: Bearer <key>` when there is a key. */
+/** `Authorization: Bearer <key>` when there is a key; the key is noted for `maskSecrets`. */
 export function bearer(apiKey: string | null | undefined): Record<string, string> {
+  rememberKey(apiKey)
   return apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
 }
 

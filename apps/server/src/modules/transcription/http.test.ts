@@ -6,6 +6,8 @@ import {
   bearer,
   ensureOk,
   fetchJson,
+  forgetKeys,
+  maskSecrets,
   parseModels,
   upstream,
   UpstreamError,
@@ -16,6 +18,7 @@ import {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  forgetKeys()
 })
 
 describe('upstreamUrl and bearer', () => {
@@ -89,6 +92,56 @@ describe('ensureOk and fetchJson', () => {
     await expect(
       fetchJson('https://llm.example/v1/x', z.object({ text: z.string() }), { label: 'The model' })
     ).rejects.toMatchObject({ message: 'The model answered in an unexpected shape' })
+  })
+})
+
+describe('keys reflected by an upstream (B-1)', () => {
+  // No `sk-` key: only the key the request sent tells it apart from text.
+  const sentinel = 'gw-sentinel-4f1d9c2e7b'
+
+  it('masks given, sent and key-like strings', () => {
+    expect(maskSecrets('key=abc123def', ['abc123def'])).toBe('key=***')
+    expect(maskSecrets('Authorization: Bearer abc.def-ghi, next')).toBe(
+      'Authorization: Bearer ***, next'
+    )
+    expect(maskSecrets('{"api_key": "plain-value-123"}')).toBe('{"api_key": "***"}')
+    expect(maskSecrets('token sk-live-abcdefgh')).toBe('token sk-***')
+    bearer('custom-gateway-key-9876')
+    expect(maskSecrets('refused custom-gateway-key-9876')).toBe('refused ***')
+    // Short strings are never taken for keys, so ordinary text stays.
+    bearer('abc')
+    expect(maskSecrets('abc')).toBe('abc')
+  })
+
+  it('never keeps a key a refusing upstream repeats in an error, nor logs it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { message: `Received API key ${sentinel} is invalid` } }),
+            { status: 403 }
+          )
+      )
+    )
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const run = async (): Promise<unknown> => {
+      const response = await upstreamFetch('https://gw.example/v1/audio/transcriptions', {
+        headers: bearer(sentinel)
+      })
+      return ensureOk(response, 'The speech server')
+    }
+    const error = await run().catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(UpstreamError)
+    const { detail, message, stack } = error as UpstreamError
+    for (const text of [detail, message, stack]) expect(text).not.toContain('sentinel-4f1d9c2e7b')
+    await expect(upstream('Speech recognition is unavailable', run)).rejects.toMatchObject({
+      status: 502
+    })
+    expect(JSON.stringify(logged.mock.calls, Object.getOwnPropertyNames(error))).not.toContain(
+      'sentinel-4f1d9c2e7b'
+    )
+    expect(String(logged.mock.calls)).not.toContain('sentinel-4f1d9c2e7b')
   })
 })
 

@@ -86,7 +86,10 @@ services:
   # stores none of them and browsers never reach its HTTP API. Host networking, as WebRTC media
   # runs over UDP on ephemeral ports and the ICE candidates must carry the host's addresses.
   # Port 8089 listens on every interface so the app container reaches it: keep it closed in the
-  # host firewall and set TRANSCRIPTION_REALTIME_BRIDGE_KEY (its BRIDGE_API_KEY).
+  # host firewall. TRANSCRIPTION_REALTIME_BRIDGE_KEY (its BRIDGE_API_KEY) is required: without it
+  # the bridge refuses to start. At most REALTIME_BRIDGE_MAX_SESSIONS sessions run at once; one
+  # without audio for REALTIME_BRIDGE_IDLE_TIMEOUT_S or longer than REALTIME_BRIDGE_MAX_SESSION_S
+  # is finalized.
   # Built from this checkout: docker compose -f docker-compose.prod.yml build realtime-bridge
   realtime-bridge:
     profiles: ['realtime']
@@ -97,6 +100,9 @@ services:
     environment:
       PORT: ${REALTIME_BRIDGE_PORT:-8089}
       BRIDGE_API_KEY: ${TRANSCRIPTION_REALTIME_BRIDGE_KEY:-}
+      MAX_SESSIONS: ${REALTIME_BRIDGE_MAX_SESSIONS:-20}
+      IDLE_TIMEOUT_S: ${REALTIME_BRIDGE_IDLE_TIMEOUT_S:-60}
+      MAX_SESSION_S: ${REALTIME_BRIDGE_MAX_SESSION_S:-14400}
       # The university's outbound proxy, if the host needs one to reach the gateway.
       HTTPS_PROXY: ${REALTIME_BRIDGE_HTTPS_PROXY:-}
       NO_PROXY: ${REALTIME_BRIDGE_NO_PROXY:-localhost,127.0.0.1}

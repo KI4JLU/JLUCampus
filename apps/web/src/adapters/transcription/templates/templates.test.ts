@@ -13,7 +13,8 @@ import {
   placeholderValues,
   SAMPLE_PARTICIPANTS,
   SAMPLE_TITLE,
-  UNKNOWN_DURATION
+  UNKNOWN_DURATION,
+  type PlaceholderSource
 } from './placeholders'
 import {
   cacheScope,
@@ -77,7 +78,17 @@ function memoryStorage(): PreviewStorage & { map: Map<string, string> } {
   }
 }
 
-const texts = { minutes: (minutes: number) => `${minutes} Min`, unknown: 'Unbekannt' }
+const texts = {
+  minutes: (minutes: number) => `${minutes} Min`,
+  underMinute: '< 1 Min',
+  unknown: 'Unbekannt'
+}
+const source = (duration: number): PlaceholderSource => ({
+  title: 'T',
+  createdAt: null,
+  segments: [],
+  duration
+})
 
 describe('placeholders', () => {
   it('inserts the English tokens at the cursor, replacing the selection', () => {
@@ -158,8 +169,12 @@ describe('placeholders', () => {
       title: 'Unbekannt',
       date: 'Unbekannt',
       participants: 'Unbekannt',
-      duration: '0 Min'
+      duration: '< 1 Min'
     })
+    // Under a minute it is no `0 Min` (kiChat's), at a minute the rounded minutes.
+    expect(placeholderValues(source(59), 'de', texts).duration).toBe('< 1 Min')
+    expect(placeholderValues(source(60), 'de', texts).duration).toBe('1 Min')
+    expect(placeholderValues(source(150), 'de', texts).duration).toBe('3 Min')
   })
 })
 

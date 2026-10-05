@@ -35,7 +35,7 @@ import {
 } from './speakers.js'
 import type { JobChanges } from './store.js'
 import { forwardStatus, JobFailure, progressOf } from './state.js'
-import { withRetry } from './upstream.js'
+import { isRetryableInTime, withRetry } from './upstream.js'
 
 /**
  * What the worker does with a claimed job: the speaker analysis after upload and the
@@ -584,7 +584,7 @@ export async function runTranscription(run: JobRun): Promise<JobChanges> {
       try {
         segments = await correctSegments(segments, correction, {
           signal,
-          run: (call) => withRetry(call, { signal }),
+          run: (call) => withRetry(call, { signal, when: isRetryableInTime }),
           onBatch: (done, total) =>
             advance(run, 'optimizing', 'correcting', done, total, 95 + (done / total) * 5)
         })

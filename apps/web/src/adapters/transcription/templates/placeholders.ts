@@ -40,13 +40,15 @@ export interface PlaceholderSource {
 export interface PlaceholderTexts {
   /** `45 Min`. */
   minutes: (count: number) => string
+  /** Below a minute: `< 1 Min`, as the server says it (`minutesText`). */
+  underMinute: string
   /** A fact the transcript does not have, as the server says it (`Unbekannt`). */
   unknown: string
 }
 
 /**
  * The values of the placeholders: the title, the date in the language's short form, the named
- * speakers in order of appearance and the rounded minutes. A transcript's missing facts stay
+ * speakers in order of appearance and the rounded minutes (`< 1 Min` below one). A transcript's missing facts stay
  * unknown, as in the generated summary; `null` (no transcript open) gives kiChat's samples.
  */
 export function placeholderValues(
@@ -74,7 +76,11 @@ export function placeholderValues(
         : texts.unknown,
     participants: speakers.length > 0 ? speakers.join(', ') : texts.unknown,
     duration:
-      source.duration === null ? UNKNOWN_DURATION : texts.minutes(Math.round(source.duration / 60))
+      source.duration === null
+        ? UNKNOWN_DURATION
+        : source.duration < 60
+          ? texts.underMinute
+          : texts.minutes(Math.round(source.duration / 60))
   }
 }
 

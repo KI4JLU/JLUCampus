@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mediaUrlExpiresSoon, SignedUploadError, uploadToSignedUrl } from './api'
+import { fetchAdminModels, mediaUrlExpiresSoon, SignedUploadError, uploadToSignedUrl } from './api'
 
 /** A stand-in for `XMLHttpRequest` that finishes as `outcome` says when sent. */
 function stubXhr(outcome: { status?: number; error?: boolean }): {
@@ -81,5 +81,25 @@ describe('mediaUrlExpiresSoon', () => {
     expect(mediaUrlExpiresSoon({ url: 'x', expiresAt: '2026-10-04T08:05:01.000Z' }, now)).toBe(
       false
     )
+  })
+})
+
+describe('fetchAdminModels', () => {
+  it('passes the models of the kind and how many others the endpoint has', async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({ models: [{ id: 'jlu/whisper-1', label: 'Whisper' }], leftOut: 3 })
+    )
+    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('window', {})
+    expect(await fetchAdminModels({ kind: 'asr', baseUrl: 'https://api.example.org/v1' })).toEqual({
+      models: [{ id: 'jlu/whisper-1', label: 'Whisper' }],
+      leftOut: 3
+    })
+    // A server without the count: none left out.
+    fetch.mockResolvedValueOnce(Response.json({ models: [] }))
+    expect(await fetchAdminModels({ kind: 'llm', baseUrl: 'https://api.example.org/v1' })).toEqual({
+      models: [],
+      leftOut: 0
+    })
   })
 })

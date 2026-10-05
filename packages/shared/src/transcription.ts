@@ -59,6 +59,8 @@ export const TRANSCRIPTION_SUBTITLE_MAX = 255
 export const TRANSCRIPTION_HISTORY_TITLE_MAX = 35
 export const TRANSCRIPTION_SPEAKER_NAME_MAX = 100
 export const TRANSCRIPTION_SEGMENT_TEXT_MAX = 20_000
+/** Word timings one segment carries at most. */
+export const TRANSCRIPTION_SEGMENT_WORDS_MAX = 5000
 export const TRANSCRIPTION_SEGMENTS_MAX = 20_000
 export const TRANSCRIPTION_WORDS_MAX = 200_000
 export const TRANSCRIPTION_REDACTIONS_PER_SEGMENT_MAX = 500
@@ -281,7 +283,7 @@ export const transcriptionSegmentSchema = z
       .array(transcriptionRedactionSchema)
       .max(TRANSCRIPTION_REDACTIONS_PER_SEGMENT_MAX)
       .default([]),
-    words: z.array(transcriptionWordSchema).max(5000).optional(),
+    words: z.array(transcriptionWordSchema).max(TRANSCRIPTION_SEGMENT_WORDS_MAX).optional(),
     avgLogprob: z.number().finite().nullable().optional(),
     compressionRatio: z.number().finite().nullable().optional(),
     noSpeechProb: z.number().finite().nullable().optional(),
@@ -300,7 +302,8 @@ export const transcriptionSegmentSchema = z
 export type TranscriptionSegment = z.infer<typeof transcriptionSegmentSchema>
 export type TranscriptionSegmentInput = z.input<typeof transcriptionSegmentSchema>
 
-const segmentsSchema = z
+/** The segments of a result or transcript: at most `TRANSCRIPTION_SEGMENTS_MAX`, unique ids. */
+export const transcriptionSegmentsSchema = z
   .array(transcriptionSegmentSchema)
   .max(TRANSCRIPTION_SEGMENTS_MAX)
   .refine((segments) => new Set(segments.map((segment) => segment.id)).size === segments.length, {
@@ -315,7 +318,7 @@ export const transcriptionResultSchema = z.object({
   language: z.string().max(16).nullable(),
   /** Seconds of audio the result covers, if known. */
   duration: secondsSchema.nullable(),
-  segments: segmentsSchema,
+  segments: transcriptionSegmentsSchema,
   words: wordsSchema,
   /** The speech model and provider as the admin named them, for display and the saved record. */
   model: z.string().max(200).nullable(),
@@ -639,7 +642,7 @@ export const transcriptionTranscriptCreateSchema = z.object({
   jobIds: z.array(z.uuid()).min(1).max(TRANSCRIPTION_GROUP_FILES_MAX),
   language: z.string().max(16).nullable(),
   duration: secondsSchema.nullable(),
-  segments: segmentsSchema,
+  segments: transcriptionSegmentsSchema,
   words: wordsSchema.default([]),
   sourceFiles: z.array(transcriptionSourceFileSchema).max(TRANSCRIPTION_GROUP_FILES_MAX),
   speakerColors: transcriptionSpeakerColorMapSchema.default({})
@@ -656,7 +659,7 @@ export const transcriptionTranscriptPatchSchema = z
     baseRevision: z.number().int().min(1),
     title: titleSchema.optional(),
     subtitle: z.string().trim().max(TRANSCRIPTION_SUBTITLE_MAX).optional(),
-    segments: segmentsSchema.optional(),
+    segments: transcriptionSegmentsSchema.optional(),
     speakerColors: transcriptionSpeakerColorMapSchema.optional(),
     summaryTemplateId: z.string().trim().min(1).max(100).nullable().optional()
   })
@@ -1082,7 +1085,7 @@ export type TranscriptionSummaryPreview = z.infer<typeof transcriptionSummaryPre
  * timing stay; the answer replaces the segments, which the client saves as an undoable change.
  */
 export const transcriptionSpeakerOptimizationRequestSchema = z.object({
-  segments: segmentsSchema.refine((segments) => segments.length > 0, {
+  segments: transcriptionSegmentsSchema.refine((segments) => segments.length > 0, {
     message: 'Send at least one segment'
   }),
   transcriptId: z.uuid().nullable().default(null),
@@ -1143,7 +1146,8 @@ export type TranscriptionRealtimeIce = z.infer<typeof transcriptionRealtimeIceSc
 /**
  * Why the on-prem live mode cannot run: the gateway refused the realtime model for its key (it
  * takes the key otherwise), refused the key, refused the session otherwise or is unreachable from
- * the bridge, or the bridge itself is unreachable or refused the server's bridge key.
+ * the bridge, or the bridge itself is unreachable, refused the server's bridge key or holds as
+ * many sessions as it takes.
  */
 export const TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS = [
   'modelNotAllowed',
@@ -1151,7 +1155,8 @@ export const TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS = [
   'gatewayRefused',
   'gatewayUnreachable',
   'bridgeUnreachable',
-  'bridgeKeyRejected'
+  'bridgeKeyRejected',
+  'bridgeBusy'
 ] as const
 export type TranscriptionOnpremUnavailableReason =
   (typeof TRANSCRIPTION_ONPREM_UNAVAILABLE_REASONS)[number]
@@ -1234,6 +1239,26 @@ export type TranscriptionModel = z.infer<typeof transcriptionModelSchema>
 
 export const TRANSCRIPTION_MODELS_MAX = 20
 
+/** Speech synthesis, which shares words such as `speech` with recognition. */
+const SPEECH_SYNTHESIS_ID = /(^|[^a-z])tts([^a-z]|$)|text[-_ ]?to[-_ ]?speech/i
+/** Speech recognition models by id: Whisper, `…-transcribe`, STT/ASR, Voxtral, Parakeet, Canary. */
+const SPEECH_RECOGNITION_ID =
+  /whisper|transcri|speech|(^|[^a-z])(stt|asr)([^a-z]|$)|voxtral|parakeet|canary|wav2vec|seamless|moonshine/i
+
+/** Whether a model id names a speech recognition model, as far as its id tells. */
+export function isSpeechModelId(id: string): boolean {
+  return !SPEECH_SYNTHESIS_ID.test(id) && SPEECH_RECOGNITION_ID.test(id)
+}
+
+/**
+ * The speech model used without a default: the first whose id names a speech model, so a list
+ * that also holds chat models never sends audio to one; else the first (ids the admin typed).
+ */
+export function firstSpeechModel<T extends { id: string }>(models: readonly T[]): T | null {
+  const named = models.filter((model) => model.id.trim())
+  return named.find((model) => isSpeechModelId(model.id)) ?? named[0] ?? null
+}
+
 const modelListSchema = z
   .array(transcriptionModelSchema)
   .max(TRANSCRIPTION_MODELS_MAX)
@@ -1290,7 +1315,7 @@ export const transcriptionComponentConfigSchema = z.object({
   asrBaseUrl: transcriptionUrlListSchema.nullable().default(TRANSCRIPTION_HRZ_API_URL),
   asrModels: modelListSchema,
   /**
-   * One of `asrModels`; `null`: the first. kiChat's model on the gateway, used once `asrModels`
+   * One of `asrModels`; `null`: the first speech model of the list (`firstSpeechModel`). kiChat's model on the gateway, used once `asrModels`
    * lists it (`Modelle abrufen`, which needs the key).
    */
   defaultAsrModel: z
@@ -1500,9 +1525,14 @@ export const transcriptionModelsRequestSchema = z.object({
 })
 export type TranscriptionModelsRequest = z.infer<typeof transcriptionModelsRequestSchema>
 
-/** The endpoint's models in its order. Speech lists are not filtered to chat models. */
+/**
+ * The endpoint's models of the kind asked for, in its order: speech recognition models for `asr`
+ * (LiteLLM's `mode: audio_transcription` where the endpoint says, else by id), chat models for
+ * `llm`. `leftOut` counts the endpoint's other models; the admin may still add any id by hand.
+ */
 export const transcriptionModelListSchema = z.object({
-  models: z.array(transcriptionModelSchema)
+  models: z.array(transcriptionModelSchema),
+  leftOut: z.number().int().min(0).default(0)
 })
 export type TranscriptionModelList = z.infer<typeof transcriptionModelListSchema>
 

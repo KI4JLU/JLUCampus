@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream'
 
-import { TRANSCRIPTION_API } from '@justcampus/shared'
+import { firstSpeechModel, isSpeechModelId, TRANSCRIPTION_API } from '@justcampus/shared'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { json, startUpstreamMock, testApp, type RunningMock } from '../transcripts/testing.js'
@@ -8,6 +8,7 @@ import { json, startUpstreamMock, testApp, type RunningMock } from '../transcrip
 import {
   chatModels,
   safeMessage,
+  speechModels,
   silentWav,
   testConnection,
   type ConnectionContext,
@@ -59,23 +60,91 @@ describe('helpers', () => {
 })
 
 describe('model discovery', () => {
-  it('lists speech models unfiltered and chat models without speech or embeddings', async () => {
+  it('lists speech recognition models for speech and chat models for chat', async () => {
     const app = testApp(adminRouter)
     const speech = await app.request(
       models,
       json('POST', { kind: 'asr', baseUrl: `${mock.origin}/asr/v1` })
     )
-    const { models: speechModels } = (await speech.json()) as { models: Array<{ id: string }> }
-    expect(speechModels.map((model) => model.id)).toContain('jlu/whisper-1')
+    // The gateway's chat model is left out by LiteLLM's mode, though its id says nothing.
+    expect(await speech.json()).toEqual({
+      models: [
+        { id: 'jlu/whisper-1', label: 'jlu/whisper-1' },
+        { id: 'mock-gateway', label: 'mock-gateway' },
+        { id: 'mock-fail', label: 'mock-fail' }
+      ],
+      leftOut: 1
+    })
     const chat = await app.request(
       models,
       json('POST', { kind: 'llm', baseUrl: `${mock.origin}/llm/v1` })
     )
-    expect(await chat.json()).toEqual({
+    expect(await chat.json()).toMatchObject({
       models: [
         { id: 'mock-chat', label: 'Mock Chat' },
         { id: 'mock-chat-large', label: 'mock-chat-large' }
       ]
+    })
+  })
+
+  it('tells speech models by LiteLLM’s mode, else by id', () => {
+    const list = [
+      'jlu/qwen3.8-27b',
+      'jlu/qwen3-embedding',
+      'jlu/whisper-1',
+      'gpt-4o-transcribe',
+      'gpt-4o-mini-tts',
+      'voxtral-mini-2507',
+      'nvidia/parakeet-tdt-0.6b',
+      'nvidia/canary-1b',
+      'my-stt',
+      'jlu/gemma-4-26b-it'
+    ].map((id) => ({ id, label: id }))
+    expect(speechModels(list).map((model) => model.id)).toEqual([
+      'jlu/whisper-1',
+      'gpt-4o-transcribe',
+      'voxtral-mini-2507',
+      'nvidia/parakeet-tdt-0.6b',
+      'nvidia/canary-1b',
+      'my-stt'
+    ])
+    // A mode overrides the id either way.
+    const modes = new Map([
+      ['jlu/whisper-1', 'chat'],
+      ['jlu/gemma-4-26b-it', 'audio_transcription']
+    ])
+    expect(speechModels(list, modes).map((model) => model.id)).toContain('jlu/gemma-4-26b-it')
+    expect(speechModels(list, modes).map((model) => model.id)).not.toContain('jlu/whisper-1')
+    expect(isSpeechModelId('text-to-speech-1')).toBe(false)
+  })
+
+  it('never picks a chat model listed first for speech', () => {
+    const chat = { id: 'jlu/qwen3.8-27b', label: 'Qwen' }
+    const whisper = { id: 'jlu/whisper-1', label: 'Whisper' }
+    expect(firstSpeechModel([chat, whisper])).toBe(whisper)
+    // Ids the admin typed that say nothing are the manual override.
+    const custom = { id: 'campus-recognizer', label: 'Custom' }
+    expect(firstSpeechModel([custom])).toBe(custom)
+    expect(firstSpeechModel([])).toBeNull()
+  })
+
+  it('lists the ids alone when the endpoint has no model info', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        String(url).endsWith('/models')
+          ? Response.json({ data: [{ id: 'jlu/qwen3.8-27b' }, { id: 'whisper-large-v3' }] })
+          : new Response('Not Found', { status: 404 })
+      )
+    )
+    const app = testApp(adminRouter)
+    const speech = await app.request(
+      models,
+      json('POST', { kind: 'asr', baseUrl: 'https://asr.example/v1' })
+    )
+    expect(await speech.json()).toEqual({
+      models: [{ id: 'whisper-large-v3', label: 'whisper-large-v3' }],
+      leftOut: 1
     })
   })
 
@@ -85,10 +154,13 @@ describe('model discovery', () => {
     const app = testApp(adminRouter, {
       secrets: { apiKey: 'saved-speech', llmApiKey: 'saved-chat' }
     })
-    const authorization = (call: number): string | null =>
-      new Headers((fetchMock.mock.calls[call] as unknown as [string, RequestInit])[1].headers).get(
-        'authorization'
+    // The model lists only; speech discovery also asks for LiteLLM's model info.
+    const listCalls = (): [string, RequestInit][] =>
+      (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(([url]) =>
+        String(url).endsWith('/models')
       )
+    const authorization = (call: number): string | null =>
+      new Headers(listCalls()[call]![1].headers).get('authorization')
     await app.request(models, json('POST', { kind: 'asr', baseUrl: 'https://asr.example/v1' }))
     await app.request(models, json('POST', { kind: 'llm', baseUrl: 'https://llm.example/v1' }))
     await app.request(
@@ -169,7 +241,7 @@ describe('connection tests', () => {
       status: 200,
       finding: { kind: 'transcribed', model: 'jlu/whisper-1' },
       checks: [
-        { kind: 'models', count: 3 },
+        { kind: 'models', count: 4 },
         { kind: 'transcribed', model: 'jlu/whisper-1' }
       ],
       message: null
@@ -178,7 +250,7 @@ describe('connection tests', () => {
     expect(await testConnection({ target: 'asr', model: 'mock-fail' }, context())).toMatchObject({
       ok: false,
       status: 503,
-      checks: [{ kind: 'models', count: 3 }]
+      checks: [{ kind: 'models', count: 4 }]
     })
     expect(await testConnection({ target: 'llm', model: 'mock-chat' }, context())).toMatchObject({
       ok: true,

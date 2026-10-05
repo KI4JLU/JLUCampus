@@ -4,7 +4,13 @@ import { connect, type AddressInfo } from 'node:net'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { noProxyCovers, outboundProxyWarnings, proxyVariable } from './env.js'
+import {
+  noProxyCovers,
+  outboundProxyWarnings,
+  PRODUCTION_BRIDGE_URL,
+  proxyVariable,
+  reachedThroughProxy
+} from './env.js'
 
 const run = promisify(execFile)
 
@@ -81,6 +87,34 @@ describe('proxy warnings at start', () => {
         internal
       )
     ).toEqual([])
+  })
+})
+
+describe('the production realtime bridge behind a proxy (B-6)', () => {
+  const proxy = 'http://proxy.campus.test:3128'
+  const enabled = { HTTPS_PROXY: proxy, HTTP_PROXY: proxy, NODE_USE_ENV_PROXY: '1' }
+
+  it('warns when NO_PROXY misses host.docker.internal', () => {
+    expect(
+      outboundProxyWarnings({ ...enabled, NO_PROXY: 'localhost,127.0.0.1,minio' }, [
+        PRODUCTION_BRIDGE_URL
+      ])
+    ).toEqual(['host.docker.internal:8089 would be reached through the proxy: add it to NO_PROXY.'])
+    expect(
+      outboundProxyWarnings(
+        { ...enabled, NO_PROXY: 'localhost,127.0.0.1,minio,host.docker.internal' },
+        [PRODUCTION_BRIDGE_URL]
+      )
+    ).toEqual([])
+  })
+
+  it('knows when a request goes through the proxy', () => {
+    expect(reachedThroughProxy(enabled, PRODUCTION_BRIDGE_URL)).toBe(true)
+    expect(reachedThroughProxy({ HTTP_PROXY: proxy }, PRODUCTION_BRIDGE_URL)).toBe(false)
+    expect(
+      reachedThroughProxy({ HTTP_PROXY: proxy }, PRODUCTION_BRIDGE_URL, ['--use-env-proxy'])
+    ).toBe(true)
+    expect(reachedThroughProxy({ ...enabled, HTTP_PROXY: '' }, PRODUCTION_BRIDGE_URL)).toBe(false)
   })
 })
 

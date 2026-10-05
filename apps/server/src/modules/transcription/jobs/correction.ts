@@ -1,4 +1,9 @@
-import type { TranscriptionSegment } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_SEGMENT_TEXT_MAX,
+  TRANSCRIPTION_SEGMENT_WORDS_MAX,
+  transcriptionSegmentsSchema,
+  type TranscriptionSegment
+} from '@justcampus/shared'
 
 import { complete, stripModelFormatting, type ChatTarget } from '../summaries/chat.js'
 
@@ -97,10 +102,13 @@ export function correctionBatches<T extends Pick<TranscriptionSegment, 'text'>>(
   return batches
 }
 
-/** The model's answer was no JSON array (kiChat: „keine gültige JSON-Antwort“). */
+/**
+ * The model's answer was no JSON array (kiChat: „keine gültige JSON-Antwort“), or its corrections
+ * gave segments a transcript cannot hold.
+ */
 export class InvalidCorrectionError extends Error {
-  constructor() {
-    super('Die KI hat keine gültige JSON-Antwort geliefert.')
+  constructor(message = 'Die KI hat keine gültige JSON-Antwort geliefert.') {
+    super(message)
     this.name = 'InvalidCorrectionError'
   }
 }
@@ -213,7 +221,12 @@ export function applyCorrections(
   return result
 }
 
-/** kiChat's last step: one speaker's neighbours less than 3 s apart become one segment. */
+/**
+ * kiChat's last step: one speaker's neighbours less than 3 s apart become one segment. Campus: a
+ * merge stops where the segment would outgrow what a segment holds (`TRANSCRIPTION_SEGMENT_TEXT_MAX`
+ * characters, `TRANSCRIPTION_SEGMENT_WORDS_MAX` words), as the speaker mapping's merge does, so a
+ * long monologue stays a valid transcript.
+ */
 export function mergeSpeakerRuns(
   segments: readonly TranscriptionSegment[]
 ): TranscriptionSegment[] {
@@ -221,14 +234,21 @@ export function mergeSpeakerRuns(
   for (const segment of segments) {
     const current = merged[merged.length - 1]
     if (current && segment.speaker === current.speaker && segment.start - current.end < 3) {
-      merged[merged.length - 1] = {
-        ...current,
-        end: segment.end,
-        text: `${current.text.trim()} ${segment.text.trim()}`,
-        redactions: [],
-        ...(segment.words ? { words: [...(current.words ?? []), ...segment.words] } : {})
+      const text = `${current.text.trim()} ${segment.text.trim()}`
+      const words = segment.words ? [...(current.words ?? []), ...segment.words] : current.words
+      if (
+        text.length <= TRANSCRIPTION_SEGMENT_TEXT_MAX &&
+        (words?.length ?? 0) <= TRANSCRIPTION_SEGMENT_WORDS_MAX
+      ) {
+        merged[merged.length - 1] = {
+          ...current,
+          end: segment.end,
+          text,
+          redactions: [],
+          ...(segment.words ? { words } : {})
+        }
+        continue
       }
-      continue
     }
     merged.push(segment)
   }
@@ -260,7 +280,9 @@ export async function correctBatch(
 /**
  * Corrects all segments batch by batch, reporting each batch done, then merges and numbers them
  * as kiChat does. `run` wraps every request, so the caller can retry transient failures. An
- * answer that is no JSON array throws `InvalidCorrectionError`.
+ * answer that is no JSON array, or corrections that give segments a transcript cannot hold (a
+ * part beyond the text limit, too many splits), throw `InvalidCorrectionError`, so the caller
+ * keeps the uncorrected text.
  */
 export async function correctSegments(
   segments: readonly TranscriptionSegment[],
@@ -278,5 +300,9 @@ export async function correctSegments(
     await options.onBatch?.(index, batches.length)
     corrected.push(...(await run(() => correctBatch(batch, target, options.signal))))
   }
-  return mergeSpeakerRuns(corrected)
+  const merged = mergeSpeakerRuns(corrected)
+  if (!transcriptionSegmentsSchema.safeParse(merged).success) {
+    throw new InvalidCorrectionError('Die KI-Korrektur ergab ungültige Abschnitte.')
+  }
+  return merged
 }

@@ -77,9 +77,12 @@ services:
     network_mode: host
     environment:
       PORT: ${REALTIME_BRIDGE_PORT:-8089}
-      # Development: signaling only for this machine; media still uses every interface.
+      # Development: signaling only for this machine; media still uses every interface. Without
+      # TRANSCRIPTION_REALTIME_BRIDGE_KEY it takes loopback requests unauthenticated (the bridge
+      # allows that only with a loopback HOST); with the key, only the server's.
       HOST: 127.0.0.1
       BRIDGE_API_KEY: ${TRANSCRIPTION_REALTIME_BRIDGE_KEY:-}
+      BRIDGE_ALLOW_UNAUTHENTICATED: '1'
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
       # TURN for the bridge itself, as for browsers: turn: URLs and coturn's shared secret.

@@ -21,7 +21,7 @@ import {
   vadTimeoutMs
 } from './diarization.js'
 import { ConcurrencyLimiter } from './limiter.js'
-import { isRetryable, postToServer, withRetry } from './upstream.js'
+import { isRetryable, isRetryableInTime, postToServer, withRetry } from './upstream.js'
 
 let directory: string
 let wav: string
@@ -264,13 +264,34 @@ describe('parallel recognition (kiChat’s transcribeAudioParallel)', () => {
 })
 
 describe('upstream retries (kiChat’s rules)', () => {
-  it('retries transport errors and 5xx, never 4xx or a processing timeout', () => {
+  it('retries a speech chunk after transport errors, timeouts included, and 5xx, never 4xx', () => {
+    // kiChat's transcribeAudioParallel retries every ConnectionException, a timeout as well.
     expect(isRetryable(new UpstreamError('down', 503))).toBe(true)
     expect(isRetryable(new UpstreamError('unreachable'))).toBe(true)
+    expect(isRetryable(new UpstreamError('slow', null, null, true))).toBe(true)
     expect(isRetryable(new UpstreamError('limit', 429))).toBe(false)
     expect(isRetryable(new UpstreamError('bad', 415))).toBe(false)
-    expect(isRetryable(new UpstreamError('slow', null, null, true))).toBe(false)
     expect(isRetryable(new Error('other'))).toBe(false)
+    // The correction's chat requests (a Campus addition) are not retried after a timeout.
+    expect(isRetryableInTime(new UpstreamError('down', 503))).toBe(true)
+    expect(isRetryableInTime(new UpstreamError('slow', null, null, true))).toBe(false)
+  })
+
+  it('tries a timed-out speech chunk retry_times in all (B-5)', async () => {
+    const call = vi.fn(async () => {
+      throw new UpstreamError('slow', null, null, true)
+    })
+    await expect(withRetry(call, { times: 3, delayMs: 0 })).rejects.toMatchObject({
+      timedOut: true
+    })
+    expect(call).toHaveBeenCalledTimes(3)
+    const once = vi.fn(async () => {
+      throw new UpstreamError('slow', null, null, true)
+    })
+    await expect(
+      withRetry(once, { times: 3, delayMs: 0, when: isRetryableInTime })
+    ).rejects.toMatchObject({ timedOut: true })
+    expect(once).toHaveBeenCalledTimes(1)
   })
 
   it('withRetry tries retry_times in all with the fixed delay', async () => {
@@ -326,7 +347,7 @@ describe('upstream retries (kiChat’s rules)', () => {
     expect(refused).toMatchObject({ status: 403, body: 'Invalid API key', error: '' })
   })
 
-  it('does not retry a request that timed out while the server was processing it', async () => {
+  it('does not retry a diarisation that ran past its deadline (kiChat’s processing timeout)', async () => {
     const fetch = vi.fn(
       (_url: string, init: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {

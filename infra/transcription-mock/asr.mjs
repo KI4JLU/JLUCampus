@@ -27,8 +27,21 @@ export async function handle(request, response, path) {
       data: [
         { id: 'jlu/whisper-1', object: 'model' },
         { id: 'mock-gateway', object: 'model' },
-        { id: 'mock-fail', object: 'model' }
+        { id: 'mock-fail', object: 'model' },
+        // The gateway serves chat models too; model discovery leaves them out.
+        { id: 'jlu/qwen3.8-27b', object: 'model' }
       ]
+    })
+    return true
+  }
+  if (request.method === 'GET' && path === '/v1/model/info') {
+    // LiteLLM's model info: the mode tells speech recognition from chat.
+    const mode = (id) => (id === 'jlu/qwen3.8-27b' ? 'chat' : 'audio_transcription')
+    sendJson(response, 200, {
+      data: ['jlu/whisper-1', 'mock-gateway', 'mock-fail', 'jlu/qwen3.8-27b'].map((id) => ({
+        model_name: id,
+        model_info: { mode: mode(id) }
+      }))
     })
     return true
   }

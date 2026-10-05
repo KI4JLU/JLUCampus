@@ -34,7 +34,7 @@ built yet answer `501`.
 
 | File              | Prefix         | Endpoints                                                                                                                                        |
 | ----------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `asr.mjs`         | `/asr`         | `GET /v1/models`, `POST /v1/audio/transcriptions`                                                                                                |
+| `asr.mjs`         | `/asr`         | `GET /v1/models`, `GET /v1/model/info`, `POST /v1/audio/transcriptions`                                                                          |
 | `diarization.mjs` | `/diarization` | `POST /v1/audio/diarization`, `POST /v1/audio/speech/timestamps`                                                                                 |
 | `llm.mjs`         | `/llm`         | `GET /v1/models`, `POST /v1/chat/completions`                                                                                                    |
 | `realtime.mjs`    | `/realtime`    | `POST /bridge/realtime`, `POST /bridge/probe`, `GET /bridge/health`, `POST /openai/v1/realtime/client_secrets`, `POST /openai/v1/realtime/calls` |

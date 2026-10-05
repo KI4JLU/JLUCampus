@@ -6,8 +6,9 @@ import type {
 } from '@justcampus/shared'
 import { z } from 'zod'
 
+import { reachedThroughProxy } from '../../../env.js'
 import { onpremGatewayUrl, type TranscriptionSecrets } from '../config.js'
-import { bearer, listModels, upstreamFetch, UpstreamError } from '../http.js'
+import { bearer, listModels, rememberKey, upstreamFetch, UpstreamError } from '../http.js'
 import { parseSignalingAnswer, REALTIME_TIMEOUT_MS } from './upstream.js'
 
 /**
@@ -86,8 +87,12 @@ export function bridgeEndpoints(bridgeUrl: string): {
   return { signaling: `${base}/realtime`, probe: `${base}/probe`, health: `${base}/health` }
 }
 
-/** The headers of every request to the bridge, as kiChat's controller sends them. */
+/**
+ * The headers of every request to the bridge, as kiChat's controller sends them. The gateway key
+ * is noted for `maskSecrets`, as `bearer` notes the bridge key: the bridge's errors may reflect it.
+ */
 export function bridgeHeaders(target: OnpremTarget): Record<string, string> {
+  rememberKey(target.gatewayKey)
   return {
     'X-Gateway-Base': target.gatewayBase,
     'X-Gateway-Key': target.gatewayKey ?? '',
@@ -127,6 +132,8 @@ export function unavailableMessage(
       return 'The realtime bridge is unreachable'
     case 'bridgeKeyRejected':
       return 'The realtime bridge refused the server (TRANSCRIPTION_REALTIME_BRIDGE_KEY)'
+    case 'bridgeBusy':
+      return 'The realtime bridge takes no more sessions right now'
   }
 }
 
@@ -164,6 +171,7 @@ export async function failureOf(
     body = null
   }
   if (!body) return fail('bridgeUnreachable')
+  if (body.error === 'busy') return fail('bridgeBusy')
   if (body.error === 'upstream_failed') return fail('gatewayUnreachable')
   const refusedAuth =
     body.error === 'upstream_rejected' &&
@@ -189,12 +197,38 @@ async function refusalReason(
   }
 }
 
+/** Bridge hosts already warned about (`warnIfProxied`). */
+const proxiedBridges = new Set<string>()
+
+/**
+ * Warns once per host when requests to the bridge would go through the outbound proxy: they carry
+ * the gateway key and the bridge key in plain HTTP, and the proxy usually cannot reach the host
+ * anyway. The bridge belongs into `NO_PROXY` (`host.docker.internal` in production). Returns
+ * whether it would.
+ */
+export function warnIfProxied(
+  bridgeUrl: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  execArgv: readonly string[] = process.execArgv
+): boolean {
+  if (!reachedThroughProxy(environment, bridgeUrl, execArgv)) return false
+  const host = new URL(bridgeUrl).host
+  if (!proxiedBridges.has(host)) {
+    proxiedBridges.add(host)
+    console.warn(
+      `Outbound proxy: the realtime bridge ${host} would be reached through the proxy: add it to NO_PROXY.`
+    )
+  }
+  return true
+}
+
 /** A request to the bridge; an unreachable bridge is `bridgeUnreachable`. */
 async function bridgeFetch(
   url: string,
   init: RequestInit & { timeoutMs: number; signal?: AbortSignal },
   target: OnpremTarget
 ): Promise<Response> {
+  warnIfProxied(url)
   try {
     return await upstreamFetch(url, init)
   } catch (error) {

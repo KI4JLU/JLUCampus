@@ -527,6 +527,54 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     expect(() => checkResultSize(0, TRANSCRIPTION_WORDS_MAX + 1)).toThrow(JobFailure)
   }, 60_000)
 
+  it('completes a long one-voice monologue the correction reads in batches (B-4)', async () => {
+    const id = '00000000-0000-4000-8000-0000000000a9'
+    const storage = await storageWith(id, 'talk.wav')
+    const settings = config({ chunkSeconds: 3600, diarizationEnabled: false })
+    const analysis = run(jobRow(id), storage, settings)
+    const analyzed = await runAnalysis(analysis)
+    // Three sentences of 9,000 characters without pauses: one voice would merge them into one
+    // segment of 27,002 characters, beyond what a segment holds.
+    const segments = [0, 1, 2].map((index) => ({
+      start: index * 6,
+      end: index * 6 + 6,
+      text: `Teil ${index} `.padEnd(9000, 'a'),
+      seek: null,
+      temperature: null,
+      avgLogprob: null,
+      compressionRatio: null,
+      noSpeechProb: null
+    }))
+    const chunk = { index: 0, start: 0, end: analysis.job.duration! }
+    storage.objects.set(
+      asrCacheKey(componentId, id, chunk, 'jlu/whisper-1', 'auto'),
+      Buffer.from(JSON.stringify({ text: '', language: 'de', duration: 19, segments, words: [] }))
+    )
+    const done = await runTranscription(
+      run(
+        {
+          ...analysis.job,
+          ...analyzed,
+          status: 'preprocessing',
+          settings: { language: 'auto', speakerCount: 'single', llmCorrection: true }
+        } as JobRow,
+        storage,
+        settings
+      )
+    )
+    expect(done.status).toBe('completed')
+    expect(done.error).toBeNull()
+    const result = done.result!
+    expect(result.segments.length).toBeGreaterThan(1)
+    expect(result.segments.every((segment) => segment.text.length <= 20_000)).toBe(true)
+    expect(result.text.replace(/\s+/g, '')).toBe(
+      segments
+        .map((segment) => segment.text)
+        .join('')
+        .replace(/\s+/g, '')
+    )
+  }, 60_000)
+
   it('takes the audio out of an MP4 video', async () => {
     const id = '00000000-0000-4000-8000-0000000000a2'
     const storage = await storageWith(id, 'clip.mp4')

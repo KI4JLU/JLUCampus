@@ -89,6 +89,7 @@
   "legendAuto": "filled in automatically",
   "library": "Library",
   "minutesShort": "{{minutes}} min",
+  "underMinute": "< 1 min",
   "moveDown": "Move down",
   "moveUp": "Move up",
   "myTemplates": "My templates",

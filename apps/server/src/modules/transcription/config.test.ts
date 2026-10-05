@@ -48,6 +48,16 @@ describe('model choice', () => {
     expect(asrModel(configured)?.id).toBe('jlu/whisper-1')
     expect(asrModel({ ...configured, defaultAsrModel: 'jlu/whisper-2' })?.id).toBe('jlu/whisper-2')
     expect(asrModel({ ...configured, defaultAsrModel: 'gone' })?.id).toBe('jlu/whisper-1')
+    // Without a default the first speech model, never a chat model listed before it.
+    const mixed = {
+      ...configured,
+      defaultAsrModel: null,
+      asrModels: [
+        { id: 'jlu/qwen3.8-27b', label: 'Qwen' },
+        { id: 'jlu/whisper-1', label: 'Whisper' }
+      ]
+    }
+    expect(asrModel(mixed)?.id).toBe('jlu/whisper-1')
     expect(asrModel(TRANSCRIPTION_DEFAULT_CONFIG)).toBeNull()
   })
 

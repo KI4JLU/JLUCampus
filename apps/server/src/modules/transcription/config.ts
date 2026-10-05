@@ -1,4 +1,5 @@
 import {
+  firstSpeechModel,
   TRANSCRIPTION_DEFAULT_CONFIG,
   TRANSCRIPTION_DEFAULT_DIARIZATION_MODEL,
   transcriptionCapabilitiesSchema,
@@ -29,12 +30,14 @@ export function loadTranscriptionRuntime(): Promise<TranscriptionRuntime | null>
   return loadModuleRuntime('transcription', transcriptionComponentConfigSchema, true)
 }
 
-/** The speech model jobs use: the admin's default if listed, else the first; `null` without one. */
+/**
+ * The speech model jobs use: the admin's default if listed, else the first speech model of the
+ * list (`firstSpeechModel`, never a chat model listed before it); `null` without one.
+ */
 export function asrModel(config: TranscriptionComponentConfig): TranscriptionModel | null {
   return (
     config.asrModels.find((model) => model.id === config.defaultAsrModel) ??
-    config.asrModels[0] ??
-    null
+    firstSpeechModel(config.asrModels)
   )
 }
 

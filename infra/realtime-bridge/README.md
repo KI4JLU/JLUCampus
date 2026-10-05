@@ -9,7 +9,8 @@ sends the transcript back over the `oai-events` data channel. A browser WebSocke
 Ported from HAWKI's realtime bridge (kiChat, `_docker/realtime-bridge`), with the same protocol.
 The changes are marked `Campus:` in `bridge.py`: JSON errors that carry the gateway's status,
 `POST /probe`, a timeout for peers that never connect, TURN credentials minted from coturn's
-shared secret, and the outbound proxy for the WebSocket.
+shared secret, the outbound proxy for the WebSocket, a mandatory `BRIDGE_API_KEY`, a session
+limit with idle and lifetime limits, coalesced rotations, and masked upstream errors.
 
 ## How a session runs
 
@@ -38,12 +39,16 @@ shared secret, and the outbound proxy for the WebSocket.
 | `GET /health`    | –         | `200 ok`                                                                 |
 
 Errors are JSON `{error, message, upstream_status?}`: `401 unauthorized` (bridge key),
-`400 bad_request`/`bad_offer`, `502 upstream_rejected` (the gateway refused the handshake, with
-its status: 403 for a model the key may not use), `upstream_error`/`upstream_closed` (refused
-after the handshake), `upstream_failed` (unreachable). The Campus server turns them into the
-reasons `modelNotAllowed`, `gatewayKeyRejected`, `gatewayRefused`, `gatewayUnreachable`,
-`bridgeUnreachable` and `bridgeKeyRejected`, which the admin connection test and the live tab
-show. A 401/403 handshake is told apart by the gateway's model list with the same key: if it
+`400 bad_request`/`bad_offer`, `503 busy` (`MAX_SESSIONS` reached), `502 upstream_rejected` (the
+gateway refused the handshake, with its status: 403 for a model the key may not use),
+`upstream_error`/`upstream_closed` (refused after the handshake), `upstream_failed`
+(unreachable). The Campus server turns them into the reasons `modelNotAllowed`,
+`gatewayKeyRejected`, `gatewayRefused`, `gatewayUnreachable`, `bridgeUnreachable`,
+`bridgeKeyRejected` and `bridgeBusy`, which the admin connection test and the live tab show.
+
+What the gateway says never reaches a log or a client unmasked: the gateway key of the request,
+the bridge key, `Bearer …`, `sk-…` and `api_key=…` are replaced by `***`. Browsers get fixed
+messages only (`…failed` with `{code: "upstream_error"}`), the Campus server a masked one. A 401/403 handshake is told apart by the gateway's model list with the same key: if it
 works and lacks the model, the key may not use the model.
 
 ## Settings
@@ -57,12 +62,25 @@ works and lacks the model, the key may not use the model.
 | `TURN_USERNAME`, `TURN_PASSWORD` | –                 | Static TURN credentials instead of `TURN_SECRET`.                         |
 | `STUN_URLS`                      | –                 | Comma-separated STUN URLs.                                                |
 | `HTTPS_PROXY`, `NO_PROXY`        | –                 | Outbound proxy for the gateway's WebSocket.                               |
+| `BRIDGE_ALLOW_UNAUTHENTICATED`   | –                 | `1`: development without a key, only with a loopback `HOST`.              |
+| `MAX_SESSIONS`                   | `20`              | Sessions and probes at once; beyond, `503 busy`.                          |
+| `IDLE_TIMEOUT_S`                 | `60`              | A connected session without audio for this long is finalized.             |
+| `MAX_SESSION_S`                  | `14400`           | A connected session is finalized after this long in all.                  |
+| `ROTATE_MIN_INTERVAL_S`          | `1`               | Rotations (`keep_open` commits) start at most this often.                 |
 | `CONNECT_TIMEOUT_S`              | `30`              | A peer not connected by then is closed with its gateway stream.           |
 | `PROBE_WAIT_S`                   | `1.5`             | How long `/probe` waits for the gateway to refuse the model.              |
 | `LOG_LEVEL`                      | `INFO`            |                                                                           |
 
-Without `BRIDGE_API_KEY`, anyone who reaches the port can make the bridge connect to any
-WebSocket (`X-Gateway-Base`): keep the port closed to the outside and set the key.
+Without `BRIDGE_API_KEY` the bridge refuses to start: anyone who reached the port could make it
+connect to any WebSocket (`X-Gateway-Base`). Only for development on one machine,
+`BRIDGE_ALLOW_UNAUTHENTICATED=1` with `HOST=127.0.0.1` lets loopback requests pass without it (the
+development Compose file does so). Keep the port closed to the outside all the same.
+
+Every session takes a slot of `MAX_SESSIONS` before its gateway stream opens and frees it on every
+way out. A connected session that sends no audio for `IDLE_TIMEOUT_S` or lasts `MAX_SESSION_S` is
+finalized like a stop: the client gets an `error` event (`session_idle`, `session_expired`), the
+current item's transcript, then the close. `keep_open` commits asked for while a rotation runs
+fold into one next rotation, which starts `ROTATE_MIN_INTERVAL_S` after the last.
 
 In the module's admin settings: offered modes with "Local (bridge)", the bridge address as the
 Campus server reaches it (`http://localhost:8089` in development, `http://host.docker.internal:8089`
@@ -97,7 +115,9 @@ talks to the bridge on the same host (`TURN_ALLOWED_PEER_IP`).
 `test_bridge.py` runs the bridge against a fake gateway that speaks vLLM's realtime protocol, with
 an aiortc client in the browser's role (audio track and `oai-events` channel): deltas while
 speaking, the final transcript on commit, a refused model with the gateway's status, the probe,
-the bridge key, unusable offers and peers that never connect.
+the bridge key and its startup check, unusable offers, peers that never connect, a full bridge,
+connected peers without audio or beyond their lifetime, a flood of commits, and a gateway that
+repeats the key in its errors.
 
 ```sh
 docker run --rm --network host -v "$PWD/infra/realtime-bridge/test_bridge.py:/app/test_bridge.py:ro" \
