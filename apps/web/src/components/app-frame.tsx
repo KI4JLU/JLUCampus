@@ -7,14 +7,13 @@ import {
   Logo,
   NavItem,
   Popover,
-  ThemeToggle,
   usePersistedWidth,
   useSidebarCollapsed,
   type MobilePaneTab
 } from '@ki4jlu/design-system'
 import type { Component, Me } from '@justcampus/shared'
 import { isAdminPath } from '@/lib/admin-nav'
-import { PageHeaderSlotsContext } from '@/lib/page-header-slots'
+import { CollapseSidebarContext } from '@/lib/collapse-sidebar'
 import { PageSidePanelContext } from '@/lib/page-side-panel'
 import { cn } from '@/lib/utils'
 import { AccountMenu } from './account-menu'
@@ -39,10 +38,11 @@ interface AppFrameProps {
 }
 
 /**
- * The chrome around every signed-in page: column with navigation and account, one <main>,
- * and one top bar that carries the page's title and actions (see `PageHeader`). A page can add
- * a column on the right (see `PageSidePanel`). The dashboard has no top bar; its few actions
- * sit on the page. In the admin area the column holds the admin navigation instead.
+ * The chrome around every signed-in page: column with navigation and account, and one <main>
+ * without a bar above it, so an embedded site keeps as much room as it can. Pages carry their own
+ * title and actions (see `PageHeader`). A page can add a column on the right (see
+ * `PageSidePanel`) and fold the navigation column while it is shown (see `useCollapsedSidebar`).
+ * In the admin area the column holds the admin navigation instead.
  */
 export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -53,25 +53,29 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
   const admin = me.role === 'admin' && isAdminPath(pathname)
   // The admin column has no sidebar rows to edit, so entering it (also by "back") closes the panel.
   if (admin && moreAppsOpen) setMoreAppsOpen(false)
-  const [leftOpen, setLeftOpenState] = useStoredOpen(LEFT_OPEN_KEY, true)
+  const [storedLeftOpen, setStoredLeftOpen] = useStoredOpen(LEFT_OPEN_KEY, true)
+  // While a page folds the column (see `useCollapsedSidebar`), its state there is not stored, so
+  // the user's own choice comes back on the next page.
+  const [pageLeftOpen, setPageLeftOpen] = useState<boolean | null>(null)
+  const leftOpen = pageLeftOpen ?? storedLeftOpen
   // The panel was placed against the open column, so collapsing the column closes it.
   const setLeftOpen = useCallback(
     (open: boolean) => {
       if (!open) setMoreAppsOpen(false)
-      setLeftOpenState(open)
+      if (pageLeftOpen === null) setStoredLeftOpen(open)
+      else setPageLeftOpen(open)
     },
-    [setLeftOpenState]
+    [pageLeftOpen, setStoredLeftOpen]
   )
+  const holdLeftCollapsed = useCallback(() => {
+    setMoreAppsOpen(false)
+    setPageLeftOpen(false)
+    return () => setPageLeftOpen(null)
+  }, [])
   const [leftWidth, setLeftWidth] = usePersistedWidth(LEFT_WIDTH_KEY, LEFT_WIDTH)
   const [rightOpen, setRightOpen] = useStoredOpen(RIGHT_OPEN_KEY, true)
   const [rightWidth, setRightWidth] = usePersistedWidth(RIGHT_WIDTH_KEY, RIGHT_WIDTH)
   const [activeTab, setActiveTab] = useTabPerPath(pathname)
-  const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null)
-  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null)
-  const slots = useMemo(
-    () => ({ title: titleSlot, actions: actionsSlot }),
-    [titleSlot, actionsSlot]
-  )
   const [sideLabel, setSideLabel] = useState<string | null>(null)
   const [sideSlot, setSideSlot] = useState<HTMLElement | null>(null)
   const sidePanel = useMemo(() => ({ element: sideSlot, setLabel: setSideLabel }), [sideSlot])
@@ -105,11 +109,9 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
     // rows it edits in the nav, so the root holds both. It renders no element of its own.
     <Popover open={moreAppsOpen} onOpenChange={setMoreAppsOpen}>
       <AppShellLayout
-        className={cn(
-          // The template always renders its bar (a `<header>`, the first child of the main column
-          // on wide screens, of the frame on narrow ones); the dashboard goes without it.
-          pathname === '/' && '[&>div>header]:hidden [&>header]:hidden'
-        )}
+        // DS gap: the template always renders its bar (a `<header>`, the first child of the main
+        // column on wide screens, of the frame on narrow ones), and the app goes without it.
+        className="[&>div>header]:hidden [&>header]:hidden"
         logo={<Logo product="Campus" size="sm" />}
         nav={nav}
         navLabel={admin ? t('admin.nav.label') : t('shell.navLabel')}
@@ -134,18 +136,6 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
                 expandLabel: t('shell.expandRight')
               }
         }
-        pageLabel={<span ref={setTitleSlot} className="flex min-w-0 items-center" />}
-        headerActions={
-          <>
-            <div ref={setActionsSlot} className="flex shrink-0 items-center gap-stack-sm" />
-            <ThemeToggle
-              themeLabel={t('theme.label')}
-              lightLabel={t('theme.light')}
-              systemLabel={t('theme.system')}
-              darkLabel={t('theme.dark')}
-            />
-          </>
-        }
         leftOpen={leftOpen}
         onLeftOpenChange={setLeftOpen}
         collapseLabel={t('shell.collapse')}
@@ -163,11 +153,11 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
         mobileTabBarLabel={t('shell.tabsLabel')}
       >
         <div id="main-content" tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
-          <PageHeaderSlotsContext.Provider value={slots}>
+          <CollapseSidebarContext.Provider value={holdLeftCollapsed}>
             <PageSidePanelContext.Provider value={sidePanel}>
               {children}
             </PageSidePanelContext.Provider>
-          </PageHeaderSlotsContext.Provider>
+          </CollapseSidebarContext.Provider>
         </div>
       </AppShellLayout>
     </Popover>

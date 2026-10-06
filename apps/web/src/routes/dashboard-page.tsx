@@ -37,7 +37,7 @@ export function DashboardPage(): React.JSX.Element {
   const loading = dashboard.isPending || components.isPending || catalogue.isPending
   const failed = dashboard.isError || components.isError || catalogue.isError
 
-  // No top bar here (see `AppFrame`): the heading is for assistive technology only.
+  // No visible title here: the heading is for assistive technology only.
   return (
     <Container className="flex flex-col gap-stack-lg py-gutter md:py-margin-page">
       <h1 className="sr-only">{t('dashboard.title')}</h1>
