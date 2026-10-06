@@ -117,11 +117,33 @@ export const queryKeys = {
   translatorGlossaries: ['translator', 'glossaries'] as const
 }
 
+/**
+ * The app shell keeps this query mounted, so it doubles as a heartbeat: each request lets the
+ * server keep the Keycloak session alive that embedded sites sign in with (`keycloak-session.ts`
+ * on the server), also while the user works inside an embedded site, records or transcribes.
+ */
 export const meQuery = queryOptions({
   queryKey: queryKeys.me,
   queryFn: () => apiFetch<Me>(API.me),
-  staleTime: 5 * 60_000
+  staleTime: 5 * 60_000,
+  refetchInterval: 4 * 60_000,
+  refetchIntervalInBackground: true
 })
+
+/**
+ * A fresh round trip before an embedded site loads. The server ends a session whose Keycloak
+ * session has ended, so the app shows its login page instead of a site that would meet Keycloak's
+ * login inside its frame, which Keycloak refuses to show there.
+ */
+export function useSessionCheck(componentId: string): UseQueryResult<Me> {
+  return useQuery({
+    queryKey: ['session-check', componentId],
+    queryFn: () => apiFetch<Me>(API.me),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false
+  })
+}
 
 export const componentsQuery = queryOptions({
   queryKey: queryKeys.components,
