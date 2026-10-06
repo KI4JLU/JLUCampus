@@ -18,9 +18,12 @@ import {
   TRANSCRIPTION_BUILTIN_TEMPLATES,
   TRANSCRIPTION_DEFAULT_CONFIG,
   TRANSCRIPTION_DEFAULT_TEMPLATE_ID,
+  TRANSCRIPTION_EXTENSIONS,
+  TRANSCRIPTION_FILE_ACCEPT,
   TRANSCRIPTION_GROUP_FILES_MAX,
   TRANSCRIPTION_LIVE_UNAVAILABLE_CODES,
   TRANSCRIPTION_MAX_FILE_BYTES,
+  TRANSCRIPTION_MIME_TYPES,
   TRANSCRIPTION_SPEAKER_COLORS,
   transcriptionComponentConfigSchema,
   transcriptionDispatchSchema,
@@ -44,6 +47,18 @@ const file = (
   name,
   type,
   size
+})
+
+describe('TRANSCRIPTION_FILE_ACCEPT', () => {
+  it('offers exactly the extensions and MIME types the check takes', () => {
+    expect(TRANSCRIPTION_FILE_ACCEPT.split(',')).toEqual([
+      ...TRANSCRIPTION_EXTENSIONS.map((extension) => `.${extension}`),
+      ...TRANSCRIPTION_MIME_TYPES
+    ])
+    expect(TRANSCRIPTION_FILE_ACCEPT).toBe(
+      '.mp3,.wav,.m4a,.mp4,.ogg,audio/mpeg,audio/mp3,audio/wav,audio/m4a,audio/ogg,video/mp4'
+    )
+  })
 })
 
 describe('checkTranscriptionFile', () => {

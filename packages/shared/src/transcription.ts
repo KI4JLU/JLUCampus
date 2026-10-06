@@ -34,6 +34,15 @@ export const TRANSCRIPTION_MIME_TYPES = [
 /** …or its extension, case-insensitive, is one of these. MP4 is taken although the hint omits it. */
 export const TRANSCRIPTION_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'ogg'] as const
 
+/**
+ * The file chooser's `accept`: the same extensions and MIME types, so the chooser offers only
+ * files the check takes. Dropped files still go through the check.
+ */
+export const TRANSCRIPTION_FILE_ACCEPT = [
+  ...TRANSCRIPTION_EXTENSIONS.map((extension) => `.${extension}`),
+  ...TRANSCRIPTION_MIME_TYPES
+].join(',')
+
 export type TranscriptionFileCheck = 'ok' | 'unsupported' | 'tooLarge'
 
 /**

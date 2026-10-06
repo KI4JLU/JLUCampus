@@ -11,7 +11,7 @@ import {
   FileDropzone,
   Spinner
 } from '@ki4jlu/design-system'
-import { TRANSCRIPTION_MAX_FILE_BYTES } from '@justcampus/shared'
+import { TRANSCRIPTION_FILE_ACCEPT, TRANSCRIPTION_MAX_FILE_BYTES } from '@justcampus/shared'
 import { SpeakerMappingDialog } from '../mapping'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { GroupBlock } from './group-block'
@@ -176,13 +176,15 @@ export function UploadView(): React.JSX.Element {
       ) : null}
 
       {/*
-       * The chooser behind "Choose from your computer" and each group's "Add file". Like kiChat's
-       * it accepts any file; the queue checks them after the choice (T-04).
+       * The chooser behind "Choose from your computer" and each group's "Add file". It offers only
+       * the supported formats; the queue still checks every file after the choice (T-04), since
+       * the system dialog lets users switch to "all files".
        */}
       {/* eslint-disable-next-line design-system/no-raw-ui-elements -- a hidden file input, opened by DS buttons */}
       <input
         ref={input}
         type="file"
+        accept={TRANSCRIPTION_FILE_ACCEPT}
         multiple
         hidden
         tabIndex={-1}
