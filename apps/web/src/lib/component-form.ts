@@ -61,6 +61,29 @@ export function initialFormState(component: AdminComponent | null): ComponentFor
   }
 }
 
+/**
+ * Whether the form holds something `baseline` does not: another value in a field, or a secret
+ * that saving would set or remove. An edit undone again does not count.
+ */
+export function isFormDirty(state: ComponentFormState, baseline: ComponentFormState): boolean {
+  if (secretsPatch(secretKeysOf(state.type), state.secrets)) return true
+  return !sameValue({ ...state, secrets: null }, { ...baseline, secrets: null })
+}
+
+/**
+ * Deep equality of plain values. `NaN` (an emptied number field) equals itself, and a missing
+ * key equals `undefined`.
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  return [...keys].every((key) => sameValue(left[key], right[key]))
+}
+
 type Issue = { path: readonly PropertyKey[]; message: string }
 
 /**

@@ -40,7 +40,10 @@ export interface ComponentAdapter<T extends ComponentType> {
   type: T
   /** The component's full page at `/c/$componentId`; fills the main area. */
   Page: ReactComponentType<ComponentViewProps<T>>
-  /** The type-specific part of the admin form. */
+  /**
+   * The type-specific part of the admin's component editor: one `FormSection` card per group of
+   * settings, or a single one titled with `admin.form.configuration`.
+   */
   ConfigFields: ReactComponentType<ComponentConfigFieldsProps<T>>
   defaultConfig: ComponentConfigOf<T>
   /**

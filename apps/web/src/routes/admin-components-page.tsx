@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -17,8 +18,6 @@ import {
 import type { AdminComponent } from '@justcampus/shared'
 import { AdminComponentRow } from '@/components/admin-component-row'
 import { AdminGuard } from '@/components/admin-guard'
-import { AdminNav } from '@/components/admin-nav'
-import { ComponentFormDialog } from '@/components/component-form-dialog'
 import { DeleteComponentDialog } from '@/components/delete-component-dialog'
 import { PageHeader } from '@/components/page-header'
 import { PageLoading } from '@/components/page-message'
@@ -30,8 +29,6 @@ import {
   useUpdateComponent
 } from '@/lib/queries'
 import { toast } from '@/lib/toast'
-
-type FormTarget = { component: AdminComponent | null; key: number } | null
 
 export function AdminComponentsPage(): React.JSX.Element {
   return (
@@ -46,11 +43,7 @@ function ComponentCatalogue(): React.JSX.Element {
   const { data: components, isPending, isError } = useQuery(adminComponentsQuery)
   const updateComponent = useUpdateComponent()
   const reorder = useReorderComponents()
-  const [form, setForm] = useState<FormTarget>(null)
   const [deleting, setDeleting] = useState<AdminComponent | null>(null)
-
-  const openForm = (component: AdminComponent | null): void =>
-    setForm({ component, key: Date.now() })
 
   const toggle = (component: AdminComponent, enabled: boolean): void => {
     updateComponent.mutate(
@@ -79,13 +72,14 @@ function ComponentCatalogue(): React.JSX.Element {
         title={t('admin.title')}
         description={t('admin.description')}
         actions={
-          <Button onClick={() => openForm(null)}>
-            <PlusIcon aria-hidden="true" width="1em" height="1em" />
-            {t('admin.newComponent')}
+          <Button asChild>
+            <Link to="/admin/components/new">
+              <PlusIcon aria-hidden="true" width="1em" height="1em" />
+              {t('admin.newComponent')}
+            </Link>
           </Button>
         }
       />
-      <AdminNav />
       <Card>
         <div className="overflow-x-auto">
           {isPending ? (
@@ -127,7 +121,6 @@ function ComponentCatalogue(): React.JSX.Element {
                       isLast={index === components.length - 1}
                       onToggle={(enabled) => toggle(component, enabled)}
                       onMove={(offset) => move(index, offset)}
-                      onEdit={() => openForm(component)}
                       onDelete={() => setDeleting(component)}
                     />
                   ))
@@ -137,14 +130,6 @@ function ComponentCatalogue(): React.JSX.Element {
           )}
         </div>
       </Card>
-      {form ? (
-        <ComponentFormDialog
-          key={form.key}
-          open
-          onOpenChange={(open) => (open ? undefined : setForm(null))}
-          component={form.component}
-        />
-      ) : null}
       <DeleteComponentDialog component={deleting} onClose={() => setDeleting(null)} />
     </Container>
   )

@@ -104,6 +104,7 @@ export const queryKeys = {
   sidebar: ['sidebar'] as const,
   dashboard: ['dashboard'] as const,
   adminComponents: ['admin', 'components'] as const,
+  adminComponent: (id: string) => ['admin', 'component', id] as const,
   folderTemplates: ['folder-templates'] as const,
   adminFolderTemplates: ['admin', 'folder-templates'] as const,
   adminPresets: ['admin', 'presets'] as const,
@@ -275,6 +276,32 @@ export const adminComponentsQuery = queryOptions({
   queryFn: () => apiFetch<AdminComponentList>(API.adminComponents),
   select: (data) => data.components
 })
+
+type ComponentQueryKey = ReturnType<typeof queryKeys.adminComponent>
+type ComponentQueryOptions = UndefinedInitialDataOptions<
+  AdminComponent,
+  Error,
+  AdminComponent,
+  ComponentQueryKey
+> & {
+  queryKey: DataTag<ComponentQueryKey, AdminComponent, Error>
+}
+
+/**
+ * One component for its editor, fresh from the server whenever the editor opens (the list may
+ * have changed it meanwhile). While the editor is open, only its own saves change the entry, so
+ * the form's baseline never shifts under it. An answer from the server (`not_found`) is not
+ * retried.
+ */
+export function adminComponentQuery(id: string): ComponentQueryOptions {
+  return queryOptions({
+    queryKey: queryKeys.adminComponent(id),
+    queryFn: () => apiFetch<AdminComponent>(API.adminComponent(id)),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: (count, error) => !(error instanceof ApiRequestError) && count < 2
+  })
+}
 
 /** Enabled folder templates, offered in the "add widget" dialog. */
 export const folderTemplatesQuery = queryOptions({

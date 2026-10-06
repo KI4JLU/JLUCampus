@@ -27,7 +27,6 @@ import {
 } from '@ki4jlu/design-system'
 import type { AdminUser, UserRole } from '@justcampus/shared'
 import { AdminGuard } from '@/components/admin-guard'
-import { AdminNav } from '@/components/admin-nav'
 import { UserRoleBadge } from '@/components/admin-user-details'
 import { PageHeader } from '@/components/page-header'
 import { PageLoading } from '@/components/page-message'
@@ -81,7 +80,6 @@ function Users(): React.JSX.Element {
   return (
     <Container className="flex flex-col gap-gutter py-gutter md:py-margin-page">
       <PageHeader title={t('admin.users.title')} description={t('admin.users.description')} />
-      <AdminNav />
       <ListToolbar
         search={
           <InputGroup>

@@ -569,7 +569,8 @@ strings).
 
 - Routes (TanStack Router, code-based like JLU Mail, **browser history**):
   `/login`, `/` (dashboard), `/c/$componentId` (component full page),
-  `/admin/components`, `/admin/folders`, `/admin/users` ("Nutzer" tab), `/admin/presets` and
+  `/admin/components`, `/admin/components/new` and `/admin/components/$componentId` (the
+  component editor), `/admin/folders`, `/admin/users` ("Nutzer" tab), `/admin/presets` and
   `/admin/presets/$presetId` (admin only). Settings (language, colour scheme)
   are a `SettingsDialog` opened from the user menu, not a route.
   The preset editor reuses the user's dashboard grid and sidebar editor.

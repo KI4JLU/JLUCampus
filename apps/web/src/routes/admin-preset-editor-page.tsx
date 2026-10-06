@@ -14,7 +14,6 @@ import {
 } from '@ki4jlu/design-system'
 import type { LayoutPreset, LayoutPresetInput } from '@justcampus/shared'
 import { AdminGuard } from '@/components/admin-guard'
-import { AdminNav } from '@/components/admin-nav'
 import { DashboardEditor } from '@/components/dashboard-editor'
 import { DeletePresetDialog } from '@/components/delete-preset-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -173,7 +172,6 @@ function PresetEditor({ presetId }: { presetId: string }): React.JSX.Element {
           </>
         }
       />
-      <AdminNav />
       {!data || loading ? (
         <PageLoading label={t('common.loading')} />
       ) : failed ? (

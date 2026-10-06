@@ -12,6 +12,7 @@ import { i18n, currentLanguage } from '@/i18n'
 import { parseLoginSearch, safeRedirect, type LoginSearch } from '@/lib/redirect'
 import { parseAdminUsersSearch, type AdminUsersSearch } from '@/lib/admin-users'
 import { meQuery, queryClient, queryKeys, setUnauthorizedHandler } from '@/lib/queries'
+import { AdminComponentEditorPage, AdminNewComponentPage } from './admin-component-editor-page'
 import { AdminComponentsPage } from './admin-components-page'
 import { AdminFoldersPage } from './admin-folders-page'
 import { AdminPresetEditorPage } from './admin-preset-editor-page'
@@ -77,6 +78,18 @@ const adminComponentsRoute = createRoute({
   component: AdminComponentsPage
 })
 
+const adminNewComponentRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/components/new',
+  component: AdminNewComponentPage
+})
+
+const adminComponentRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/components/$componentId',
+  component: AdminComponentEditorPage
+})
+
 const adminFoldersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/admin/folders',
@@ -109,6 +122,8 @@ const routeTree = rootRoute.addChildren([
     dashboardRoute,
     componentRoute,
     adminComponentsRoute,
+    adminNewComponentRoute,
+    adminComponentRoute,
     adminFoldersRoute,
     adminPresetsRoute,
     adminPresetRoute,

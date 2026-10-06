@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { ArrowDownIcon, ArrowUpIcon, PencilIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge, Button, Switch, TableCell, TableRow } from '@ki4jlu/design-system'
@@ -11,7 +12,6 @@ interface AdminComponentRowProps {
   isLast: boolean
   onToggle: (enabled: boolean) => void
   onMove: (offset: -1 | 1) => void
-  onEdit: () => void
   onDelete: () => void
 }
 
@@ -23,7 +23,6 @@ export function AdminComponentRow({
   isLast,
   onToggle,
   onMove,
-  onEdit,
   onDelete
 }: AdminComponentRowProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -91,13 +90,14 @@ export function AdminComponentRow({
           >
             <ArrowDownIcon {...ICON} />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t('admin.table.edit', { name })}
-            onClick={onEdit}
-          >
-            <PencilIcon {...ICON} />
+          <Button variant="ghost" size="icon" asChild>
+            <Link
+              to="/admin/components/$componentId"
+              params={{ componentId: component.id }}
+              aria-label={t('admin.table.edit', { name })}
+            >
+              <PencilIcon {...ICON} />
+            </Link>
           </Button>
           {/*
            * Built-in components cannot be deleted. Their button stays as an invisible placeholder (hidden from
