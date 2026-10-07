@@ -23,7 +23,7 @@ import {
   type NumberedLabel,
   type VoiceDraft
 } from '../mapping/speakers'
-import type { UploadSettings } from '../workspace'
+import type { UploadSettled, UploadSettings } from '../workspace'
 import { transcriptCreate, type FileResult } from './merge'
 import { creepStep, CREEP_MS, PROGRESS, transcriptionDisplay, uploadProgress } from './progress'
 import {
@@ -180,6 +180,8 @@ export class UploadQueue {
   private readonly uploads = new Map<string, AbortController>()
   private readonly creeps = new Map<string, ReturnType<typeof setInterval>>()
   private readonly reanalyzing = new Set<string>()
+  /** Who hears how a file's upload ended, by file; see `addGroupOfFiles`. */
+  private readonly settles = new Map<string, UploadSettled>()
   private lifetime = new AbortController()
   /** The active jobs are fetched once per page; a fetch cut short by `dispose` runs again. */
   private restoring: 'idle' | 'running' | 'done' = 'idle'
@@ -344,21 +346,34 @@ export class UploadQueue {
 
   /**
    * Adds files as a group of their own, e.g. the recorded takes (T-58): into the first empty group
-   * or a new one, named `name` if given.
+   * or a new one, named `name` if given. `onSettled` hears how each file's upload ends; a file not
+   * added counts as not stored.
    */
-  addGroupOfFiles(files: readonly File[], name: string | null): QueueFile[] {
-    if (this.state.processing || files.length === 0) return []
-    let groups = [...this.state.groups]
-    let index = groups.findIndex((group) => group.saved === null && group.files.length === 0)
-    if (index < 0) {
-      index = groups.length
-      groups.push(newGroup(index, name ?? defaultGroupName(index)))
-    } else if (name) groups[index] = { ...groups[index]!, name }
-    const result = addToGroup(groups, index, files.map(queueFileFrom), this.room(0))
-    groups = renumberGroups(result.groups)
-    this.set({ ...this.state, groups })
-    for (const row of result.added) this.track(row)
-    return result.added
+  addGroupOfFiles(
+    files: readonly File[],
+    name: string | null,
+    onSettled?: UploadSettled
+  ): QueueFile[] {
+    let added: QueueFile[] = []
+    if (!this.state.processing && files.length > 0) {
+      let groups = [...this.state.groups]
+      let index = groups.findIndex((group) => group.saved === null && group.files.length === 0)
+      if (index < 0) {
+        index = groups.length
+        groups.push(newGroup(index, name ?? defaultGroupName(index)))
+      } else if (name) groups[index] = { ...groups[index]!, name }
+      const result = addToGroup(groups, index, files.map(queueFileFrom), this.room(0))
+      groups = renumberGroups(result.groups)
+      this.set({ ...this.state, groups })
+      added = result.added
+    }
+    if (onSettled) {
+      for (const row of added) this.settles.set(row.id, onSettled)
+      const kept = new Set(added.map((row) => row.file))
+      for (const file of files) if (!kept.has(file)) onSettled(file, false)
+    }
+    for (const row of added) this.track(row)
+    return added
   }
 
   /** How many more files a group of `present` files takes (T-04: the admin's limit, if set). */
@@ -396,6 +411,8 @@ export class UploadQueue {
     const local = position?.file.file
     if (!position || !local || position.file.phase !== 'idle') return
     const settings = this.options.settings
+    // Taken now: removing the row forgets it, but the aborted upload still reports.
+    const onSettled = this.settles.get(fileId)
     this.patchFile(fileId, {
       phase: 'uploading',
       progress: PROGRESS.session,
@@ -417,6 +434,7 @@ export class UploadQueue {
         groupOrder: position.fileIndex
       })
     } catch (error) {
+      onSettled?.(local, false)
       this.fail(fileId, 'analysisFailed', {
         key: 'uploadSessionFailed',
         message: messageOf(error)
@@ -427,6 +445,7 @@ export class UploadQueue {
     this.options.onJobsChanged?.()
     if (!this.file(fileId)) {
       // Removed while the job was made: it goes too.
+      onSettled?.(local, false)
       void this.options.api.deleteJob(jobId).catch(() => undefined)
       return
     }
@@ -445,10 +464,12 @@ export class UploadQueue {
         })
       } catch (error) {
         uploadFailure = uploadError(error)
+        onSettled?.(local, false)
         return false
       } finally {
         this.uploads.delete(fileId)
       }
+      onSettled?.(local, true)
       // Only now, with storage's answer, may the analysis start (kiChat).
       this.patchFile(fileId, {
         uploaded: true,
@@ -1240,6 +1261,7 @@ export class UploadQueue {
 
   /** Stops everything a file does. */
   private forget(fileId: string): void {
+    this.settles.delete(fileId)
     this.flows.get(fileId)?.abort()
     this.flows.delete(fileId)
     this.abortUpload(fileId)
@@ -1274,6 +1296,7 @@ export class UploadQueue {
     this.flows.clear()
     for (const timer of this.creeps.values()) clearInterval(timer)
     this.creeps.clear()
+    this.settles.clear()
     this.set({ ...this.state, groups: [] })
   }
 }

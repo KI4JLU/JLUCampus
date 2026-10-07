@@ -126,7 +126,7 @@
     "confirmDiscard": "Endgültig verwerfen",
     "cancelDiscard": "Behalten",
     "restoreFailed": "Die gesicherte Aufnahme konnte nicht gelesen werden.",
-    "waveformSkipped": "Für Meeting-Aufnahmen wird keine Wellenform berechnet."
+    "waveformSkipped": "Für lange Meeting-Aufnahmen wird hier keine Wellenform berechnet."
   },
   "widgets": {
     "quickName": "Neue Transkription",

@@ -11,16 +11,13 @@ import {
 import { PauseIcon, PlayIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@ki4jlu/design-system'
-import {
-  TRANSCRIPTION_SPEAKER_COLORS,
-  TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES,
-  type TranscriptionSpeakerColorId
-} from '@justcampus/shared'
+import { TRANSCRIPTION_SPEAKER_COLORS, type TranscriptionSpeakerColorId } from '@justcampus/shared'
 import { cn } from '@/lib/utils'
 import { drawWaveform, type WaveformColors } from './draw'
 import { playExclusively } from './exclusive'
 import {
   blobWaveform,
+  decodesLocally,
   formatMegabytes,
   formatTime,
   jobWaveform,
@@ -59,15 +56,13 @@ export interface WaveformPlayerHandle {
 export interface WaveformPlayerProps {
   /** A local file or recording, or a job's audio URL; `null` shows an empty player. */
   source: Blob | string | null
-  /** Shown above the waveform and names the seek bar. */
+  /**
+   * Shown above the waveform and names the seek bar; for audio by URL its extension also tells
+   * whether it is decoded here (`decodesLocally`).
+   */
   name?: string
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
-  /**
-   * `false` never decodes the audio here, e.g. a long meeting recording: Opus is small in bytes,
-   * but an hour of it decodes to about a gigabyte. It plays without a waveform then.
-   */
-  decode?: boolean
   /** Seconds, for audio that names no duration of its own (recorded WebM) and is not decoded. */
   knownDuration?: number
   /**
@@ -108,14 +103,14 @@ function cssColor(element: Element, name: string): string {
  * The audio player the transcription page uses everywhere, after kiChat's `WaveformAudioPlayer`
  * and its global player: play/pause, a waveform that is the seek bar (pointer and keyboard), the
  * time, an optional speaker timeline and a highlighted region. Local files play from an object
- * URL; remote audio from the job's audio URL. Above 100 MB nothing is decoded here: the waveform the
- * analysis computed is drawn (`jobId`), and the audio plays either way.
+ * URL; remote audio from the job's audio URL. Audio that would decode to more than 100 MB (by
+ * `decodesLocally`, e.g. a long meeting) is not decoded here: the waveform the analysis computed is
+ * drawn (`jobId`), and the audio plays either way.
  */
 export function WaveformPlayer({
   source,
   name,
   size,
-  decode = true,
   knownDuration: givenDuration,
   jobId = null,
   jobRevision,
@@ -142,8 +137,14 @@ export function WaveformPlayer({
   const rangeEnd = useRef<number | null>(null)
   const seeking = useRef(false)
   const byteSize = size ?? (source instanceof Blob ? source.size : undefined)
-  const tooLarge = byteSize !== undefined && byteSize > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
-  const local = decode && !tooLarge
+  const tooLarge =
+    byteSize !== undefined &&
+    !decodesLocally({
+      size: byteSize,
+      type: source instanceof Blob ? source.type : undefined,
+      name
+    })
+  const local = !tooLarge
   // A waveform decoded for an earlier source no longer counts.
   const waveform = decoded?.source === source ? decoded.waveform : null
 

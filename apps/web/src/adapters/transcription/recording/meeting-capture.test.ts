@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { isChromium, meetingMimeType, meetingSupport, type NavigatorInfo } from './meeting-capture'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  isChromium,
+  meetingMimeType,
+  meetingSupport,
+  startMeetingCapture,
+  type NavigatorInfo
+} from './meeting-capture'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 const CHROME_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
@@ -60,5 +70,51 @@ describe('meetingMimeType', () => {
     expect(meetingMimeType(() => true)).toBe('audio/webm;codecs=opus')
     expect(meetingMimeType((type) => type === 'audio/webm')).toBe('audio/webm')
     expect(meetingMimeType(() => false)).toBeUndefined()
+  })
+})
+
+describe('startMeetingCapture', () => {
+  const track = (): MediaStreamTrack =>
+    ({ readyState: 'live', stop: vi.fn() }) as unknown as MediaStreamTrack
+  const stream = (audio: MediaStreamTrack[], video: MediaStreamTrack[] = []): MediaStream =>
+    ({
+      getAudioTracks: () => audio,
+      getVideoTracks: () => video,
+      getTracks: () => [...video, ...audio]
+    }) as unknown as MediaStream
+
+  it('lets go of the shared tab when cancelled during the microphone prompt', async () => {
+    const close = vi.fn(async () => undefined)
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        state = 'running'
+        close = close
+      }
+    )
+    const [tabAudio, tabVideo, micAudio] = [track(), track(), track()]
+    let grantMicrophone: (granted: MediaStream) => void = () => undefined
+    const devices = {
+      getDisplayMedia: vi.fn(async () => stream([tabAudio], [tabVideo])),
+      getUserMedia: vi.fn(
+        () =>
+          new Promise<MediaStream>((resolve) => {
+            grantMicrophone = resolve
+          })
+      )
+    } as unknown as MediaDevices
+    const onTabShared = vi.fn()
+
+    const start = startMeetingCapture(devices, {}, onTabShared)
+    const settled = start.capture.catch((error: unknown) => error)
+    await vi.waitFor(() => expect(onTabShared).toHaveBeenCalled())
+    start.cancel()
+    // At once, not only after the prompt was answered.
+    expect(tabAudio.stop).toHaveBeenCalled()
+    expect(close).toHaveBeenCalled()
+
+    grantMicrophone(stream([micAudio]))
+    expect(await settled).toMatchObject({ failure: 'cancelled' })
+    expect(micAudio.stop).toHaveBeenCalled()
   })
 })

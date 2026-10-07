@@ -85,8 +85,8 @@ const TAB_CAPTURE: TabCaptureOptions = {
   surfaceSwitching: 'include'
 }
 
-/** Where starting a meeting failed. */
-export type MeetingCaptureFailure = 'display' | 'noTabAudio' | 'microphone' | 'audio'
+/** Where starting a meeting failed; `cancelled` by `cancel`, e.g. as the page went away. */
+export type MeetingCaptureFailure = 'display' | 'noTabAudio' | 'microphone' | 'audio' | 'cancelled'
 
 export class MeetingCaptureError extends Error {
   constructor(
@@ -107,6 +107,16 @@ export interface MeetingCapture {
   release: () => void
 }
 
+/** A meeting capture on its way: the tab picker and the microphone prompt may still be open. */
+export interface MeetingCaptureStart {
+  capture: Promise<MeetingCapture>
+  /**
+   * Gives up the start: what was granted so far is released at once, what comes later as it
+   * comes, and `capture` rejects as `cancelled`. Nothing once the capture is there.
+   */
+  cancel: () => void
+}
+
 /**
  * Asks for the meeting's tab, then the microphone, and mixes both. Call it straight from the
  * click, before anything awaits: Chrome only opens the tab picker with the click's transient
@@ -118,20 +128,25 @@ export function startMeetingCapture(
   devices: MediaDevices,
   microphone: MediaTrackConstraints,
   onTabShared: () => void
-): Promise<MeetingCapture> {
+): MeetingCaptureStart {
+  const controller = new AbortController()
+  const cancel = (): void => controller.abort()
   let context: AudioContext
   let display: Promise<MediaStream>
   try {
     context = new AudioContext({ latencyHint: 'playback' })
   } catch (error) {
-    return Promise.reject(new MeetingCaptureError('audio', error))
+    return { capture: Promise.reject(new MeetingCaptureError('audio', error)), cancel }
   }
   try {
     display = devices.getDisplayMedia(TAB_CAPTURE as DisplayMediaStreamOptions)
   } catch (error) {
     display = Promise.reject(error instanceof Error ? error : new Error(String(error)))
   }
-  return connectMeeting(context, display, devices, microphone, onTabShared)
+  return {
+    capture: connectMeeting(context, display, devices, microphone, onTabShared, controller.signal),
+    cancel
+  }
 }
 
 async function connectMeeting(
@@ -139,7 +154,8 @@ async function connectMeeting(
   display: Promise<MediaStream>,
   devices: MediaDevices,
   microphone: MediaTrackConstraints,
-  onTabShared: () => void
+  onTabShared: () => void,
+  signal: AbortSignal
 ): Promise<MeetingCapture> {
   let tab: MediaStream | null = null
   let mic: MediaStream | null = null
@@ -153,13 +169,24 @@ async function connectMeeting(
     releaseStream(mic)
     void context.close().catch(() => undefined)
   }
+  // The tab's sharing ends at once, not only after the microphone prompt was answered.
+  signal.addEventListener('abort', release, { once: true })
+  /** After each wait: a start cancelled meanwhile lets go of what just came, too. */
+  const ensureWanted = (): void => {
+    if (!signal.aborted) return
+    releaseStream(tab)
+    releaseStream(mic)
+    throw new MeetingCaptureError('cancelled', null)
+  }
 
   try {
     try {
       tab = await display
     } catch (error) {
+      ensureWanted()
       throw new MeetingCaptureError('display', error)
     }
+    ensureWanted()
     // Only the sound is recorded; the picture would just cost.
     for (const track of tab.getVideoTracks()) track.stop()
     const tabAudio = tab.getAudioTracks()[0]
@@ -170,8 +197,10 @@ async function connectMeeting(
     try {
       mic = await devices.getUserMedia({ audio: microphone })
     } catch (error) {
+      ensureWanted()
       throw new MeetingCaptureError('microphone', error)
     }
+    ensureWanted()
     // Sharing stopped while the microphone was asked for; its `ended` came before any listener.
     if (tabAudio.readyState === 'ended')
       throw new MeetingCaptureError('display', new DOMException('Sharing ended', 'NotAllowedError'))
@@ -191,16 +220,21 @@ async function connectMeeting(
       nodes.push(destination)
       // Created in the click it runs already; a browser that started it suspended may resume it.
       if (context.state === 'suspended') await context.resume()
+      ensureWanted()
       return {
         stream: destination.stream,
         sources: [tabAudio, ...mic.getAudioTracks()],
         release
       }
     } catch (error) {
+      if (error instanceof MeetingCaptureError) throw error
+      ensureWanted()
       throw new MeetingCaptureError('audio', error)
     }
   } catch (error) {
     release()
     throw error
+  } finally {
+    signal.removeEventListener('abort', release)
   }
 }

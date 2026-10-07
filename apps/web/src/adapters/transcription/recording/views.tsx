@@ -36,7 +36,7 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@ki4jlu/design-system'
-import { formatTime, WaveformPlayer } from '../audio'
+import { decodesLocally, formatTime, WaveformPlayer } from '../audio'
 import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { useRecording, type RecordedTake } from './context'
@@ -48,9 +48,6 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 
 /** Radix Select takes no empty value; this one stands for the browser's default input. */
 const DEFAULT_OPTION = '__default__'
-
-/** Takes longer than this are not decoded for a waveform: it would take too much memory. */
-const DECODE_MAX_SECONDS = 20 * 60
 
 /**
  * Regular recording, live transcription and meetings as tabs of one work area, as in kiChat. While
@@ -337,8 +334,8 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   const deleteLabel = t('transcription.recording.deleteRecordingName', { name })
   const confirmLabel = t('transcription.recording.confirmDeleteRecording', { name })
   const cancelLabel = t('transcription.recording.cancelDeleteRecording', { name })
-  // Meetings run long: Opus is small, decoded it is not.
-  const decode = !take.meetingId && (take.duration ?? 0) <= DECODE_MAX_SECONDS
+  // A long meeting is small as Opus, but not decoded.
+  const decoded = decodesLocally(take.file)
 
   const download = (): void => {
     const url = URL.createObjectURL(take.file)
@@ -363,15 +360,10 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   return (
     <li className="flex flex-wrap items-center gap-stack-sm">
       <div className="flex min-w-64 flex-1 flex-col gap-1">
-        <WaveformPlayer
-          source={take.file}
-          name={name}
-          decode={decode}
-          knownDuration={take.duration}
-        />
-        {take.meetingId ? (
+        <WaveformPlayer source={take.file} name={name} knownDuration={take.duration} />
+        {decoded ? null : (
           <p className="m-0">{t('transcription.recording.meeting.waveformSkipped')}</p>
-        ) : null}
+        )}
       </div>
       <div className="flex items-center gap-1">
         <IconButton label={downloadLabel} onClick={download}>

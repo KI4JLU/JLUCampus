@@ -38,12 +38,25 @@ const FALLBACK_UPLOAD_SETTINGS: UploadSettings = {
   llmCorrection: true
 }
 
+/**
+ * How a handed-over file's upload ended: `stored` once storage has its bytes, else refused,
+ * failed, removed or never taken into the queue. A failed file may report again after a retry.
+ */
+export type UploadSettled = (file: File, stored: boolean) => void
+
 /** Files handed to the upload queue from elsewhere, e.g. recorded takes (T-58). */
 export interface PendingUpload {
   id: string
   files: File[]
   /** Name of the group they form; `null`: the queue's next `Transcript n`. */
   title: string | null
+  onSettled?: UploadSettled
+}
+
+export interface EnqueueOptions {
+  title?: string | null
+  /** Hears how each file's upload ends, e.g. to keep a meeting's backup until then. */
+  onSettled?: UploadSettled
 }
 
 /**
@@ -92,7 +105,7 @@ export interface TranscriptionWorkspace {
   /** Files waiting for the upload queue, oldest first. */
   pendingUploads: readonly PendingUpload[]
   /** Hands files to the upload queue as one group and shows it. */
-  enqueueUpload: (files: File[], title?: string | null) => void
+  enqueueUpload: (files: File[], options?: EnqueueOptions) => void
   /** Takes the waiting files out; the upload queue calls it when it adds them. */
   takePendingUploads: () => PendingUpload[]
 }
@@ -128,7 +141,14 @@ export function TranscriptionWorkspaceProvider({
     memory.cell('workspace.historySearch', () => '')
   )
   const [currentDocument, setCurrentDocument] = useState<TranscriptDocument | null>(null)
-  const pendingCell = memory.cell<PendingUpload[]>('workspace.pendingUploads', () => [])
+  const pendingCell = memory.cell<PendingUpload[]>('workspace.pendingUploads', () => {
+    // Files the queue never took were not uploaded.
+    memory.onDispose(() => {
+      const left = memory.cell<PendingUpload[]>('workspace.pendingUploads', () => []).value
+      for (const pending of left) for (const file of pending.files) pending.onSettled?.(file, false)
+    })
+    return []
+  })
   const [pendingUploads, setPendingUploads] = useMemoryCell(pendingCell)
   const beforeLeave = useRef<BeforeLeave | null>(null)
 
@@ -159,9 +179,12 @@ export function TranscriptionWorkspaceProvider({
   }, [mayLeave, setHistorySearch, setResultTab, setTranscriptId, setView])
 
   const enqueueUpload = useCallback(
-    (files: File[], title: string | null = null) => {
+    (files: File[], { title = null, onSettled }: EnqueueOptions = {}) => {
       if (files.length === 0) return
-      setPendingUploads((current) => [...current, { id: crypto.randomUUID(), files, title }])
+      setPendingUploads((current) => [
+        ...current,
+        { id: crypto.randomUUID(), files, title, onSettled }
+      ])
       setView('upload')
     },
     [setPendingUploads, setView]

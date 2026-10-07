@@ -25,11 +25,9 @@ import {
   Label,
   Spinner
 } from '@ki4jlu/design-system'
-import {
-  TRANSCRIPTION_SPEAKER_NAME_MAX,
-  TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
-} from '@justcampus/shared'
+import { TRANSCRIPTION_SPEAKER_NAME_MAX } from '@justcampus/shared'
 import { useJobAudioUrl } from '../api'
+import { decodesLocally } from '../audio'
 import { Notice } from '../notice'
 import { findFile, type QueueFile } from '../upload/queue'
 import { useQueueState, useUpload } from '../upload/use-upload'
@@ -259,7 +257,8 @@ function MappingContent({
         <Notice tone="error" title={t('transcription.upload.mapping.audioUnavailable')} />
       ) : null}
       {/* A large file without the server's waveform: the sample tracks draw placeholders (T-12). */}
-      {loadedPeaks === null && file.size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES ? (
+      {loadedPeaks === null &&
+      !decodesLocally({ size: file.size, type: file.mimeType, name: file.name }) ? (
         <Badge appearance="text">{t('transcription.common.player.waveformUnavailable')}</Badge>
       ) : null}
 

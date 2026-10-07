@@ -126,7 +126,7 @@
     "confirmDiscard": "Discard for good",
     "cancelDiscard": "Keep",
     "restoreFailed": "The backed-up recording could not be read.",
-    "waveformSkipped": "No waveform is computed for meeting recordings."
+    "waveformSkipped": "No waveform is computed here for long meeting recordings."
   },
   "widgets": {
     "quickName": "New transcription",

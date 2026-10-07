@@ -7,6 +7,7 @@ import { getJobPeaks } from '../api'
 import {
   blobWaveform,
   computePeaks,
+  decodesLocally,
   formatMegabytes,
   formatTime,
   jobWaveform,
@@ -43,6 +44,22 @@ describe('the decode limit', () => {
   it('does not decode files over 100 MB', async () => {
     const huge = { size: TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1 } as Blob
     await expect(blobWaveform(huge)).resolves.toBeNull()
+  })
+
+  it('judges Opus by what it decodes to, not by its bytes', async () => {
+    const MB = 1024 * 1024
+    // Two hours of a meeting at 48 kbit/s: about 43 MB, decoded over a gigabyte.
+    const meeting = { size: 43 * MB, type: 'audio/webm' } as Blob
+    expect(decodesLocally(meeting)).toBe(false)
+    await expect(blobWaveform(meeting)).resolves.toBeNull()
+    expect(decodesLocally({ size: 3 * MB, type: 'audio/webm;codecs=opus' })).toBe(true)
+    expect(decodesLocally({ size: 4 * MB, type: 'audio/ogg' })).toBe(false)
+    // Audio by URL has no type: its name tells.
+    expect(decodesLocally({ size: 43 * MB, name: 'max-20261007-101500.webm' })).toBe(false)
+    expect(decodesLocally({ size: 43 * MB, name: 'interview.wav' })).toBe(true)
+    // Other formats keep the limit on their bytes.
+    expect(decodesLocally({ size: 43 * MB, type: 'audio/wav', name: 'a.webm' })).toBe(true)
+    expect(decodesLocally({ size: TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1 })).toBe(false)
   })
 
   it('does not download remote audio that declares more', async () => {

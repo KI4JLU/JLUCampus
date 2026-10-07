@@ -555,6 +555,64 @@ describe('UploadQueue: removing (T-08)', () => {
   })
 })
 
+describe('UploadQueue: telling how handed-over uploads end (T-58)', () => {
+  it('reports stored once storage has the bytes, before the analysis starts', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api, events)
+    const onSettled = vi.fn()
+    const meeting = wav('meeting.webm')
+    queue.addGroupOfFiles([meeting], null, onSettled)
+    await until(() => row(queue, 'meeting.webm').phase === 'ready')
+    expect(onSettled.mock.calls).toEqual([[meeting, true]])
+    expect(onSettled.mock.invocationCallOrder[0]).toBeLessThan(
+      api.analyzeJob.mock.invocationCallOrder[0]!
+    )
+    queue.dispose()
+  })
+
+  it('reports a failed upload, and the retry that stores it after all', async () => {
+    const { api, events } = server()
+    const upload = vi.fn<SignedUpload>(async () => {
+      throw new UploadError('status', 500)
+    })
+    const queue = makeQueue(api, events, upload)
+    const onSettled = vi.fn()
+    const meeting = wav('meeting.webm')
+    queue.addGroupOfFiles([meeting], null, onSettled)
+    await until(() => row(queue, 'meeting.webm').phase === 'analysisFailed')
+    expect(onSettled.mock.calls).toEqual([[meeting, false]])
+
+    upload.mockResolvedValueOnce(undefined)
+    void queue.retry(row(queue, 'meeting.webm').id)
+    await until(() => onSettled.mock.calls.length === 2)
+    expect(onSettled).toHaveBeenLastCalledWith(meeting, true)
+    queue.dispose()
+  })
+
+  it('reports a file removed during its upload, and one not added, as not stored', async () => {
+    const { api, events } = server()
+    let uploading = false
+    const upload: SignedUpload = (_target, _body, options) =>
+      new Promise((_resolve, reject) => {
+        uploading = true
+        options.signal?.addEventListener('abort', () => reject(new UploadError('aborted', null)))
+      })
+    const queue = makeQueue(api, events, upload)
+    queue.configure({ maxFilesPerGroup: 1 })
+    const onSettled = vi.fn()
+    const [first, second] = [wav('a.webm'), wav('b.webm')]
+    queue.addGroupOfFiles([first, second], null, onSettled)
+    // Beyond the limit per transcript: not added, so never stored.
+    expect(onSettled.mock.calls).toEqual([[second, false]])
+    await until(() => uploading)
+    expect(await queue.removeFile(row(queue, 'a.webm').id)).toBe(true)
+    await until(() => onSettled.mock.calls.length === 2)
+    expect(onSettled).toHaveBeenLastCalledWith(first, false)
+    queue.dispose()
+  })
+})
+
 describe('UploadQueue: restoring active jobs (T-15)', () => {
   it('restores each job as its own group and saves finished transcriptions', async () => {
     const { api, events, script } = server()

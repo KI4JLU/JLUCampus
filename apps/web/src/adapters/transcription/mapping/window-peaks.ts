@@ -3,13 +3,13 @@ import {
   TRANSCRIPTION_PEAKS_PER_SECOND,
   TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
 } from '@justcampus/shared'
-import { jobTimePeaks } from '../audio/peaks'
+import { decodesLocally, jobTimePeaks } from '../audio/peaks'
 
 /**
  * Waveform data by time for the sample window editor, after kiChat's editor player: a fixed number
- * of peaks per second, so a few seconds of a long file still show their detail. Files above the
- * decode limit, and restored jobs, take the waveform the analysis computed on the server; only
- * when there is none either does the editor draw placeholder bars.
+ * of peaks per second, so a few seconds of a long file still show their detail. Files not decoded
+ * here (`decodesLocally`), and restored jobs, take the waveform the analysis computed on the
+ * server; only when there is none either does the editor draw placeholder bars.
  */
 
 /** Peaks per second of audio, as kiChat's `WAVEFORM_PEAKS_PER_SECOND` (and the server's). */
@@ -134,7 +134,7 @@ function decodedUrl(jobId: string, url: string | null): Promise<TimePeaks | null
 /** The peaks of a source; `null` when there are none (yet: a restored job's URL may follow). */
 export function loadTimePeaks(source: PeaksSource): Promise<TimePeaks | null> {
   if ('blob' in source) {
-    if (source.blob.size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES) {
+    if (!decodesLocally(source.blob)) {
       return source.jobId ? jobTimePeaks(source.jobId) : Promise.resolve(null)
     }
     let peaks = blobPeaks.get(source.blob)

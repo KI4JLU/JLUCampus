@@ -2,8 +2,11 @@
 export interface LocalRecorder {
   /** Waits for the last chunk and returns the recording in the browser's own format. */
   stop: () => Promise<Blob>
-  /** Drops what was recorded, e.g. when the page goes away. */
-  discard: () => void
+  /**
+   * Drops what was recorded, e.g. when the page goes away. Resolves once the recorder ended: its
+   * last chunk still goes to `onChunk`, so a meeting's backup gets it.
+   */
+  discard: () => Promise<void>
 }
 
 /** Chunks every second, so a recording that ends unexpectedly still has its audio. */
@@ -27,42 +30,41 @@ export function startLocalRecorder(
 ): LocalRecorder {
   const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond })
   const chunks: Blob[] = []
+  let discarded = false
   recorder.addEventListener('dataavailable', (event) => {
     if (event.data.size === 0) return
-    chunks.push(event.data)
+    if (!discarded) chunks.push(event.data)
     onChunk?.(event.data)
+  })
+  // `stop` fires after the final `dataavailable`, also when the recorder ended with its stream;
+  // its state is `inactive` before.
+  const ended = new Promise<void>((resolve) => {
+    recorder.addEventListener('stop', () => resolve(), { once: true })
   })
   recorder.start(TIMESLICE_MS)
 
+  const end = (): Promise<void> => {
+    if (recorder.state !== 'inactive') {
+      try {
+        recorder.stop()
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    }
+    return ended
+  }
   let stopping: Promise<Blob> | null = null
-  const collect = (): Blob => new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
 
   return {
     stop: () => {
-      stopping ??= new Promise<Blob>((resolve, reject) => {
-        if (recorder.state === 'inactive') {
-          resolve(collect())
-          return
-        }
-        // `stop` fires after the final `dataavailable`.
-        recorder.addEventListener('stop', () => resolve(collect()), { once: true })
-        try {
-          recorder.stop()
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error(String(error)))
-        }
-      })
+      stopping ??= end().then(() => new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }))
       return stopping
     },
     discard: () => {
+      discarded = true
       chunks.length = 0
-      if (recorder.state !== 'inactive') {
-        try {
-          recorder.stop()
-        } catch {
-          // Already ended with its stream.
-        }
-      }
+      // Already ended with its stream, if stopping fails.
+      return end().catch(() => undefined)
     }
   }
 }

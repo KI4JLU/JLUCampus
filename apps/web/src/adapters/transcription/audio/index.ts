@@ -8,6 +8,7 @@ export {
 export {
   blobWaveform,
   computePeaks,
+  decodesLocally,
   decodeWaveform,
   formatMegabytes,
   formatTime,

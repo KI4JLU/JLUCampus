@@ -188,35 +188,45 @@ export async function listStoredMeetings(
   directory: StoreDirectory,
   skip: ReadonlySet<string> = new Set()
 ): Promise<StoredMeeting[]> {
-  const meetings: StoredMeeting[] = []
   const ids: string[] = []
   for await (const id of directory.keys()) if (!skip.has(id)) ids.push(id)
+  const meetings: StoredMeeting[] = []
   for (const id of ids) {
-    try {
-      const folder = await directory.getDirectoryHandle(id)
-      const meta = parseMeetingMeta(
-        await (await (await folder.getFileHandle(META_FILE)).getFile()).text()
-      )
-      if (!meta || meta.id !== id) continue
-      let size = 0
-      let last = 0
-      const names = await chunkNames(folder)
-      for (const name of names) {
-        const file = await (await folder.getFileHandle(name)).getFile()
-        size += file.size
-        last = Math.max(last, file.lastModified)
-      }
-      meetings.push({
-        ...meta,
-        size,
-        chunks: names.length,
-        duration: names.length > 0 ? Math.max(0, (last - meta.startedAt) / 1000) : null
-      })
-    } catch {
-      // A directory that vanished or cannot be read is not offered.
-    }
+    const meeting = await readMeetingInfo(directory, id)
+    if (meeting) meetings.push(meeting)
   }
   return meetings.sort((a, b) => a.startedAt - b.startedAt)
+}
+
+/** One recording as offered; `null` when it is gone or has no readable `meta.json`. */
+export async function readMeetingInfo(
+  directory: StoreDirectory,
+  id: string
+): Promise<StoredMeeting | null> {
+  try {
+    const folder = await directory.getDirectoryHandle(id)
+    const meta = parseMeetingMeta(
+      await (await (await folder.getFileHandle(META_FILE)).getFile()).text()
+    )
+    if (!meta || meta.id !== id) return null
+    let size = 0
+    let last = 0
+    const names = await chunkNames(folder)
+    for (const name of names) {
+      const file = await (await folder.getFileHandle(name)).getFile()
+      size += file.size
+      last = Math.max(last, file.lastModified)
+    }
+    return {
+      ...meta,
+      size,
+      chunks: names.length,
+      duration: names.length > 0 ? Math.max(0, (last - meta.startedAt) / 1000) : null
+    }
+  } catch {
+    // A directory that vanished or cannot be read is not offered.
+    return null
+  }
 }
 
 /**
@@ -246,9 +256,14 @@ export async function removeStoredMeeting(
   }
 }
 
-/** Holds the recording's lock until the returned release; without Web Locks it does nothing. */
-export function holdMeetingLock(id: string): () => void {
-  return holdLock(id, false).release
+/**
+ * Holds the recording's lock until `release`; without Web Locks it does nothing. The lock is
+ * granted asynchronously: `held` resolves once it is, and the backup's first write waits for it,
+ * so another tab never sees the new directory unlocked.
+ */
+export function holdMeetingLock(id: string): { held: Promise<void>; release: () => void } {
+  const lock = holdLock(id, false)
+  return { held: lock.acquired.then(() => undefined), release: lock.release }
 }
 
 /**
