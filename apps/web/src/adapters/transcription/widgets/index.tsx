@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { FileUpIcon, MicIcon, PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -21,7 +20,7 @@ import {
 } from '@justcampus/shared'
 import { ComponentIcon } from '@/components/component-icon'
 import type { ComponentOf, ComponentViewProps } from '../../types'
-import { listJobs, transcriptionKeys, useTranscriptionCapabilities, useTranscripts } from '../api'
+import { useTranscriptionCapabilities, useTranscriptionJobs, useTranscripts } from '../api'
 import { setTranscriptionTarget, type TranscriptionTarget } from './target-store'
 
 /**
@@ -32,25 +31,16 @@ import { setTranscriptionTarget, type TranscriptionTarget } from './target-store
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 
-/** How often the widgets look at running jobs again; they stop once nothing runs. */
-const JOBS_POLL_MS = 10_000
 /** Entries the recent widget lists of each kind. */
 const RECENT_JOBS = 3
 const RECENT_TRANSCRIPTS = 8
 
-/** The user's unsaved jobs, polled while one of them runs. */
+/** The user's unsaved jobs, kept current by the event stream. */
 function useWidgetJobs(enabled: boolean): {
   jobs: TranscriptionJob[]
   active: number
 } {
-  const query = useQuery({
-    queryKey: transcriptionKeys.jobs,
-    queryFn: ({ signal }) => listJobs(signal),
-    enabled,
-    networkMode: 'always',
-    refetchInterval: (current) =>
-      current.state.data?.some((job) => isActiveJobStatus(job.status)) ? JOBS_POLL_MS : false
-  })
+  const query = useTranscriptionJobs(enabled)
   return useMemo(() => {
     const jobs = query.data ?? []
     return { jobs, active: jobs.filter((job) => isActiveJobStatus(job.status)).length }

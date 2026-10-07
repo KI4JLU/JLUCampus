@@ -4,6 +4,8 @@ import {
   type TranscriptionSegment
 } from '@justcampus/shared'
 
+import { client } from '../../../db/index.js'
+import { TRANSCRIPTION_EVENTS_CHANNEL } from '../events/hub.js'
 import { chatTarget, complete, withoutThinking, type ChatTarget } from '../summaries/chat.js'
 import type { TranscriptionRuntime } from '../config.js'
 import { applyGeneratedMetadata } from './store.js'
@@ -12,8 +14,8 @@ import { redactedText, UNKNOWN_SPEAKER } from './text.js'
 /**
  * The title (for a title nobody chose) and the subtitle the chat model writes after saving, with
  * the prompts and budgets of kiChat's `GenerateTranscriptionTitle` and
- * `GenerateTranscriptionSubtitle` jobs. The web app fetches the transcript again a few times to
- * pick them up (T-23). A subtitle the user typed meanwhile always wins.
+ * `GenerateTranscriptionSubtitle` jobs. The event stream tells the web app when to fetch them (T-23).
+ * A subtitle the user typed meanwhile always wins.
  */
 
 /**
@@ -228,35 +230,53 @@ export async function generateMetadataAfterSave(
   runtime: Pick<TranscriptionRuntime, 'config' | 'secrets'>,
   transcript: {
     id: string
+    componentId: string
+    userId: string
     title: string
     segments: readonly MetadataSegment[]
     originalFilename: string | null
     userLocale: string | null
   }
 ): Promise<void> {
-  const target = chatTarget(runtime, 'correction')
-  if (!target) return
-  const withTitle = isDefaultTitle(transcript.title, transcript.originalFilename)
-  const [title, subtitle] = await Promise.allSettled([
-    withTitle ? generateTitle(target, transcript.segments, transcript.userLocale) : null,
-    generateSubtitle(target, transcript.segments)
-  ])
-  for (const result of [title, subtitle]) {
-    if (result.status === 'rejected') {
-      console.error(
-        'Transcription title or subtitle generation failed',
-        transcript.id,
-        result.reason
-      )
-    }
-  }
   try {
-    await applyGeneratedMetadata(transcript.id, {
-      title: title.status === 'fulfilled' ? title.value : null,
-      subtitle: subtitle.status === 'fulfilled' ? subtitle.value : null,
-      titleWas: transcript.title
-    })
-  } catch (error) {
-    console.error('Transcription title or subtitle could not be stored', transcript.id, error)
+    const target = chatTarget(runtime, 'correction')
+    if (!target) return
+    const withTitle = isDefaultTitle(transcript.title, transcript.originalFilename)
+    const [title, subtitle] = await Promise.allSettled([
+      withTitle ? generateTitle(target, transcript.segments, transcript.userLocale) : null,
+      generateSubtitle(target, transcript.segments)
+    ])
+    for (const result of [title, subtitle]) {
+      if (result.status === 'rejected') {
+        console.error(
+          'Transcription title or subtitle generation failed',
+          transcript.id,
+          result.reason
+        )
+      }
+    }
+    try {
+      await applyGeneratedMetadata(transcript.id, {
+        title: title.status === 'fulfilled' ? title.value : null,
+        subtitle: subtitle.status === 'fulfilled' ? subtitle.value : null,
+        titleWas: transcript.title
+      })
+    } catch (error) {
+      console.error('Transcription title or subtitle could not be stored', transcript.id, error)
+    }
+  } finally {
+    try {
+      await client.notify(
+        TRANSCRIPTION_EVENTS_CHANNEL,
+        JSON.stringify({
+          type: 'transcriptMetadata',
+          id: transcript.id,
+          componentId: transcript.componentId,
+          userId: transcript.userId
+        })
+      )
+    } catch (error) {
+      console.error('Transcription metadata notification failed', transcript.id, error)
+    }
   }
 }

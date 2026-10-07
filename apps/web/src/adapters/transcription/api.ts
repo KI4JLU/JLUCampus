@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import {
   queryOptions,
   useMutation,
@@ -9,10 +10,8 @@ import {
   type UseQueryResult
 } from '@tanstack/react-query'
 import {
-  isActiveJobStatus,
   TRANSCRIPTION_API,
   TRANSCRIPTION_MEDIA_URL_REFRESH_SECONDS,
-  TRANSCRIPTION_POLL_MS,
   transcriptionCapabilitiesSchema,
   transcriptionConnectionTestSchema,
   transcriptionFormatListSchema,
@@ -36,6 +35,7 @@ import {
   type TranscriptionConnectionTest,
   type TranscriptionConnectionTestRequest,
   type TranscriptionDispatch,
+  type TranscriptionEvent,
   type TranscriptionFormat,
   type TranscriptionFormatInput,
   type TranscriptionJob,
@@ -62,6 +62,7 @@ import {
   type TranscriptionUploadTarget
 } from '@justcampus/shared'
 import { ApiRequestError, apiBase, apiFetch } from '@/lib/api'
+import { transcriptionEvents, type TranscriptionEvents } from './events'
 import { withParsedSegments } from './segments/payload'
 
 /**
@@ -471,8 +472,12 @@ export function useTranscriptionCapabilities(): UseQueryResult<TranscriptionCapa
   return useQuery(capabilitiesQuery)
 }
 
-/** The user's active jobs, for restoring the queue after a reload (T-15). */
+/**
+ * The user's active jobs, for restoring the queue after a reload (T-15); the event stream keeps
+ * them current while enabled.
+ */
 export function useTranscriptionJobs(enabled = true): UseQueryResult<TranscriptionJob[]> {
+  useTranscriptionEvents(enabled)
   return useQuery({
     queryKey: transcriptionKeys.jobs,
     queryFn: ({ signal }) => listJobs(signal),
@@ -482,23 +487,19 @@ export function useTranscriptionJobs(enabled = true): UseQueryResult<Transcripti
   })
 }
 
-/**
- * One job, fetched again every `pollMs` while the server works on it (analysis or
- * transcription) and no longer once it ended or waits for the user.
- */
+/** One job, kept current by the event stream while enabled (T-11). */
 export function useTranscriptionJob(
   id: string | null,
-  options: { pollMs?: number; enabled?: boolean } = {}
+  options: { enabled?: boolean } = {}
 ): UseQueryResult<TranscriptionJob> {
-  const pollMs = options.pollMs ?? TRANSCRIPTION_POLL_MS
+  const enabled = id !== null && (options.enabled ?? true)
+  useTranscriptionEvents(enabled)
   return useQuery({
     queryKey: transcriptionKeys.job(id ?? ''),
     queryFn: ({ signal }) => getJob(id!, signal),
-    enabled: id !== null && (options.enabled ?? true),
+    enabled,
     retry,
-    networkMode: NETWORK_MODE,
-    refetchInterval: (query) =>
-      query.state.data && isActiveJobStatus(query.state.data.status) ? pollMs : false
+    networkMode: NETWORK_MODE
   })
 }
 
@@ -590,6 +591,137 @@ export function useRealtimeConfig(enabled = true): UseQueryResult<TranscriptionR
 }
 
 // ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+/** Jobs deleted here or reported removed; a late `job` event does not bring them back. */
+const removedJobs = new Set<string>()
+
+/**
+ * Applies one event to the caches: the `jobs` snapshot replaces the list, a `job` changes its entry
+ * (a saved one leaves the list), `jobRemoved` drops it. A cached job keeps its `result`, which
+ * events leave out; one completed without a result in the cache is fetched again. New title and
+ * subtitle of a transcript refresh the history (T-23).
+ */
+export function applyTranscriptionEvent(client: QueryClient, event: TranscriptionEvent): void {
+  switch (event.type) {
+    case 'jobs': {
+      const jobs = event.data.jobs
+      changeQuery(client, transcriptionKeys.jobs, () => {
+        client.setQueryData<TranscriptionJob[]>(transcriptionKeys.jobs, jobs)
+      })
+      for (const query of client.getQueryCache().findAll({ queryKey: ['transcription', 'job'] })) {
+        const [, , id, detail] = query.queryKey
+        if (typeof id !== 'string' || detail !== undefined) continue
+        const job = jobs.find((candidate) => candidate.id === id)
+        // Missed while the stream was down: saved or gone, the job's own answer tells.
+        if (job) updateCachedJob(client, job)
+        else changeQuery(client, transcriptionKeys.job(id), () => true)
+      }
+      return
+    }
+    case 'job': {
+      const job = event.data
+      if (removedJobs.has(job.id)) return
+      changeQuery(client, transcriptionKeys.jobs, () => {
+        client.setQueryData<TranscriptionJob[]>(transcriptionKeys.jobs, (jobs) => {
+          if (!jobs) return jobs
+          const listed = jobs.some((other) => other.id === job.id)
+          if (job.transcriptId !== null)
+            return listed ? jobs.filter((other) => other.id !== job.id) : jobs
+          return listed ? jobs.map((other) => (other.id === job.id ? job : other)) : [...jobs, job]
+        })
+      })
+      updateCachedJob(client, job)
+      return
+    }
+    case 'jobRemoved': {
+      const { id } = event.data
+      removedJobs.add(id)
+      changeQuery(client, transcriptionKeys.jobs, () => {
+        client.setQueryData<TranscriptionJob[]>(transcriptionKeys.jobs, (jobs) =>
+          jobs?.filter((job) => job.id !== id)
+        )
+      })
+      changeQuery(client, transcriptionKeys.job(id), () => true)
+      return
+    }
+    case 'transcriptMetadata':
+      void client.invalidateQueries({ queryKey: transcriptionKeys.transcripts })
+  }
+}
+
+/** Takes a job from an event into its cached detail, if any, keeping the result. */
+function updateCachedJob(client: QueryClient, job: TranscriptionJob): void {
+  const key = transcriptionKeys.job(job.id)
+  changeQuery(client, key, () => {
+    const cached = client.getQueryData<TranscriptionJob>(key)
+    if (!cached) return false
+    const result = job.status === 'completed' ? (job.result ?? cached.result) : null
+    client.setQueryData<TranscriptionJob>(key, { ...job, result })
+    return job.status === 'completed' && !result
+  })
+}
+
+/**
+ * Applies an event to one cached query. A GET still underway may answer with the state before the
+ * event and would overwrite it, so it is cancelled first; the stream reports every later change.
+ * The query is fetched again if `change` asks for it, or if the cancelled GET was its first and it
+ * has no data to change.
+ */
+function changeQuery(
+  client: QueryClient,
+  queryKey: readonly unknown[],
+  change: () => boolean | void
+): void {
+  const filters = { queryKey, exact: true }
+  const fetching = client.isFetching(filters) > 0
+  // Reverts to the state before the GET at once, so `change` works on that.
+  if (fetching) void client.cancelQueries(filters)
+  const refetch = change() === true
+  if (refetch || (fetching && client.getQueryData(queryKey) === undefined)) {
+    void client.invalidateQueries(filters)
+  }
+}
+
+/** One subscription per query client, however many components want the caches current. */
+const cacheSyncs = new WeakMap<QueryClient, { users: number; stop: () => void }>()
+
+/** Keeps the job caches current from the stream until the returned function is called. */
+export function syncTranscriptionCaches(
+  client: QueryClient,
+  events: TranscriptionEvents = transcriptionEvents()
+): () => void {
+  let sync = cacheSyncs.get(client)
+  if (!sync) {
+    sync = {
+      users: 0,
+      stop: events.subscribe({ onEvent: (event) => applyTranscriptionEvent(client, event) })
+    }
+    cacheSyncs.set(client, sync)
+  }
+  const current = sync
+  current.users++
+  let stopped = false
+  return () => {
+    if (stopped) return
+    stopped = true
+    if (--current.users > 0) return
+    current.stop()
+    if (cacheSyncs.get(client) === current) cacheSyncs.delete(client)
+  }
+}
+
+/**
+ * Keeps the job caches current while mounted and `enabled`: the widgets and the module's page use
+ * it in place of polling.
+ */
+export function useTranscriptionEvents(enabled = true): void {
+  const client = useQueryClient()
+  useEffect(() => (enabled ? syncTranscriptionCaches(client) : undefined), [client, enabled])
+}
+
+// ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
 
@@ -626,6 +758,7 @@ export function useDeleteJob(): UseMutationResult<void, Error, string> {
     networkMode: NETWORK_MODE,
     mutationFn: deleteJob,
     onSuccess: (_, id) => {
+      removedJobs.add(id)
       client.removeQueries({ queryKey: transcriptionKeys.job(id) })
       client.setQueryData<TranscriptionJob[]>(transcriptionKeys.jobs, (jobs) =>
         jobs?.filter((job) => job.id !== id)

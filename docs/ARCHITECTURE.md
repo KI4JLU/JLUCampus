@@ -315,6 +315,16 @@ below `/api/admin/modules/transcription`. Each area has its own router (`jobs/`,
 secrets and storage make available (`config.ts`). Routes not built yet answer
 `501 not_implemented`.
 
+`GET /events` streams job changes and completed transcript metadata generation over SSE.
+Each connection subscribes before loading its initial `jobs` snapshot, then flushes buffered
+changes. A Postgres trigger publishes job identifiers on `transcription_events` after row
+changes, excluding claim bookkeeping. Metadata generation explicitly notifies when it finishes,
+also when it writes nothing or fails. Each server process has one reconnecting LISTEN connection;
+it loads visible jobs for local subscribers by component and user, sends `job` or `jobRemoved`,
+and serializes loads to preserve order. After a LISTEN reconnect the streams end, so browsers
+resync. Streams send 25-second heartbeat comments and close after five minutes to recheck the
+session on reconnect.
+
 The server runs the whole pipeline. Browsers never reach the object storage: each file goes
 in one `PUT` of exactly its announced size to the API (`TRANSCRIPTION_API.jobUpload`, session
 cookie), which streams it on into the bucket (`storage.ts`, `@aws-sdk/client-s3`), so the
