@@ -1,7 +1,6 @@
 import {
   isActiveJobStatus,
-  TRANSCRIPTION_POLL_MS,
-  TRANSCRIPTION_RESTORED_POLL_MS,
+  TRANSCRIPTION_EVENTS_RETRY_MS,
   TRANSCRIPTION_SECONDS_MAX,
   type TranscriptionAnalyze,
   type TranscriptionDispatch,
@@ -17,6 +16,7 @@ import {
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
 import { UploadError } from '../api'
+import type { TranscriptionEvents } from '../events'
 import {
   voiceDispatch,
   voicesFromSpeakers,
@@ -76,6 +76,8 @@ export type SignedUpload = (
 export interface UploadQueueOptions {
   api: UploadApi
   upload: SignedUpload
+  /** The page's event stream, which tells how each job goes on (T-11, T-15). */
+  events: TranscriptionEvents
   /** The upload settings (T-09); `configure` keeps them current, and dispatch reads them anew. */
   settings: UploadSettings
   /** Files one group (one transcript) may hold, as the capabilities say; `null`: no limit. */
@@ -90,8 +92,8 @@ export interface UploadQueueOptions {
   onTranscriptSaved?: (transcript: TranscriptionTranscript) => void
   /** The newest revision of a transcript the page knows, for renaming it (T-14). */
   latestRevision?: (transcriptId: string) => number | null
-  pollMs?: number
-  restoredPollMs?: number
+  /** Wait before a failed fetch of a job is tried again. */
+  syncRetryMs?: number
   creepMs?: number
 }
 
@@ -107,8 +109,8 @@ export interface StartOutcome {
   failed: boolean
 }
 
-/** Polling gives up after this many failed requests in a row (the network, not the job). */
-const MAX_POLL_ERRORS = 5
+/** Following a job gives up after this many failed fetches in a row (the network, not the job). */
+const MAX_SYNC_ERRORS = 5
 
 /**
  * Uploads of this browser session that may outlive the page that started them, by job id: leaving
@@ -124,23 +126,12 @@ class Aborted extends Error {
   }
 }
 
-/** Waits `ms`, or rejects with `Aborted` when the signal fires. */
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new Aborted())
-      return
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    const onAbort = (): void => {
-      clearTimeout(timer)
-      reject(new Aborted())
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-  })
+/** A job could not be followed: removed on the server, or fetching it failed too often. */
+class JobLost extends Error {
+  constructor(readonly reason: unknown) {
+    super('job lost')
+    this.name = 'JobLost'
+  }
 }
 
 /** The server's own words for a failure, when it gave any. */
@@ -162,6 +153,10 @@ function uploadError(error: unknown): FileError {
 const isGone = (error: unknown): boolean =>
   error instanceof ApiRequestError && (error.status === 404 || error.status === 410)
 
+/** The server's words for a job that could not be followed; none for a removed one. */
+const lostMessage = (error: unknown): string | null =>
+  messageOf(error instanceof JobLost ? error.reason : error)
+
 /** A duration the server accepts as a hint. */
 function durationHint(duration: number | null): number | null {
   return duration !== null && Number.isFinite(duration) && duration >= 0
@@ -179,7 +174,7 @@ function durationHint(duration: number | null): number | null {
 export class UploadQueue {
   private state: QueueState = EMPTY_QUEUE
   private readonly listeners = new Set<() => void>()
-  /** The polling of each file, at most one at a time. */
+  /** What follows each file's job, at most one at a time. */
   private readonly flows = new Map<string, AbortController>()
   /** Running uploads by file, aborted only when the file is removed. */
   private readonly uploads = new Map<string, AbortController>()
@@ -269,8 +264,8 @@ export class UploadQueue {
   }
 
   /**
-   * Stops all polling when the page goes. Uploads finish and start their analysis, so their jobs
-   * are restored when the page comes back.
+   * Stops following the jobs when the page goes. Uploads finish and start their analysis, so their
+   * jobs are restored when the page comes back.
    */
   dispose(): void {
     this.lifetime.abort()
@@ -285,7 +280,7 @@ export class UploadQueue {
     return this.lifetime.signal.aborted
   }
 
-  /** A new polling of a file, ending the one before. */
+  /** A new following of a file's job, ending the one before. */
   private startFlow(fileId: string): AbortController {
     this.flows.get(fileId)?.abort()
     const controller = new AbortController()
@@ -484,36 +479,99 @@ export class UploadQueue {
       )
       return
     }
-    await this.pollAnalysis(fileId, jobId, { keepVoices: false })
+    await this.followAnalysis(fileId, jobId, { keepVoices: false })
   }
 
   /**
-   * Polls a job until its analysis ends (T-10, T-21): the bar waits at 50 % while queued and creeps
-   * towards 98 % while analysing. Resolves whether the voices arrived.
+   * The job as the event stream reports it, one state at a time, until the flow is aborted
+   * (`Aborted`) or the job is lost (`JobLost`). It is fetched once after each (re)connect of the
+   * stream, and once right away when the stream is up already, as events may have been missed
+   * meanwhile; a `completed` job is fetched for its result, which events leave out. A failed fetch
+   * is tried again on the next (re)connect, or after `syncRetryMs` at the latest, so a passing
+   * failure does not leave the file waiting; after `MAX_SYNC_ERRORS` failures in a row, or once the
+   * job is gone, it is lost.
    */
-  private async pollAnalysis(
-    fileId: string,
-    jobId: string,
-    { keepVoices }: { keepVoices: boolean }
-  ): Promise<boolean> {
-    const controller = this.startFlow(fileId)
-    const signal = controller.signal
+  private async *jobStates(jobId: string, signal: AbortSignal): AsyncGenerator<TranscriptionJob> {
+    type Item = { kind: 'job'; job: TranscriptionJob } | { kind: 'sync' } | { kind: 'gone' }
+    const inbox: Item[] = []
+    let wake: (() => void) | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const push = (item: Item): void => {
+      inbox.push(item)
+      wake?.()
+    }
+    const onAbort = (): void => wake?.()
+    signal.addEventListener('abort', onAbort, { once: true })
+    const unsubscribe = this.options.events.subscribe({
+      onOpen: () => push({ kind: 'sync' }),
+      onEvent: (event) => {
+        if (event.type === 'job' && event.data.id === jobId) {
+          push(
+            event.data.status === 'completed' ? { kind: 'sync' } : { kind: 'job', job: event.data }
+          )
+        } else if (event.type === 'jobRemoved' && event.data.id === jobId) push({ kind: 'gone' })
+      }
+    })
     let errors = 0
-    this.patchFile(fileId, { phase: 'analyzing', tone: 'processing', error: null, notice: null })
     try {
       for (;;) {
-        await sleep(this.options.pollMs ?? TRANSCRIPTION_POLL_MS, signal)
+        if (signal.aborted) throw new Aborted()
+        const item = inbox.shift()
+        if (!item) {
+          await new Promise<void>((resolve) => {
+            wake = resolve
+          })
+          wake = null
+          continue
+        }
+        if (item.kind === 'gone') throw new JobLost(null)
+        if (item.kind === 'job') {
+          yield item.job
+          continue
+        }
+        // One fetch answers every sync asked for so far.
+        for (let index = inbox.length - 1; index >= 0; index--) {
+          if (inbox[index]!.kind === 'sync') inbox.splice(index, 1)
+        }
+        if (retryTimer) clearTimeout(retryTimer)
+        retryTimer = null
         let job: TranscriptionJob
         try {
           job = await this.options.api.getJob(jobId, signal)
           errors = 0
         } catch (error) {
           if (signal.aborted) throw new Aborted()
-          if (isGone(error) || ++errors >= MAX_POLL_ERRORS) {
-            throw Object.assign(new Error('poll'), { cause: error })
-          }
+          if (isGone(error) || ++errors >= MAX_SYNC_ERRORS) throw new JobLost(error)
+          retryTimer = setTimeout(
+            () => push({ kind: 'sync' }),
+            this.options.syncRetryMs ?? TRANSCRIPTION_EVENTS_RETRY_MS
+          )
           continue
         }
+        if (signal.aborted) throw new Aborted()
+        yield job
+      }
+    } finally {
+      unsubscribe()
+      signal.removeEventListener('abort', onAbort)
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }
+
+  /**
+   * Follows a job until its analysis ends (T-10, T-21): the bar waits at 50 % while queued and
+   * creeps towards 98 % while analysing. Resolves whether the voices arrived.
+   */
+  private async followAnalysis(
+    fileId: string,
+    jobId: string,
+    { keepVoices }: { keepVoices: boolean }
+  ): Promise<boolean> {
+    const controller = this.startFlow(fileId)
+    const signal = controller.signal
+    this.patchFile(fileId, { phase: 'analyzing', tone: 'processing', error: null, notice: null })
+    try {
+      for await (const job of this.jobStates(jobId, signal)) {
         this.patchFile(fileId, { jobStatus: job.status })
         if (job.status === 'failed' || job.status === 'cancelled') {
           this.fail(fileId, 'analysisFailed', {
@@ -553,11 +611,12 @@ export class UploadQueue {
           this.patchFile(fileId, { status: 'waitingForAnalysis', progress: PROGRESS.uploadEnd })
         }
       }
+      return false
     } catch (error) {
       if (error instanceof Aborted || signal.aborted) return false
       this.fail(fileId, 'analysisFailed', {
         key: 'analysisError',
-        message: messageOf((error as Error).cause ?? error)
+        message: lostMessage(error)
       })
       return false
     } finally {
@@ -598,7 +657,7 @@ export class UploadQueue {
       } catch (error) {
         return { ok: false, message: messageOf(error) }
       }
-      const ok = await this.pollAnalysis(fileId, file.jobId, { keepVoices })
+      const ok = await this.followAnalysis(fileId, file.jobId, { keepVoices })
       if (ok) return { ok: true }
       return { ok: false, message: this.file(fileId)?.error?.message ?? null }
     } finally {
@@ -718,7 +777,7 @@ export class UploadQueue {
           if (this.disposed) return
           if (analysing) {
             this.patchFile(row.id, { uploaded: true })
-            void this.pollAnalysis(row.id, job.id, { keepVoices: false })
+            void this.followAnalysis(row.id, job.id, { keepVoices: false })
           } else this.fail(row.id, 'analysisFailed', { key: 'uploadAborted' })
         })
         return
@@ -731,7 +790,7 @@ export class UploadQueue {
           status: 'analyzingSpeakers',
           tone: 'processing'
         })
-        void this.pollAnalysis(row.id, job.id, { keepVoices: false })
+        void this.followAnalysis(row.id, job.id, { keepVoices: false })
         return
       case 'analyzed':
         return
@@ -758,7 +817,7 @@ export class UploadQueue {
    * its group is complete.
    */
   private async resumeTranscription(fileId: string, jobId: string): Promise<void> {
-    const result = await this.pollTranscription(fileId, jobId, { restored: true })
+    const result = await this.followTranscription(fileId, jobId)
     if (!result || this.disposed || this.state.processing) return
     const position = findFile(this.state.groups, fileId)
     if (!position || position.group.saved) return
@@ -876,7 +935,7 @@ export class UploadQueue {
       // A 409 here means it was dispatched before (the answer got lost): follow that one.
       if ((await this.dispatch(fileId, jobId, file)) === 'failed') return null
     }
-    return this.pollTranscription(fileId, jobId, { restored: false })
+    return this.followTranscription(fileId, jobId)
   }
 
   /**
@@ -921,36 +980,17 @@ export class UploadQueue {
   }
 
   /**
-   * Polls a dispatched job until it ends, showing its phase and chunks (T-11): every two seconds,
-   * or after a reload every three, asking first. Resolves the result, or `null`.
+   * Follows a dispatched job until it ends, showing its phase and chunks (T-11), also after a
+   * reload. Resolves the result, or `null`.
    */
-  private async pollTranscription(
+  private async followTranscription(
     fileId: string,
-    jobId: string,
-    { restored }: { restored: boolean }
+    jobId: string
   ): Promise<TranscriptionResult | null> {
     const controller = this.startFlow(fileId)
     const signal = controller.signal
-    const interval = restored
-      ? (this.options.restoredPollMs ?? TRANSCRIPTION_RESTORED_POLL_MS)
-      : (this.options.pollMs ?? TRANSCRIPTION_POLL_MS)
-    let errors = 0
-    let first = true
     try {
-      for (;;) {
-        if (!restored || !first) await sleep(interval, signal)
-        first = false
-        let job: TranscriptionJob
-        try {
-          job = await this.options.api.getJob(jobId, signal)
-          errors = 0
-        } catch (error) {
-          if (signal.aborted) throw new Aborted()
-          if (isGone(error) || ++errors >= MAX_POLL_ERRORS) {
-            throw Object.assign(new Error('poll'), { cause: error })
-          }
-          continue
-        }
+      for await (const job of this.jobStates(jobId, signal)) {
         this.patchFile(fileId, { jobStatus: job.status })
         if (job.status === 'failed' || job.status === 'cancelled') {
           this.fail(fileId, 'failed', {
@@ -995,12 +1035,10 @@ export class UploadQueue {
           return null
         }
       }
+      return null
     } catch (error) {
       if (error instanceof Aborted || signal.aborted) return null
-      this.fail(fileId, 'failed', {
-        key: 'transcriptionError',
-        message: messageOf((error as Error).cause ?? error)
-      })
+      this.fail(fileId, 'failed', { key: 'transcriptionError', message: lostMessage(error) })
       return null
     } finally {
       this.endFlow(fileId, controller)

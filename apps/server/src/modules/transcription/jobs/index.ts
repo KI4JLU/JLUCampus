@@ -290,7 +290,7 @@ jobsRouter.put('/jobs/:id/upload', async (context) => {
   return context.body(null, 204)
 })
 
-/** Status, progress, voices and, once completed, the result (polled every two seconds). */
+/** Status, progress, voices and, once completed, the result. */
 jobsRouter.get('/jobs/:id', async (context) => {
   return context.json(publicJob(await ownJob(context), true))
 })

@@ -24,6 +24,7 @@ import {
   transcriptionKeys,
   useTranscript
 } from '../api'
+import { transcriptionEvents } from '../events'
 import { ExportView } from '../export'
 import {
   changeLocalHistory,
@@ -127,6 +128,7 @@ function ServerResult({ id }: { id: string }): React.JSX.Element {
       get: (transcriptId) => getTranscript(transcriptId),
       generateSubtitle,
       optimize: (request) => optimizeSpeakers(request),
+      events: transcriptionEvents(),
       onServerCopy: (saved) => {
         if (key) changeLocalHistory(key, (stored) => keepServerCopy(stored, saved))
         client.setQueryData(transcriptionKeys.transcript(saved.id), saved)
