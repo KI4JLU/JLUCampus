@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -17,7 +18,7 @@ import {
   type TranscriptionSpeakerColorId
 } from '@justcampus/shared'
 import { cn } from '@/lib/utils'
-import { drawWaveform, type WaveformColors } from './draw'
+import { drawWaveform, segmentTitle, type WaveformColors } from './draw'
 import { playExclusively } from './exclusive'
 import {
   blobWaveform,
@@ -35,6 +36,23 @@ export interface WaveformSegment {
   end: number
   /** `null` draws it in the neutral colour. */
   colorId: TranscriptionSpeakerColorId | null
+  /** The speaker, shown with the stretch's times when the pointer rests on it. */
+  label?: string
+}
+
+/**
+ * A time line the bar shows and seeks instead of this audio's own, e.g. the result's one waveform
+ * over all source files (T-24): its peaks, length and playhead, in its own seconds, as are the
+ * `segments`; a seek by pointer or keys goes to `onSeek`.
+ */
+export interface WaveformTimeline {
+  /** `null` draws the placeholder bars. */
+  peaks: readonly number[] | null
+  duration: number
+  time: number
+  onSeek: (seconds: number) => void
+  /** This audio's length when its media reports none (recordings), e.g. its file's saved range. */
+  sourceDuration?: number
 }
 
 /** A highlighted window, e.g. the voice sample being edited (T-19). */
@@ -76,6 +94,8 @@ export interface WaveformPlayerProps {
   /** The speaker timeline, coloured per speaker. */
   segments?: readonly WaveformSegment[]
   region?: WaveformRegion | null
+  /** Shows and seeks another time line than the audio's own; nothing is decoded here then. */
+  timeline?: WaveformTimeline
   /** Hides the line with name, size and time, for players that show them elsewhere. */
   compact?: boolean
   onTimeUpdate?: (seconds: number) => void
@@ -112,6 +132,7 @@ export function WaveformPlayer({
   jobRevision,
   segments,
   region,
+  timeline,
   compact = false,
   onTimeUpdate,
   onPlayingChange,
@@ -128,6 +149,8 @@ export function WaveformPlayer({
     waveform: DecodedWaveform | null
   } | null>(null)
   const [duration, setDuration] = useState(0)
+  /** The media reports no length of its own (`Infinity`), as recordings may. */
+  const [unknownLength, setUnknownLength] = useState(false)
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const rangeEnd = useRef<number | null>(null)
@@ -136,6 +159,12 @@ export function WaveformPlayer({
   const tooLarge = byteSize !== undefined && byteSize > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
   // A waveform decoded for an earlier source no longer counts.
   const waveform = decoded?.source === source ? decoded.waveform : null
+  const external = timeline !== undefined
+  // Read at draw time, so the playhead follows without drawing anew on every render.
+  const shownTimeline = useRef(timeline)
+  useLayoutEffect(() => {
+    shownTimeline.current = timeline
+  })
 
   // Local audio plays from an object URL that lives as long as the source.
   useEffect(() => {
@@ -154,7 +183,7 @@ export function WaveformPlayer({
   }, [source])
 
   useEffect(() => {
-    if (!source) return
+    if (!source || external) return
     const controller = new AbortController()
     // Too large to decode here: the waveform the analysis computed, once there is one.
     const decoding = tooLarge
@@ -170,9 +199,10 @@ export function WaveformPlayer({
     })
     return () => controller.abort()
     // `jobRevision` only asks again; `jobWaveform` keeps what it found.
-  }, [jobId, jobRevision, source, tooLarge])
+  }, [jobId, jobRevision, source, tooLarge, external])
 
-  const knownDuration = duration || waveform?.duration || 0
+  const knownDuration =
+    duration || waveform?.duration || (unknownLength ? (timeline?.sourceDuration ?? 0) : 0)
   useEffect(() => {
     if (knownDuration > 0) onDuration?.(knownDuration)
   }, [knownDuration, onDuration])
@@ -197,12 +227,13 @@ export function WaveformPlayer({
       neutral: cssColor(bar, '--color-outline'),
       speakers: TRANSCRIPTION_SPEAKER_COLORS
     }
+    const shown = shownTimeline.current
     drawWaveform(context, {
       width,
       height,
-      peaks: waveform?.peaks ?? placeholderPeaks(),
-      duration: knownDuration,
-      time: audioRef.current?.currentTime ?? 0,
+      peaks: (shown ? shown.peaks : waveform?.peaks) ?? placeholderPeaks(),
+      duration: shown ? shown.duration : knownDuration,
+      time: shown ? shown.time : (audioRef.current?.currentTime ?? 0),
       segments: segments ?? [],
       region: region ?? null,
       colors
@@ -217,6 +248,11 @@ export function WaveformPlayer({
     observer.observe(bar)
     return () => observer.disconnect()
   }, [draw])
+
+  // Another time line is drawn whenever it changes.
+  useEffect(() => {
+    if (external) draw()
+  }, [external, timeline?.peaks, timeline?.duration, timeline?.time, draw])
 
   // While playing, the playhead moves every frame and a range stops at its end.
   useEffect(() => {
@@ -290,14 +326,27 @@ export function WaveformPlayer({
     [play, pause, seek]
   )
 
-  const seekToPointer = (event: PointerEvent<HTMLDivElement>): void => {
+  // The bar's time line: the audio's own, or the one given.
+  const barDuration = timeline ? timeline.duration : knownDuration
+  const barTime = timeline ? timeline.time : time
+  const seekBar = (seconds: number): void => {
+    if (timeline) timeline.onSeek(Math.min(Math.max(0, seconds), timeline.duration))
+    else seek(seconds)
+  }
+
+  const pointerTime = (event: PointerEvent<HTMLDivElement>): number | null => {
     const rect = event.currentTarget.getBoundingClientRect()
-    if (rect.width === 0) return
-    seek(((event.clientX - rect.left) / rect.width) * knownDuration)
+    if (rect.width === 0) return null
+    return Math.min(Math.max(0, (event.clientX - rect.left) / rect.width), 1) * barDuration
+  }
+
+  const seekToPointer = (event: PointerEvent<HTMLDivElement>): void => {
+    const target = pointerTime(event)
+    if (target !== null) seekBar(target)
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    const current = audioRef.current?.currentTime ?? 0
+    const current = timeline ? timeline.time : (audioRef.current?.currentTime ?? 0)
     const target = {
       ArrowLeft: current - SEEK_STEP,
       ArrowDown: current - SEEK_STEP,
@@ -306,11 +355,11 @@ export function WaveformPlayer({
       PageDown: current - SEEK_PAGE,
       PageUp: current + SEEK_PAGE,
       Home: 0,
-      End: knownDuration
+      End: barDuration
     }[event.key]
     if (target === undefined) return
     event.preventDefault()
-    seek(target)
+    seekBar(target)
   }
 
   const timeLabel = `${formatTime(time)} / ${formatTime(knownDuration)}`
@@ -364,23 +413,30 @@ export function WaveformPlayer({
               : t('transcription.common.player.seekUnnamed')
           }
           aria-valuemin={0}
-          aria-valuemax={Math.round(knownDuration)}
-          aria-valuenow={Math.round(time)}
+          aria-valuemax={Math.round(barDuration)}
+          aria-valuenow={Math.round(barTime)}
           aria-valuetext={t('transcription.common.player.time', {
-            current: formatTime(time),
-            total: formatTime(knownDuration)
+            current: formatTime(barTime),
+            total: formatTime(barDuration)
           })}
           aria-disabled={!source || undefined}
           className="relative h-12 min-w-0 flex-1 cursor-pointer touch-none focus-visible:outline-2 focus-visible:outline-focus-ring"
           onKeyDown={onKeyDown}
           onPointerDown={(event) => {
-            if (!knownDuration) return
+            if (!barDuration) return
             seeking.current = true
             event.currentTarget.setPointerCapture(event.pointerId)
             seekToPointer(event)
           }}
           onPointerMove={(event) => {
-            if (seeking.current) seekToPointer(event)
+            if (seeking.current) {
+              seekToPointer(event)
+              return
+            }
+            // The speaker under the pointer, as kiChat's global player shows it.
+            if (!segments?.some((segment) => segment.label)) return
+            const at = pointerTime(event)
+            event.currentTarget.title = at === null ? '' : segmentTitle(segments, at)
           }}
           onPointerUp={(event) => {
             seeking.current = false
@@ -402,12 +458,15 @@ export function WaveformPlayer({
         hidden
         onEmptied={() => {
           setDuration(0)
+          setUnknownLength(false)
           setTime(0)
         }}
         onLoadedMetadata={(event) => {
-          // Recordings may report Infinity; the decoded waveform's duration covers them.
+          // Recordings may report Infinity; the decoded waveform's duration covers them, or the
+          // time line's length of this file.
           const value = event.currentTarget.duration
           if (Number.isFinite(value)) setDuration(value)
+          else setUnknownLength(true)
         }}
         onTimeUpdate={(event) => {
           setTime(event.currentTarget.currentTime)

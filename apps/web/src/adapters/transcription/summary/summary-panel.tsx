@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Badge, Button, PanelSection, Spinner } from '@ki4jlu/design-system'
 import { cn } from '@/lib/utils'
 import { Notice } from '../notice'
-import { skeletonHeadlines, summaryErrorMessage, type SummaryState } from './use-summary'
+import { skeletonHeadlines, type SummaryState } from './use-summary'
 
 const MarkdownView = lazy(() => import('./markdown-view'))
 
@@ -41,23 +41,29 @@ export function SummaryPanel({
         </div>
       )
     case 'empty':
+      // kiChat's placeholder: the icon and "Noch keine Zusammenfassung", the template, the action,
+      // then what will be created.
       return (
         <div className="flex flex-col gap-stack-lg">
           <PanelSection
-            title={t('transcription.export.generateSummaryTitle')}
+            title={
+              <span className="flex items-center gap-stack-sm">
+                <SparklesIcon {...ICON} />
+                {t('transcription.export.noSummaryYet')}
+              </span>
+            }
             hint={t('transcription.export.templateHint', { template: templateName })}
           >
-            <p className="m-0">{t('transcription.export.generateSummaryDesc')}</p>
+            <div>
+              <Button type="button" onClick={() => state.generate(false)}>
+                <SparklesIcon {...ICON} />
+                {t('transcription.export.createSummary')}
+              </Button>
+            </div>
           </PanelSection>
           <PanelSection title={t('transcription.export.whatWillBeCreated')}>
             <Skeleton headlines={headlines} active={false} />
           </PanelSection>
-          <div>
-            <Button type="button" onClick={() => state.generate(false)}>
-              <SparklesIcon {...ICON} />
-              {t('transcription.export.createSummary')}
-            </Button>
-          </div>
         </div>
       )
     case 'loading':
@@ -67,7 +73,7 @@ export function SummaryPanel({
             title={t('transcription.export.generatingSummary')}
             hint={t('transcription.export.generatingSummaryHint')}
           >
-            <Skeleton headlines={headlines} active />
+            <Skeleton headlines={headlines} active leading />
           </PanelSection>
         </div>
       )
@@ -82,11 +88,8 @@ export function SummaryPanel({
             </Button>
           }
         >
-          {summaryErrorMessage(state.error, {
-            prefix: t('transcription.export.generationFailedPrefix'),
-            serverError: t('transcription.export.serverError'),
-            communicationError: t('transcription.export.communicationError')
-          })}
+          {/* kiChat shows this for every failed answer; the server's own reason never shows. */}
+          {t('transcription.export.communicationError')}
         </Notice>
       )
     case 'ready':
@@ -105,19 +108,28 @@ export function SummaryPanel({
 const WIDTHS = ['w-full', 'w-1/2', 'w-2/3'] as const
 
 /**
- * One labelled group of placeholder lines per section; pulsing while the summary is written.
+ * One labelled group of placeholder lines per section; pulsing while the summary is written,
+ * then led by an unlabelled group of a full and a two-thirds line, as kiChat's.
  * DS gap: there is no Skeleton; the bars use the surface tokens.
  */
 function Skeleton({
   headlines,
-  active
+  active,
+  leading = false
 }: {
   headlines: string[]
   active: boolean
+  leading?: boolean
 }): React.JSX.Element {
   const bar = cn('h-3 rounded-full bg-surface-container-high', active && 'animate-pulse')
   return (
     <ul className="m-0 flex list-none flex-col gap-stack-md p-0">
+      {leading ? (
+        <li aria-hidden="true" className="flex flex-col gap-stack-sm">
+          <div className={cn(bar, 'w-full')} />
+          <div className={cn(bar, 'w-2/3')} />
+        </li>
+      ) : null}
       {headlines.map((headline, index) => (
         <li key={`${index}-${headline}`} className="flex flex-col gap-stack-sm">
           <Badge tone="neutral" appearance="text">

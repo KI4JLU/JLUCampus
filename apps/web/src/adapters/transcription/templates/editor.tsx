@@ -96,6 +96,9 @@ const MarkdownView = lazy(() => import('../summary/markdown-view'))
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 
+/** The tones that tell filled-in blocks from AI sections, on the blocks and in the legend. */
+const BLOCK_TONES = { static: 'neutral', section: 'secondary' } as const
+
 /** How long a palette button says "Eingefügt", as in kiChat. */
 const INSERTED_MS = 1200
 
@@ -328,9 +331,10 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
         structure: toStructure(blocks)
       },
       {
+        // As kiChat: the saved template is the one in use, and the chooser shows it as active.
         onSuccess: (template) => {
           templateActions.select(template.id)
-          templateActions.closeEditor(false)
+          templateActions.closeEditor(true)
         },
         onError: (error) =>
           toast({
@@ -468,13 +472,22 @@ export function TemplateEditor({ draft }: { draft: TemplateDraft }): React.JSX.E
               </PaletteGroup>
             </div>
           </PanelSection>
-          <BlockList
-            blocks={blocks}
-            onChange={setBlocks}
-            onFocusField={(field) => {
-              focused.current = field
-            }}
-          />
+          <PanelSection title={t('transcription.export.editTemplate')}>
+            <BlockList
+              blocks={blocks}
+              onChange={setBlocks}
+              onFocusField={(field) => {
+                focused.current = field
+              }}
+            />
+            {/* kiChat's legend, in the tones of the blocks' type badges above.
+                DS gap: the preview has no highlight for filled placeholders or AI output, so the
+                legend's colours only show on the blocks' badges. */}
+            <div className="flex flex-wrap items-center gap-stack-sm">
+              <Badge tone={BLOCK_TONES.static}>{t('transcription.export.legendAuto')}</Badge>
+              <Badge tone={BLOCK_TONES.section}>{t('transcription.export.legendAi')}</Badge>
+            </div>
+          </PanelSection>
         </div>
         <div className="flex min-w-0 flex-col gap-stack-lg">
           <PanelSection
@@ -789,7 +802,7 @@ function BlockEditor({
               </TooltipTrigger>
               <TooltipContent>{t('transcription.export.dragToMove')}</TooltipContent>
             </Tooltip>
-            <Badge tone={block.type === 'section' ? 'secondary' : 'neutral'}>
+            <Badge tone={block.type === 'section' ? BLOCK_TONES.section : BLOCK_TONES.static}>
               {typeLabel(block)}
             </Badge>
             <span className="ml-auto flex items-center">

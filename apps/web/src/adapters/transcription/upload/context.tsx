@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode
@@ -25,6 +24,8 @@ import {
   getTranscript,
   listJobs,
   patchTranscript,
+  pollGeneratedTitle,
+  reportTranscriptAdopted,
   transcriptionKeys,
   uploadToTarget
 } from '../api'
@@ -65,19 +66,15 @@ function measureDuration(file: File): Promise<number | null> {
 
 /**
  * Holds the upload queue for as long as the page lives, so it survives switching views; it wraps
- * the whole page, side column included. On arrival it restores the user's active jobs (T-15),
- * takes the files other areas hand over (recorded takes, T-58) and, back at the entry choice,
- * clears the selection unless a start runs (T-01).
+ * the whole page, side column included. Each time the upload view opens it restores the user's
+ * active jobs (T-15, kiChat's file view); it takes the files other areas hand over (recorded
+ * takes, T-58) and, back at the entry choice, clears the selection unless a start runs (T-01).
  */
 export function UploadProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const { t } = useTranslation()
   const client = useQueryClient()
   const workspace = useTranscriptionWorkspace()
   const { dialogs, request, close } = useDialogHost()
-  const view = useRef(workspace.view)
-  useEffect(() => {
-    view.current = workspace.view
-  })
 
   // Kept in the page's memory, so uploads and polling go on through a remount of the page.
   const { memory } = workspace
@@ -106,6 +103,12 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
         void client.invalidateQueries({ queryKey: transcriptionKeys.transcripts })
         void client.invalidateQueries({ queryKey: transcriptionKeys.jobs })
       },
+      // kiChat's `pollForTitleUpdate`: the AI title reaches the history and the group's link.
+      onTranscriptCreated: (transcript) =>
+        pollGeneratedTitle(client, transcript, {
+          onTitle: (latest) => created.takeGeneratedTitle(latest.id, latest.title)
+        }),
+      onSaveAdopted: reportTranscriptAdopted,
       latestRevision: (id) =>
         client.getQueryData<TranscriptionTranscript>(transcriptionKeys.transcript(id))?.revision ??
         null
@@ -115,7 +118,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     return created
   })
 
-  const { capabilities, openTranscript } = workspace
+  const { capabilities } = workspace
   const maxBytes = capabilities?.limits.maxFileBytes ?? TRANSCRIPTION_MAX_FILE_BYTES
   // The admin's limit per transcript; without one (kiChat has none) only the contract's
   // anti-abuse bound, far above usual groups.
@@ -192,6 +195,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     [alertGroupFull, queue]
   )
 
+  // Like kiChat, the user stays at the queue after a start; each saved group offers its transcript.
   const start = useCallback(async (): Promise<void> => {
     const outcome = await queue.start()
     if (outcome.status === 'empty') {
@@ -199,13 +203,8 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
         title: t('transcription.common.error'),
         message: t('transcription.upload.addFileFirst')
       })
-      return
     }
-    const [only] = outcome.savedIds
-    if (outcome.savedIds.length === 1 && only && !outcome.failed && view.current === 'upload') {
-      await openTranscript(only)
-    }
-  }, [dialogs, openTranscript, queue, t])
+  }, [dialogs, queue, t])
 
   // Files handed over by other areas join the queue as a group of their own, once it takes files.
   const { pendingUploads, takePendingUploads } = workspace

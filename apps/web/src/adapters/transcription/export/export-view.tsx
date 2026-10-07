@@ -6,7 +6,6 @@ import {
   Button,
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -52,6 +51,8 @@ import {
   type SubtitleFormat
 } from './files'
 import { formatTranscript, protocolText, segmentsJson, transcriptPlainText } from './format'
+import { ActiveFormatName } from './export-settings'
+import { focusTranscriptFormatting } from './formatting-focus'
 import { useSpeakerLabels } from './hooks'
 import { CopyAction } from './parts'
 import { subtitleCues, toSrt, toVtt } from './subtitles'
@@ -256,12 +257,9 @@ function ExportPreview({
   return (
     <Card>
       <CardHeader className="flex flex-row items-start justify-between gap-stack-md">
-        <div className="flex min-w-0 flex-col gap-1">
-          <CardTitle asChild>
-            <h2>{t('transcription.export.previewTitle')}</h2>
-          </CardTitle>
-          <CardDescription>{t('transcription.export.previewSubtitle')}</CardDescription>
-        </div>
+        <CardTitle asChild>
+          <h2>{t('transcription.common.preview')}</h2>
+        </CardTitle>
         {category === 'summary' && summary.status === 'ready' ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -285,7 +283,14 @@ function ExportPreview({
         ) : noSegments ? (
           <p className="m-0">{t('transcription.export.noSegments')}</p>
         ) : category === 'transcript' ? (
-          <TranscriptPreview formatted={formatted} flags={flags} />
+          <>
+            <ChoiceRow
+              label={t('transcription.export.formatting')}
+              current={<ActiveFormatName />}
+              onChange={focusTranscriptFormatting}
+            />
+            <TranscriptPreview formatted={formatted} flags={flags} />
+          </>
         ) : (
           // DS gap: CodeBlock has no height cap; long files scroll in the wrapper.
           <div className="max-h-128 overflow-y-auto">
@@ -339,23 +344,52 @@ function SummaryBody({
   if (!template) return <Spinner label={t('transcription.common.loading')} />
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-stack-sm">
-        <span className="flex min-w-0 items-center gap-stack-sm">
-          <FileTextIcon {...ICON} />
-          <span className="sr-only">{t('transcription.export.template')}: </span>
-          <span className="truncate">{template.name}</span>
-        </span>
-        <Button type="button" variant="outline" size="sm" onClick={templateActions.openLibrary}>
-          {t('transcription.export.change')}
-          <ChevronRightIcon {...ICON} />
-        </Button>
-      </div>
+      <ChoiceRow
+        label={t('transcription.export.template')}
+        current={
+          <span className="flex min-w-0 items-center gap-stack-sm">
+            <FileTextIcon {...ICON} />
+            <span className="truncate">{template.name}</span>
+          </span>
+        }
+        onChange={templateActions.openLibrary}
+      />
       <SummaryPanel
         state={summary}
         templateName={template.name}
         subtext={templateSubtext(template.structure)}
       />
     </>
+  )
+}
+
+/**
+ * kiChat's subheader row: a visible label ("Vorlage", "Formatierung") above the template or format
+ * in use, with "Ändern".
+ */
+function ChoiceRow({
+  label,
+  current,
+  onChange
+}: {
+  label: string
+  current: React.ReactNode
+  onChange: () => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const id = useId()
+  return (
+    <div role="group" aria-labelledby={id} className="flex flex-col gap-1">
+      {/* DS gap: no caption for a read-only value; `Label` gives it the label's look. */}
+      <Label id={id}>{label}</Label>
+      <div className="flex flex-wrap items-center justify-between gap-stack-sm">
+        {current}
+        <Button type="button" variant="outline" size="sm" onClick={onChange}>
+          {t('transcription.export.change')}
+          <ChevronRightIcon {...ICON} />
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -382,8 +416,9 @@ function ExportFooter({
   const { category } = useExportState()
   const id = useId()
   const formats = formatsOf(category)
+  // kiChat names the format by its id in capitals ("Als MARKDOWN herunterladen").
   const downloadLabel = t('transcription.export.downloadAsFormat', {
-    format: FORMAT_LABELS[format]
+    format: format.toUpperCase()
   })
 
   const changeFormat = (value: string): void => {

@@ -253,6 +253,19 @@ export class ResultSession {
     } while (current !== this.chain)
   }
 
+  /**
+   * The save button (T-35), after kiChat's "Datei speichern": waits for a running save, and with
+   * nothing left to send still confirms "Gespeichert", as kiChat's button saves on every click.
+   */
+  async save(): Promise<void> {
+    const before = this.state.savedCount
+    await this.flush()
+    if (this.closed || this.discarded || this.state.savedCount !== before) return
+    if (this.state.saveStatus === 'saved' && !this.dirty && !this.contentQueued) {
+      this.set({ savedCount: before + 1 })
+    }
+  }
+
   /** Whether edits have not reached the server (yet). */
   hasUnsavedChanges(): boolean {
     if (this.discarded) return false
@@ -485,24 +498,26 @@ export class ResultSession {
   }
 
   /**
-   * Waits for the AI subtitle of a transcript saved in the last minutes that has none yet; call it
-   * when the module writes subtitles. Once per session.
+   * Waits for the AI subtitle and title of a transcript saved in the last minutes; call it when the
+   * module writes subtitles. Once per session.
    */
   expectSubtitle(): void {
     const { transcript, local, keptCopy } = this.state
-    if (this.polled || this.closed || local || keptCopy || transcript.subtitle) return
+    if (this.polled || this.closed || local || keptCopy) return
     if (Date.now() - Date.parse(transcript.createdAt) >= SUBTITLE_EXPECT_MS) return
     this.polled = true
     this.pollSubtitle()
   }
 
   /**
-   * kiChat's `pollForTitleUpdate`: the AI subtitle (and title) of a new transcript arrive after
-   * saving, so the detail is fetched again up to five times, every two seconds, until it is there.
-   * What the user typed in the meantime wins.
+   * kiChat's `pollForTitleUpdate`: the AI subtitle and title of a new transcript arrive after
+   * saving, so the detail is fetched again up to five times, every two seconds, until the title
+   * differs from the one shown at the start and a subtitle is there. What the user typed in the
+   * meantime wins, and ends the wait for that part.
    */
   private pollSubtitle(): void {
-    this.set({ awaitingSubtitle: true })
+    const awaitedTitle = this.state.transcript.title
+    if (!this.state.transcript.subtitle) this.set({ awaitingSubtitle: true })
     let attempts = 0
     const tick = async (): Promise<void> => {
       attempts++
@@ -518,12 +533,11 @@ export class ResultSession {
         // A failed attempt counts; the next one may work.
       }
       if (this.closed) return
-      const done =
-        Boolean(this.state.transcript.subtitle) ||
-        this.subtitleTouched ||
-        attempts >= TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS
-      if (done) this.set({ awaitingSubtitle: false })
-      else this.pollTimer = setTimeout(() => void tick(), TRANSCRIPTION_SUBTITLE_POLL_MS)
+      const subtitled = Boolean(this.state.transcript.subtitle) || this.subtitleTouched
+      const titled = this.state.transcript.title !== awaitedTitle || this.titleTouched
+      const done = (subtitled && titled) || attempts >= TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS
+      if ((subtitled || done) && this.state.awaitingSubtitle) this.set({ awaitingSubtitle: false })
+      if (!done) this.pollTimer = setTimeout(() => void tick(), TRANSCRIPTION_SUBTITLE_POLL_MS)
     }
     this.pollTimer = setTimeout(() => void tick(), TRANSCRIPTION_SUBTITLE_POLL_MS)
   }

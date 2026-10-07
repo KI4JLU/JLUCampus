@@ -538,6 +538,37 @@ describe('saves that did not reach the server', () => {
     expect(settleTitleMerge([], merges[0]!, true)).toEqual({ records: [], outcome: 'gone' })
   })
 
+  it('titles a failed save by its time, and carries only a title the user gave', () => {
+    const title = 'Transkription vom 4.10.2026, 14:00:00'
+    const { records } = recordSaveOutcome([], failed, now, undefined, title)
+    expect(reload(records)[0]).toMatchObject({
+      title,
+      givenTitle: title,
+      transcript: { title }
+    })
+    // Unchanged, it simply goes once the save reached the server.
+    const saved = { input, transcript: server() }
+    expect(recordSaveOutcome(reload(records), saved, now)).toMatchObject({
+      records: [],
+      merges: []
+    })
+    // A subtitle the user wrote is carried, the time title is not.
+    const at = '2026-10-04T12:05:00.000Z'
+    const subtitled = updateRecord(records, records[0]!.id, (record) => ({
+      ...record,
+      updatedAt: at,
+      transcript: { ...record.transcript!, subtitle: 'Meine Zeile', updatedAt: at }
+    }))
+    expect(recordSaveOutcome(reload(subtitled), saved, now).merges).toEqual([
+      expect.objectContaining({ title: null, subtitle: 'Meine Zeile' })
+    ])
+    // A new title is the user's.
+    const renamed = renameLocalRecord(records, records[0]!.id, 'Interview Meier', new Date(1))
+    expect(recordSaveOutcome(reload(renamed), saved, now).merges).toEqual([
+      expect.objectContaining({ title: 'Interview Meier', subtitle: null })
+    ])
+  })
+
   it('keeps a copy whose text the user changed next to the server transcript', () => {
     const { records } = recordSaveOutcome([], failed, now)
     const at = '2026-10-04T12:05:00.000Z'
@@ -620,6 +651,15 @@ describe('carryLocalTitle', () => {
     expect(result.outcome).toBe('merged')
     expect(result.saved?.revision).toBe(5)
     expect(readLocalHistory(key)).toEqual([])
+  })
+
+  it('leaves the server’s title when the user gave none', async () => {
+    stubStorage()
+    writeLocalHistory(key, [copy])
+    const get = vi.fn(async () => detail('s-1', 4))
+    const patch = vi.fn(async () => detail('s-1', 5))
+    await carryLocalTitle(key, { ...merge, title: null }, { get, patch })
+    expect(patch).toHaveBeenCalledWith('s-1', { baseRevision: 4, subtitle: 'Meine Notiz' })
   })
 
   it('reports a write the storage refused and keeps the stored records', () => {

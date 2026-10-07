@@ -34,8 +34,9 @@ export function UploadDialog({
           {request?.kind === 'confirm' ? (
             <>
               <DialogClose asChild>
+                {/* kiChat's warning modal: Ablehnen / Bestätigen. */}
                 <Button type="button" variant="secondary">
-                  {t('transcription.common.cancel')}
+                  {t('transcription.common.decline')}
                 </Button>
               </DialogClose>
               <Button type="button" variant="destructive" onClick={() => onClose(true)}>

@@ -56,7 +56,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
       const confirmed = await dialogs.confirm({
         title: t('transcription.upload.deleteTranscriptGroup'),
         message: t('transcription.upload.confirmDeleteGroup', { names }),
-        confirmLabel: t('transcription.common.delete')
+        confirmLabel: t('transcription.common.confirm')
       })
       if (!confirmed) return
     }
@@ -119,11 +119,11 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
               >
                 <FilePlusIcon {...ICON} />
               </Button>
+              {/* Open during a start too: kiChat cancels the group's jobs then. */}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                disabled={locked}
                 aria-label={t('transcription.upload.deleteGroupNamed', { name: group.name })}
                 title={t('transcription.upload.deleteTranscriptGroup')}
                 onClick={() => void removeGroup()}
@@ -133,6 +133,11 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
             </>
           )}
         </div>
+        {group.saveConflict ? (
+          <Notice tone="warning" title={t('transcription.upload.saveFailed')}>
+            {t(`transcription.upload.saveConflict.${group.saveConflict}`)}
+          </Notice>
+        ) : null}
         {group.saveFailed ? (
           <Notice
             tone="error"

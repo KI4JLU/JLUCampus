@@ -24,8 +24,16 @@ import { Notice } from '../notice'
 import { useRecording } from '../recording/context'
 import { isRecordingBusy } from '../recording/state'
 import { RecordingControls, RecordingStatusCard, RecordingTabs, TakeList } from '../recording/views'
+import { liveTranscriptRows } from './lines'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
+
+/**
+ * The panel width at which the font size setting is CSS pixels, kiChat's
+ * `--live-transcript-canvas-reference`: the text keeps its ratio to the panel, inline or
+ * fullscreen.
+ */
+const CANVAS_REFERENCE_PX = 1280
 
 function useModeLabel(): (mode: TranscriptionRealtimeMode) => string {
   const { t } = useTranslation()
@@ -36,16 +44,24 @@ function useModeLabel(): (mode: TranscriptionRealtimeMode) => string {
 }
 
 /**
- * The running transcript in the chosen size and contrast (T-60, T-61), with sample text until the
- * first words arrive. It follows the newest text, and can fill the screen: in fullscreen where the
- * browser allows it, else over the page; Escape or the button restore it.
+ * The running transcript in the chosen size and contrast (T-60, T-61), as kiChat's rolling
+ * subtitle window: the current line in the middle, the two before it above, fading; sample text
+ * until the first live session starts. It can fill the screen: in fullscreen where the browser
+ * allows it, else over the page; Escape or the button restore it. The size scales with the
+ * panel's width, so filling the screen enlarges the text.
  */
 function LiveTranscriptPanel(): React.JSX.Element {
   const { t } = useTranslation()
   const { live } = useRecording()
-  const { appearance, setAppearance, text, serviceError } = live
+  const { appearance, setAppearance, text, subtitles, started, serviceError } = live
   const panelRef = useRef<HTMLDivElement>(null)
-  const logRef = useRef<HTMLDivElement>(null)
+  const rows = started
+    ? liveTranscriptRows(subtitles)
+    : {
+        older: '',
+        prev: t('transcription.recording.livePreviewSample'),
+        current: t('transcription.recording.livePreviewPlaceholder')
+      }
   const maximized = appearance.maximized
   const toggleLabel = maximized
     ? t('transcription.recording.minimizeTextView')
@@ -86,17 +102,12 @@ function LiveTranscriptPanel(): React.JSX.Element {
     return () => document.removeEventListener('keydown', onKey)
   }, [maximized, setAppearance])
 
-  // The newest words stay in view.
-  useEffect(() => {
-    const log = logRef.current
-    if (log) log.scrollTop = log.scrollHeight
-  }, [text])
-
   return (
     <Card
       ref={panelRef}
       className={cn(
-        'flex flex-col',
+        // The font size refers to the card's width (`cqw`).
+        '@container flex flex-col overflow-hidden',
         maximized && 'fixed inset-0 z-50',
         // DS gap: no inverted surface for a card; the theme's inverse tokens swap text and ground.
         appearance.inverted && 'bg-inverse-surface text-inverse-on-surface'
@@ -121,30 +132,37 @@ function LiveTranscriptPanel(): React.JSX.Element {
             <TooltipContent>{toggleLabel}</TooltipContent>
           </Tooltip>
         </div>
-        {/* DS gap: no caption text at a user-chosen size; the size is the user's setting (32–100 px). */}
-        <div
-          ref={logRef}
-          role="log"
+        {/* Streaming text is never live: the lines are a picture of the text, which screen readers
+            read in full from the region instead. */}
+        <section
           aria-label={t('transcription.recording.liveTranscript')}
-          className={cn(
-            'flex min-h-64 flex-1 flex-col overflow-y-auto',
-            text ? 'justify-start' : 'items-center justify-center text-center'
-          )}
-          style={{ fontSize: `${appearance.fontSize}px`, lineHeight: 1.3 }}
+          className="flex min-h-64 flex-1 flex-col items-center justify-center"
         >
-          {text ? (
-            <p className="m-0 whitespace-pre-wrap">{text}</p>
-          ) : (
-            <>
-              <p aria-hidden="true" className="m-0 opacity-60">
-                {t('transcription.recording.livePreviewSample')}
-              </p>
-              <p className="m-0 font-semibold">
-                {t('transcription.recording.livePreviewPlaceholder')}
-              </p>
-            </>
-          )}
-        </div>
+          <p className="sr-only">
+            {started ? text : t('transcription.recording.livePreviewPlaceholder')}
+          </p>
+          {/* DS gap: no caption text at a user-chosen size; the size is the user's setting
+              (32–100 px at a 1280 px wide panel), the line width kiChat's 42 characters. */}
+          <div
+            aria-hidden="true"
+            className="mx-auto w-full max-w-[42ch] p-4 text-center break-words"
+            style={{
+              fontSize: `calc(${appearance.fontSize} / ${CANVAS_REFERENCE_PX} * 100cqw)`,
+              lineHeight: 1.5
+            }}
+          >
+            {/* The current line sits in the middle; the ones before it stack upwards. */}
+            <div className="relative w-full">
+              <div className="absolute inset-x-0 bottom-full mb-[0.4em]">
+                <div className="absolute inset-x-0 bottom-full mb-[0.4em] opacity-25">
+                  {rows.older}
+                </div>
+                <div className="opacity-50">{rows.prev}</div>
+              </div>
+              <div className="font-semibold">{rows.current}</div>
+            </div>
+          </div>
+        </section>
         {serviceError ? (
           <Notice tone="error" inline>
             {serviceError}

@@ -13,6 +13,8 @@ import {
   TRANSCRIPTION_API,
   TRANSCRIPTION_MEDIA_URL_REFRESH_SECONDS,
   TRANSCRIPTION_POLL_MS,
+  TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS,
+  TRANSCRIPTION_SUBTITLE_POLL_MS,
   transcriptionCapabilitiesSchema,
   transcriptionConnectionTestSchema,
   transcriptionFormatListSchema,
@@ -233,6 +235,18 @@ export async function createTranscript(
   }
   createListeners.forEach((listener) => listener({ input, transcript }))
   return transcript
+}
+
+/**
+ * Tells the listeners of `onTranscriptCreate` that a refused save (`409`) is on the server after
+ * all: another page of the user saved the same jobs first, as `transcript`. The history then drops
+ * the local copy the refusal left (T-39).
+ */
+export function reportTranscriptAdopted(
+  input: TranscriptionTranscriptCreate,
+  transcript: TranscriptionTranscript
+): void {
+  createListeners.forEach((listener) => listener({ input, transcript }))
 }
 
 /** A saved transcript; segments sent as the JSON text of their array are read too (T-39). */
@@ -607,6 +621,84 @@ function storeTranscript(client: QueryClient, transcript: TranscriptionTranscrip
   void client.invalidateQueries({ queryKey: transcriptionKeys.transcripts })
 }
 
+/** The title polls under way, by transcript; a second save of the same one starts it over. */
+const titlePolls = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * Takes the server's title and subtitle of a transcript into the history and the detail cache,
+ * unless the cached detail is of another revision: edits made meanwhile are not overwritten.
+ * `false` then.
+ */
+export function storeGeneratedDetails(
+  client: QueryClient,
+  latest: TranscriptionTranscript
+): boolean {
+  const cached = client.getQueryData<TranscriptionTranscript>(
+    transcriptionKeys.transcript(latest.id)
+  )
+  if (cached && cached.revision !== latest.revision) return false
+  if (cached) {
+    client.setQueryData(transcriptionKeys.transcript(latest.id), {
+      ...cached,
+      title: latest.title,
+      subtitle: latest.subtitle,
+      subtitleSource: latest.subtitleSource
+    })
+  }
+  client.setQueryData<TranscriptionTranscriptSummary[]>(transcriptionKeys.transcripts, (list) =>
+    list?.map((entry) =>
+      entry.id === latest.id ? { ...entry, title: latest.title, subtitle: latest.subtitle } : entry
+    )
+  )
+  return true
+}
+
+/**
+ * kiChat's `pollForTitleUpdate`, after every save of a new transcript: the server's chat model
+ * writes the title (for a made-up one) and the subtitle afterwards (T-23), so the transcript is
+ * fetched again up to `TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS` times, `TRANSCRIPTION_SUBTITLE_POLL_MS`
+ * apart, until its title differs from the saved one and it has a subtitle. Every answer goes into
+ * the history (`storeGeneratedDetails`), so it shows the new title without the transcript being
+ * opened; `onTitle` hears of a new title, e.g. for the upload view's link.
+ */
+export function pollGeneratedTitle(
+  client: QueryClient,
+  saved: TranscriptionTranscript,
+  options: {
+    onTitle?: (latest: TranscriptionTranscript) => void
+    get?: (id: string) => Promise<TranscriptionTranscript>
+  } = {}
+): void {
+  const get = options.get ?? ((id: string) => getTranscript(id))
+  const running = titlePolls.get(saved.id)
+  if (running) clearTimeout(running)
+  let attempts = 0
+  let title = saved.title
+  const tick = async (): Promise<void> => {
+    attempts++
+    let done = attempts >= TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS
+    try {
+      const latest = await get(saved.id)
+      if (storeGeneratedDetails(client, latest) && latest.title !== title) {
+        title = latest.title
+        options.onTitle?.(latest)
+      }
+      if (latest.title !== saved.title && latest.subtitle) done = true
+    } catch (error) {
+      // Deleted meanwhile: nothing more to wait for. Other failures count as an attempt.
+      if (error instanceof ApiRequestError && error.status === 404) done = true
+    }
+    if (titlePolls.get(saved.id) !== timer) return
+    if (done) titlePolls.delete(saved.id)
+    else {
+      timer = setTimeout(() => void tick(), TRANSCRIPTION_SUBTITLE_POLL_MS)
+      titlePolls.set(saved.id, timer)
+    }
+  }
+  let timer = setTimeout(() => void tick(), TRANSCRIPTION_SUBTITLE_POLL_MS)
+  titlePolls.set(saved.id, timer)
+}
+
 export function useCreateJob(): UseMutationResult<
   TranscriptionJobCreated,
   Error,
@@ -671,6 +763,7 @@ export function useCreateTranscript(): UseMutationResult<
     mutationFn: createTranscript,
     onSuccess: (transcript) => {
       storeTranscript(client, transcript)
+      pollGeneratedTitle(client, transcript)
       // Saved jobs leave the active list.
       void client.invalidateQueries({ queryKey: transcriptionKeys.jobs })
     }

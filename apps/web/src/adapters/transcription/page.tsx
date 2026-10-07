@@ -1,4 +1,4 @@
-import { PlusIcon } from 'lucide-react'
+import { ArrowLeftIcon, PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, Card, CardContent, Container } from '@ki4jlu/design-system'
 import { ComponentIcon } from '@/components/component-icon'
@@ -56,12 +56,21 @@ function TranscriptionLayout(): React.JSX.Element {
             </>
           }
           actions={
-            view === 'choice' ? null : (
-              <Button type="button" variant="outline" onClick={() => void newTranscription()}>
-                <PlusIcon aria-hidden="true" className="size-4" />
-                {t('transcription.common.startNew')}
-              </Button>
-            )
+            // kiChat's button is always there; at the choice it clears the history search.
+            <Button type="button" variant="outline" onClick={() => void newTranscription()}>
+              {/* As kiChat: on the way to a transcript the button leads back to the choice. */}
+              {view === 'result' || view === 'choice' ? (
+                <>
+                  <PlusIcon aria-hidden="true" className="size-4" />
+                  {t('transcription.common.startNew')}
+                </>
+              ) : (
+                <>
+                  <ArrowLeftIcon aria-hidden="true" className="size-4" />
+                  {t('transcription.common.back')}
+                </>
+              )}
+            </Button>
           }
         />
         {capabilitiesQuery.isError ? (

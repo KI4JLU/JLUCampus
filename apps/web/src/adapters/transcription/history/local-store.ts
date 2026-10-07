@@ -45,6 +45,12 @@ export interface LocalHistoryRecord extends HistoryEntry {
    * transcript's source files tell.
    */
   pendingJobIds?: string[]
+  /**
+   * The title the app gave a local copy of a failed save (kiChat's `Transkription vom …`); another
+   * one is the user's, which a later successful save carries to the server. Missing on records
+   * stored before, when the title of that save stands in.
+   */
+  givenTitle?: string
 }
 
 /** kiChat's key; Campus adds `:<module>:<user>`. */
@@ -107,7 +113,8 @@ const recordSchema = z.object({
   updatedAt: stringOrNull,
   local: z.boolean().catch(false),
   transcript: storedTranscriptSchema.nullable().catch(null),
-  pendingJobIds: z.array(z.string()).optional().catch(undefined)
+  pendingJobIds: z.array(z.string()).optional().catch(undefined),
+  givenTitle: z.string().optional().catch(undefined)
 })
 
 /** The records in a stored value; broken ones are dropped, and local ones without a transcript. */
@@ -297,7 +304,8 @@ function openedDocument(
 export interface TitleMerge {
   localId: string
   transcriptId: string
-  title: string
+  /** Only one the user gave; `null` leaves the server's. */
+  title: string | null
   /** Only one the user wrote; `null` leaves the server's. */
   subtitle: string | null
   /** The copy's `editStamp` when the merge was planned: a later edit keeps the copy. */
@@ -328,6 +336,8 @@ export interface SaveReconciliation {
  * carried to the server first (`merges`), else it stays as a copy of its own (`kept`). A copy open
  * with edits the browser did not take yet (`unsaved`) is never replaced either: the failed save of
  * a larger group leaves it next to the new copy, a successful save keeps it as a copy of its own.
+ * A new copy is titled `localTitle` (kiChat's `Transkription vom …`), else like the save; only a
+ * title the user gave it later is carried.
  */
 export function recordSaveOutcome(
   records: readonly LocalHistoryRecord[],
@@ -335,7 +345,8 @@ export function recordSaveOutcome(
     | { input: TranscriptionTranscriptCreate; transcript: TranscriptionTranscript }
     | { input: TranscriptionTranscriptCreate; error: unknown },
   now: Date,
-  unsaved: (id: string) => boolean = hasUnsavedOpenCopy
+  unsaved: (id: string) => boolean = hasUnsavedOpenCopy,
+  localTitle?: string
 ): SaveReconciliation {
   const id = localIdFor(outcome.input.idempotencyKey)
   const jobs = new Set(outcome.input.jobIds)
@@ -349,7 +360,12 @@ export function recordSaveOutcome(
       result.records = [...records]
       return result
     }
-    const created = localRecord(localTranscriptFromCreate(outcome.input, now), [...jobs])
+    const copy = localTranscriptFromCreate(outcome.input, now)
+    if (localTitle) copy.title = localTitle
+    const created: LocalHistoryRecord = {
+      ...localRecord(copy, [...jobs]),
+      givenTitle: copy.title
+    }
     result.records.push(created)
     for (const record of records) {
       const held = pendingJobsOf(record)
@@ -387,14 +403,17 @@ export function recordSaveOutcome(
     sent ??= openedDocument(localTranscriptFromCreate(outcome.input, now))
     if (remaining.length === 0 && sameContent(openedDocument(copy), sent)) {
       const subtitle = copy.subtitle && copy.subtitle !== saved.subtitle ? copy.subtitle : null
-      if (copy.title === saved.title && !subtitle) {
+      // Only a title the user gave goes to the server, not the one the failed save got.
+      const given = record.givenTitle ?? saved.title
+      const title = copy.title !== given && copy.title !== saved.title ? copy.title : null
+      if (!title && !subtitle) {
         result.replaced.push({ localId: record.id, transcriptId: saved.id })
         continue
       }
       result.merges.push({
         localId: record.id,
         transcriptId: saved.id,
-        title: copy.title,
+        title,
         subtitle,
         stamp: editStamp(record)
       })

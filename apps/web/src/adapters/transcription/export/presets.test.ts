@@ -73,8 +73,10 @@ describe('presets', () => {
     expect(exportStore.get().choice).toEqual({ kind: 'preset', id: 'dialog_standard' })
   })
 
-  it('keeps visible speakers per transcript', () => {
+  it('keeps visible speakers per transcript and makes the format custom', () => {
+    exportActions.choosePreset('lesefassung')
     exportActions.toggleSpeaker('t1', 'Anna')
+    expect(exportStore.get().choice).toEqual({ kind: 'custom' })
     expect(exportStore.get().visibleSpeakers).toEqual({ t1: { Anna: false } })
     exportActions.toggleSpeaker('t1', 'Anna')
     expect(exportStore.get().visibleSpeakers.t1).toEqual({ Anna: true })

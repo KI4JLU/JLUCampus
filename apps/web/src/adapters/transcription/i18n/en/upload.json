@@ -12,6 +12,7 @@
   "analysisFailed": "Analysis failed.",
   "analysisJobStartFailed": "Could not start the analysis job: ",
   "analyzingAudio": "Analysing audio...",
+  "analyzingShort": "Analysing...",
   "analyzingSpeakers": "Analysing speakers...",
   "auto": "Auto",
   "confirmDeleteGroup": "Really delete the transcript with {{names}}? Running transcription jobs will be cancelled and the uploaded files removed.",
@@ -66,6 +67,10 @@
   "s3UploadFailed": "File upload to S3 failed. Status: {{status}}",
   "s3UploadNetworkError": "File upload to S3 failed (network error).",
   "sampleN": "Sample {{n}}",
+  "saveConflict": {
+    "savedElsewhere": "Files of this group were already saved in another transcript, e.g. from another window. You will find it in the history.",
+    "notCompleted": "Not every file of this group is fully transcribed on the server, e.g. because another window is processing it again. Reload the page to see the current state."
+  },
   "saveFailed": "The transcript could not be saved.",
   "selectFromComputer": "Choose from your computer",
   "settingsDescription": "Configure the default provider and model used for transcription.",
@@ -99,6 +104,7 @@
     "stopSample": "Stop {{sample}}",
     "editSample": "Edit {{sample}}",
     "addSampleTo": "Add a snippet to {{voice}}",
+    "samplesLimit": "A voice can have at most {{max}} samples.",
     "sampleEditor": "{{sample}} of {{voice}}",
     "sampleLabel": "Label",
     "sampleStart": "Start",

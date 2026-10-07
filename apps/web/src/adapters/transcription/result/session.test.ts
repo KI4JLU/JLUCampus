@@ -139,6 +139,34 @@ describe('ResultSession saving', () => {
     expect(server.stored.segments.map((segment) => segment.speaker)).toEqual(['Dana', 'Emil'])
   })
 
+  it('confirms the save button without anything to send, as kiChat saves on every click', async () => {
+    const server = fakeServer(transcript())
+    const session = new ResultSession(server.stored, server.deps)
+    await session.save()
+    expect(server.patches).toHaveLength(0)
+    expect(session.getState()).toMatchObject({ saveStatus: 'saved', savedCount: 1 })
+    await session.save()
+    expect(session.getState().savedCount).toBe(2)
+  })
+
+  it('counts a save the button waited for once', async () => {
+    const server = fakeServer(transcript())
+    const session = new ResultSession(server.stored, server.deps)
+    rename(session, 1, 'Cem')
+    await session.save()
+    expect(server.patches).toHaveLength(1)
+    expect(session.getState().savedCount).toBe(1)
+  })
+
+  it('does not confirm the save button while a save failed', async () => {
+    const server = fakeServer(transcript())
+    const session = new ResultSession(server.stored, server.deps)
+    server.failWith(new TypeError('Failed to fetch'))
+    rename(session, 1, 'Cem')
+    await session.save()
+    expect(session.getState()).toMatchObject({ saveStatus: 'failed', savedCount: 0 })
+  })
+
   it('reports a failed save and retries it', async () => {
     const server = fakeServer(transcript())
     const session = new ResultSession(server.stored, server.deps)
@@ -290,6 +318,48 @@ describe('ResultSession AI subtitle polling', () => {
     other.stored = { ...other.stored, subtitle: 'KI-Zeile', subtitleSource: 'ai', revision: 2 }
     await vi.advanceTimersByTimeAsync(2000)
     expect(typed.getState().transcript.subtitle).toBeNull()
+  })
+
+  it('waits for the AI title too, also when the subtitle is there already', async () => {
+    const server = fakeServer(transcript({ subtitle: 'Meine Zeile', subtitleSource: 'manual' }))
+    const session = new ResultSession(server.stored, server.deps)
+    session.expectSubtitle()
+    // Nothing to show as busy: the subtitle is there.
+    expect(session.getState().awaitingSubtitle).toBe(false)
+    await vi.advanceTimersByTimeAsync(4000)
+    server.stored = { ...server.stored, title: 'Gießener Interview' }
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(session.getState().transcript.title).toBe('Gießener Interview')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(server.deps.get).toHaveBeenCalledTimes(3)
+
+    // The subtitle ends the busy state at once; the title is still awaited after it.
+    const other = fakeServer(transcript())
+    const later = new ResultSession(other.stored, other.deps)
+    later.expectSubtitle()
+    other.stored = { ...other.stored, subtitle: 'KI-Zeile', subtitleSource: 'ai' }
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(later.getState().awaitingSubtitle).toBe(false)
+    other.stored = { ...other.stored, title: 'KI-Titel' }
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(later.getState().transcript).toMatchObject({ title: 'KI-Titel', subtitle: 'KI-Zeile' })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(other.deps.get).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops waiting for the title once the user renamed the transcript', async () => {
+    const server = fakeServer(transcript())
+    const session = new ResultSession(server.stored, server.deps)
+    session.expectSubtitle()
+    await session.setTitle('Mein Titel')
+    server.stored = { ...server.stored, subtitle: 'KI-Zeile', subtitleSource: 'ai' }
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(server.deps.get).toHaveBeenCalledTimes(1)
+    expect(session.getState().transcript).toMatchObject({
+      title: 'Mein Titel',
+      subtitle: 'KI-Zeile'
+    })
   })
 })
 

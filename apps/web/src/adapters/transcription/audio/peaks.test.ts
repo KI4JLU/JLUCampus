@@ -3,20 +3,22 @@ import {
   TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES,
   type TranscriptionJobPeaks
 } from '@justcampus/shared'
-import { getJobPeaks } from '../api'
+import { getJobAudioUrl, getJobPeaks } from '../api'
 import {
   blobWaveform,
   computePeaks,
   formatMegabytes,
   formatTime,
+  globalPeaks,
   jobWaveform,
   overviewPeaks,
   placeholderPeaks,
   serverTimePeaks,
+  sourceWaveform,
   urlWaveform
 } from './peaks'
 
-vi.mock('../api', () => ({ getJobPeaks: vi.fn() }))
+vi.mock('../api', () => ({ getJobPeaks: vi.fn(), getJobAudioUrl: vi.fn() }))
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -106,5 +108,65 @@ describe('the server waveform of large files (T-12)', () => {
     expect(waveform?.peaks).toHaveLength(200)
     expect(await jobWaveform('job-large')).toEqual(waveform)
     expect(fetchPeaks).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('globalPeaks', () => {
+  const sources = [
+    { startTime: 0, endTime: 10 },
+    { startTime: 10, endTime: 20 }
+  ]
+
+  it("places each file's peaks on its range of the global time line", () => {
+    expect(
+      globalPeaks(
+        sources,
+        [
+          [0.5, 0.25],
+          [1, 0.5]
+        ],
+        20,
+        4
+      )
+    ).toEqual([0.5, 0.25, 1, 0.5])
+  })
+
+  it('scales the loudest to 1 and leaves files without peaks silent', () => {
+    expect(globalPeaks(sources, [[0.25, 0.5], null], 20, 4)).toEqual([0.5, 1, 0, 0])
+  })
+
+  it('stretches fewer peaks than buckets', () => {
+    expect(globalPeaks([{ startTime: 0, endTime: 10 }], [[1, 0.5]], 10, 4)).toEqual([
+      1, 1, 0.5, 0.5
+    ])
+  })
+
+  it('is null while no file has peaks or the time line is empty', () => {
+    expect(globalPeaks(sources, [null, null], 20, 4)).toBeNull()
+    expect(globalPeaks(sources, [[1], [1]], 0, 4)).toBeNull()
+    expect(globalPeaks([], [], 20, 4)).toBeNull()
+  })
+})
+
+describe('sourceWaveform', () => {
+  it("takes the analysis's waveform for a file above the decode limit, without fetching the audio", async () => {
+    vi.mocked(getJobAudioUrl).mockClear()
+    vi.mocked(getJobPeaks).mockResolvedValueOnce({
+      peaks: btoa(String.fromCharCode(0, 255)),
+      perSecond: 20,
+      duration: 2
+    } as TranscriptionJobPeaks)
+    const result = await sourceWaveform('big-job', TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1)
+    expect(getJobAudioUrl).not.toHaveBeenCalled()
+    expect(result?.duration).toBe(2)
+    expect(Math.max(...result!.peaks)).toBe(1)
+  })
+
+  it('asks again for a waveform it did not find', async () => {
+    vi.mocked(getJobAudioUrl).mockRejectedValue(new Error('offline'))
+    vi.mocked(getJobPeaks).mockResolvedValue(null)
+    expect(await sourceWaveform('missing-job', 10)).toBeNull()
+    expect(await sourceWaveform('missing-job', 10)).toBeNull()
+    expect(getJobAudioUrl).toHaveBeenCalledTimes(2)
   })
 })

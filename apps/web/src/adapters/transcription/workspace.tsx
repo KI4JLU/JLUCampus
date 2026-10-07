@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   TranscriptionCapabilities,
   TranscriptionJobSettings,
@@ -132,7 +132,11 @@ export function TranscriptionWorkspaceProvider({
 
   const openTranscript = useCallback(
     async (id: string): Promise<void> => {
-      if (id === transcriptId && view === 'result') return
+      // kiChat's click on the open entry: back to the preview; the session keeps its edits.
+      if (id === transcriptId && view === 'result') {
+        setResultTab('preview')
+        return
+      }
       if (!(await mayLeave())) return
       setCurrentDocument(null)
       setTranscriptId(id)
@@ -150,6 +154,11 @@ export function TranscriptionWorkspaceProvider({
     setHistorySearch('')
     setView('choice')
   }, [mayLeave, setHistorySearch, setResultTab, setTranscriptId, setView])
+
+  // kiChat empties the history search whenever the entry choice shows (T-01).
+  useEffect(() => {
+    if (view === 'choice') setHistorySearch('')
+  }, [view, setHistorySearch])
 
   const enqueueUpload = useCallback(
     (files: File[], title: string | null = null) => {

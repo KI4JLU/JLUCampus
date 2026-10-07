@@ -121,6 +121,13 @@ export interface QueueFile {
   result: TranscriptionResult | null
 }
 
+/**
+ * Why a save was refused for good (`409`), which another try cannot change: jobs of the group are
+ * in another transcript already (another page of the user saved them first), or not every job is
+ * completed on the server any more.
+ */
+export type SaveConflict = 'savedElsewhere' | 'notCompleted'
+
 /** The transcript a group was saved as (kiChat's `processedTranscripts`). */
 export interface SavedTranscript {
   id: string
@@ -136,6 +143,8 @@ export interface QueueGroup {
   idempotencyKey: string
   saved: SavedTranscript | null
   saveFailed: boolean
+  /** The save was refused for a reason another try does not change; no retry is offered. */
+  saveConflict: SaveConflict | null
 }
 
 export interface QueueState {
@@ -161,7 +170,8 @@ export function newGroup(index: number, name: string = defaultGroupName(index)):
     files: [],
     idempotencyKey: crypto.randomUUID(),
     saved: null,
-    saveFailed: false
+    saveFailed: false,
+    saveConflict: null
   }
 }
 
@@ -377,9 +387,18 @@ export function totalBytes(groups: readonly QueueGroup[]): number {
   return allFiles(groups).reduce((sum, file) => sum + file.size, 0)
 }
 
-/** Whether a group may change: not while a start runs, not once saved (T-07, T-11). */
+/**
+ * Whether a group's files may not be moved or added: while a start runs, and once saved (T-07,
+ * T-11). Removing files and the group stays open until it is saved, during a start too (kiChat
+ * cancels their jobs then).
+ */
 export function groupLocked(state: QueueState, group: QueueGroup): boolean {
   return state.processing || group.saved !== null
+}
+
+/** Whether a file's job is being created: the server may list it before the row knows its id. */
+export function creatingJob(file: QueueFile): boolean {
+  return file.phase === 'uploading' && file.jobId === null
 }
 
 /** Whether a file still waits for its upload or analysis. */

@@ -130,7 +130,10 @@ export interface TranscriptBlock {
 
 export interface FormattedTranscript {
   blocks: TranscriptBlock[]
-  /** The shown speakers' names in order of appearance. */
+  /**
+   * The running record's participant list in order of appearance: the shown speakers' names and
+   * an `Unbekannt {n}` per segment without a speaker, as kiChat lists them.
+   */
   participants: string[]
   /** Every speaker is hidden (and there were segments). */
   allHidden: boolean
@@ -159,12 +162,7 @@ export function formatTranscript(
   const anonymous = flags.anonymize ? anonymousNames(shown, labels) : null
   const nameOf = (key: string, segment: TranscriptionSegment): string =>
     anonymous?.get(key) ?? speakerLabel(segment.speaker, labels)
-  const participants = speakersInOrder(shown, labels.unknown).map((key) =>
-    nameOf(
-      key,
-      shown.find((segment) => speakerKey(segment, labels.unknown) === key)!
-    )
-  )
+  const participants = participantNames(shown, anonymous, labels)
 
   const blocks: TranscriptBlock[] = []
   if (flags.order === 'speaker') {
@@ -215,6 +213,25 @@ export function formatTranscript(
   }
 
   return { blocks, participants, allHidden: segments.length > 0 && shown.length === 0 }
+}
+
+/**
+ * The running record's participants as kiChat's `exportToVerlauf` lists them: each segment without
+ * a speaker adds its own `Unbekannt {n}`, counted per such segment and never anonymised; named
+ * speakers appear once each, anonymised when that is on.
+ */
+function participantNames(
+  shown: readonly TranscriptionSegment[],
+  anonymous: Map<string, string> | null,
+  labels: SpeakerLabels
+): string[] {
+  const names = new Set<string>()
+  let unknownCount = 1
+  for (const segment of shown) {
+    if (segment.speaker === null) names.add(labels.unknownN(unknownCount++))
+    else names.add(anonymous?.get(segment.speaker) ?? speakerLabel(segment.speaker, labels))
+  }
+  return [...names]
 }
 
 /** The texts of the running record's head, in the current language. */
@@ -272,7 +289,8 @@ export function protocolText(
 
 /**
  * The formatted transcript as the preview reads as plain text, which kiChat copies and saves as
- * `.txt`: per block the name and the time on lines of their own when shown, then the text.
+ * `.txt` (the `innerText` of its block `<div>`s): per block the name and the time on lines of
+ * their own when shown, then the text; blocks follow each other without a blank line.
  */
 export function transcriptPlainText(
   formatted: FormattedTranscript,
@@ -287,7 +305,7 @@ export function transcriptPlainText(
       if (flags.timestamps && flags.order !== 'speaker') lines.push(`[${formatClock(block.start)}]`)
       return [...lines, ...block.lines.map((line) => line.trim())].join('\n')
     })
-    .join('\n\n')
+    .join('\n')
 }
 
 /** The decoder fields under the names Whisper's `verbose_json` and kiChat's export give them. */

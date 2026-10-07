@@ -35,9 +35,15 @@ export interface VoiceDraft {
   name: string
   /** `null`: the colour of its place in the list. */
   colorId: TranscriptionSpeakerColorId | null
-  /** First and last moment the analysis heard the voice; `null` for added voices. */
+  /** First and last moment the analysis heard the voice; `null` for added voices. Order only. */
   start: number | null
   end: number | null
+  /**
+   * The window dispatch sends when every sample was deleted: the analysis' first sample, as kiChat
+   * sends the manifest's `start`/`end`; the whole file for the automatic voice, which has no
+   * samples; `null` for added voices.
+   */
+  fallback: TimeWindow | null
   samples: SampleDraft[]
 }
 
@@ -109,7 +115,8 @@ export function voicesFromSpeakers(
   const manual = (previous ?? []).filter((voice) => voice.manual && !found.has(voice.id))
   const analysed = sorted.map((speaker, index): VoiceDraft => {
     const kept = previous?.find((voice) => voice.id === speaker.id)
-    if (kept) return { ...kept, start: speaker.start, end: speaker.end }
+    const fallback = fallbackWindow(speaker)
+    if (kept) return { ...kept, start: speaker.start, end: speaker.end, fallback }
     return {
       id: speaker.id,
       manual: false,
@@ -119,6 +126,7 @@ export function voicesFromSpeakers(
       colorId: null,
       start: speaker.start,
       end: speaker.end,
+      fallback,
       samples: speaker.samples.map((sample, sampleIndex) => ({
         key: `${speaker.id}:${sample.id}`,
         label: labels.sampleLabel(sampleIndex + 1),
@@ -128,6 +136,12 @@ export function voicesFromSpeakers(
     }
   })
   return [...analysed, ...manual]
+}
+
+/** The analysis' first sample of a voice, else the whole range it was heard in. */
+function fallbackWindow(speaker: TranscriptionSpeaker): TimeWindow {
+  const first = speaker.samples[0]
+  return first ? { start: first.start, end: first.end } : { start: speaker.start, end: speaker.end }
 }
 
 /** A new voice added by hand, without samples yet (T-20); the id is unique in the file. */
@@ -147,6 +161,7 @@ export function manualVoice(
     colorId: null,
     start: null,
     end: null,
+    fallback: null,
     samples: []
   }
 }
@@ -300,8 +315,10 @@ export interface VoiceDispatch {
 /**
  * The names and windows sent with dispatch. A voice without a name goes by its automatic label, as
  * kiChat sends `mapping || label || id`. Every sample is a window the server matches the
- * diarised speakers against; an analysed voice whose samples were all deleted sends the range the
- * analysis heard it in, as kiChat sends `speaker.start`/`end`. Invalid windows are left out.
+ * diarised speakers against; an analysed voice whose samples were all deleted sends its first
+ * analysed sample, as kiChat sends the manifest's `speaker.start`/`end` (that sample, at most five
+ * seconds), never the whole stretch it was heard in, which would cover the other voices' turns
+ * too. Invalid windows are left out.
  */
 export function voiceDispatch(
   voices: readonly VoiceDraft[],
@@ -315,11 +332,7 @@ export function voiceDispatch(
     result.mapping[voice.id] = name
     result.colors[voice.id] = voiceColor(voice, index)
     const windows: TimeWindow[] =
-      voice.samples.length > 0
-        ? voice.samples
-        : voice.start !== null && voice.end !== null
-          ? [{ start: voice.start, end: voice.end }]
-          : []
+      voice.samples.length > 0 ? voice.samples : voice.fallback ? [voice.fallback] : []
     for (const window of windows) {
       const start = round2(Math.max(0, window.start))
       const end = round2(Math.min(limitOf(duration), window.end))

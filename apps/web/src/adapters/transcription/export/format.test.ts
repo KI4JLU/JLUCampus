@@ -189,6 +189,29 @@ describe('formatTranscript', () => {
     expect(JSON.stringify(segments)).toBe(before)
   })
 
+  it('lists each speakerless segment as its own unknown participant, not anonymised', () => {
+    const mixed = [
+      segment({ id: 1, speaker: 'Anna' }),
+      segment({ id: 2, speaker: 'Ben' }),
+      segment({ id: 3, speaker: null }),
+      segment({ id: 4, speaker: 'Cleo' }),
+      segment({ id: 5, speaker: null })
+    ]
+    const plain = formatTranscript(mixed, dialog, {}, {}, labels)
+    expect(plain.participants).toEqual(['Anna', 'Ben', 'Unbekannt 1', 'Cleo', 'Unbekannt 2'])
+    expect(plain.blocks.map((block) => block.name)).toContain('Unbekannt')
+    const anonymised = formatTranscript(mixed, { ...dialog, anonymize: true }, {}, {}, labels)
+    // kiChat: 'Speaker 1, Speaker 2, Unbekannt 1, Speaker 4'; the block still says 'Speaker 3'.
+    expect(anonymised.participants).toEqual([
+      'Speaker 1',
+      'Speaker 2',
+      'Unbekannt 1',
+      'Speaker 4',
+      'Unbekannt 2'
+    ])
+    expect(anonymised.blocks[2]!.name).toBe('Speaker 3')
+  })
+
   it('applies redactions', () => {
     const formatted = formatTranscript(
       [segment({ text: 'Ich heiße Max.', redactions: [{ start: 10, end: 13 }] })],
@@ -259,6 +282,23 @@ ${TEXT}
     expect(transcriptPlainText(formatted, dialog, '')).toBe(`Test speaker\n[00:00:00]\n${TEXT}`)
     const reading = TRANSCRIPT_PRESETS.lesefassung
     expect(transcriptPlainText(formatted, reading, '')).toBe(`Test speaker\n${TEXT}`)
+  })
+
+  it('puts the blocks on consecutive lines, as the preview innerText reads', () => {
+    const formatted = formatTranscript(
+      [
+        segment({ start: 0, text: 'Guten Tag.' }),
+        segment({ id: 2, start: 8, speaker: 'Ben', text: 'Passt.' })
+      ],
+      dialog,
+      {},
+      {},
+      labels
+    )
+    // `kc-files/transcript-dialog_standard.txt`: no blank line, no trailing newline.
+    expect(transcriptPlainText(formatted, dialog, '')).toBe(
+      'Anna\n[00:00:00]\nGuten Tag.\nBen\n[00:00:08]\nPasst.'
+    )
   })
 
   it('formats clock times', () => {

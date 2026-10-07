@@ -100,6 +100,7 @@
   "newHeading": "New heading",
   "newTemplate": "New template",
   "newTemplateName": "My new template",
+  "newTemplateSectionInstruction": "Summarize the conversation in 3-4 sentences",
   "newText": "New text",
   "noAiContentYet": "No AI content generated yet. Click “Test preview” above.",
   "noSegments": "The transcript contains no text yet.",
@@ -143,6 +144,7 @@
   "saveFailed": "Error while saving: ",
   "saveTemplate": "Save template",
   "searchTemplate": "Search templates",
+  "searchTemplatePlaceholder": "Search...",
   "section": "Section",
   "sectionConnectionError": "Connection error while generating.",
   "sectionNamePlaceholder": "Section name (e.g. Summary)",
@@ -150,35 +152,35 @@
   "shortcuts": {
     "summary": {
       "heading": "Summary",
-      "instruction": "Summarize the conversation in 3-4 sentences"
+      "instruction": "Summarize the conversation in 3–4 sentences"
     },
     "todos": {
-      "heading": "To-dos",
-      "instruction": "Create a to-do list with tasks, responsibilities and deadlines."
+      "heading": "To-Dos",
+      "instruction": "Create a to-do list with tasks, responsibilities and deadlines"
     },
     "decisions": {
       "heading": "Decisions",
-      "instruction": "List all decisions made as bullet points."
+      "instruction": "List all decisions and resolutions made as bullet points"
     },
     "results": {
       "heading": "Results",
-      "instruction": "Summarize the most important results of the conversation."
+      "instruction": "Summarize the most important results"
     },
     "keyPoints": {
       "heading": "Key points",
-      "instruction": "Summarize the most important key points as bullet points."
+      "instruction": "Summarize the main topics and most important key points"
     },
     "quotes": {
       "heading": "Quotes",
-      "instruction": "Extract particularly concise and representative quotes from the conversation."
+      "instruction": "Extract particularly concise and representative quotes"
     },
     "topics": {
       "heading": "Topics",
-      "instruction": "Structure the conversation by the topics discussed."
+      "instruction": "Structure the conversation by the main topics discussed"
     },
     "free": {
-      "heading": "Section",
-      "instruction": ""
+      "heading": "Free AI section",
+      "instruction": "Enter an instruction for the AI"
     }
   },
   "showSpeakers": "Show speakers",

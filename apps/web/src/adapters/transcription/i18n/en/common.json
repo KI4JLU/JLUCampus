@@ -10,6 +10,7 @@
   "close": "Close",
   "confirm": "Confirm",
   "copy": "Copy",
+  "decline": "Decline",
   "defaultTitle": "Transcription from {{timestamp}}",
   "delete": "Delete",
   "done": "Done",

@@ -32,7 +32,7 @@ export interface TitleMergeDeps {
 const running = new Set<string>()
 
 /**
- * Carries the title of a renamed local copy to the server transcript that now holds its content,
+ * Carries the title (and subtitle) the user gave a local copy to the server transcript that now holds its content,
  * then settles the copy: gone when the title arrived and the copy did not change meanwhile, else
  * kept as a copy of its own. `saved` is the server's transcript after the change, if it took it.
  */
@@ -47,7 +47,7 @@ export async function carryLocalTitle(
     const latest = await deps.get(merge.transcriptId)
     saved = await deps.patch(merge.transcriptId, {
       baseRevision: latest.revision,
-      title: merge.title,
+      ...(merge.title ? { title: merge.title } : {}),
       ...(merge.subtitle ? { subtitle: merge.subtitle } : {})
     })
   } catch {
@@ -78,7 +78,7 @@ export function useLocalSaveFallback(
   key: string | null,
   onReplaced: (localId: string, transcriptId: string) => void
 ): void {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const client = useQueryClient()
 
   const showSaved = (saved: TranscriptionTranscript): void => {
@@ -108,8 +108,13 @@ export function useLocalSaveFallback(
   const handle = useEffectEvent((key: string, outcome: TranscriptCreateOutcome): void => {
     let result: SaveReconciliation | null = null
     let adds = false
+    const now = new Date()
+    // kiChat titles a transcript kept after a failed save by the time (`TranscriptDefaultTitle`).
+    const localTitle = t('transcription.common.defaultTitle', {
+      timestamp: now.toLocaleString(i18n.language)
+    })
     const written = changeLocalHistory(key, (records) => {
-      const next = recordSaveOutcome(records, outcome, new Date())
+      const next = recordSaveOutcome(records, outcome, now, undefined, localTitle)
       result = next
       adds = next.records.some((record) => !records.includes(record))
       return next.records

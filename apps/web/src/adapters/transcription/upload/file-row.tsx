@@ -36,7 +36,10 @@ export interface FileRowProps {
   position: FilePosition
   /** The whole queue, for the move menu. */
   groups: readonly QueueGroup[]
-  /** No moving or removing: a start runs or the group is saved (T-07, T-11). */
+  /**
+   * No moving: a start runs or the group is saved (T-07, T-11). Removing stays possible until the
+   * group is saved, during a start too (kiChat cancels the job then).
+   */
   locked: boolean
   processing: boolean
   onOpenMapping: (fileId: string) => void
@@ -75,7 +78,7 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
       const confirmed = await dialogs.confirm({
         title: t('transcription.upload.deleteJobTitle'),
         message: t('transcription.upload.confirmDeleteJob', { name: file.name }),
-        confirmLabel: t('transcription.common.delete')
+        confirmLabel: t('transcription.common.confirm')
       })
       if (!confirmed) return
     }
@@ -137,7 +140,9 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
               type="button"
               variant={file.voicesSaved ? 'secondary' : 'outline'}
               size="sm"
-              disabled={processing}
+              // While a start runs, files not dispatched yet can still be named (kiChat reads the
+              // names only when it dispatches a file); a failed one is dispatched again.
+              disabled={file.phase === 'transcribing' || file.phase === 'completed'}
               aria-label={[
                 t('transcription.upload.adjustSpeakersNamed', { name: file.name }),
                 unnamed > 0
@@ -167,20 +172,18 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
               <RotateCcwIcon {...ICON} />
             </Button>
           ) : null}
-          {locked ? null : (
-            <>
-              <MoveMenu file={file} position={position} groups={groups} />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={t('transcription.upload.removeFileNamed', { name: file.name })}
-                title={t('transcription.upload.removeFile')}
-                onClick={() => void remove()}
-              >
-                <XIcon {...ICON} />
-              </Button>
-            </>
+          {locked ? null : <MoveMenu file={file} position={position} groups={groups} />}
+          {saved ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={t('transcription.upload.removeFileNamed', { name: file.name })}
+              title={t('transcription.upload.removeFile')}
+              onClick={() => void remove()}
+            >
+              <XIcon {...ICON} />
+            </Button>
           )}
         </div>
       </div>

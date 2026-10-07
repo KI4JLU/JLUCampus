@@ -28,7 +28,9 @@ import { transcriptCreate, type FileResult } from './merge'
 import { creepStep, CREEP_MS, PROGRESS, transcriptionDisplay, uploadProgress } from './progress'
 import {
   addToGroup,
+  allFiles,
   analysisPending,
+  creatingJob,
   defaultGroupName,
   dropTargetIndex,
   EMPTY_QUEUE,
@@ -48,7 +50,8 @@ import {
   type FilePosition,
   type QueueFile,
   type QueueGroup,
-  type QueueState
+  type QueueState,
+  type SaveConflict
 } from './queue'
 
 /** The endpoints the queue uses; `api.ts`'s functions, or stand-ins in tests. */
@@ -88,6 +91,16 @@ export interface UploadQueueOptions {
   onJobsChanged?: () => void
   /** A transcript was saved or renamed; the caller updates its caches. */
   onTranscriptSaved?: (transcript: TranscriptionTranscript) => void
+  /** A group was saved as a new transcript (not renamed), e.g. to wait for its AI title (T-23). */
+  onTranscriptCreated?: (transcript: TranscriptionTranscript) => void
+  /**
+   * A save refused (`409`) because another page of the user saved the group's jobs first: the
+   * transcript that holds them now stands for this save, e.g. for the local history (T-39).
+   */
+  onSaveAdopted?: (
+    input: TranscriptionTranscriptCreate,
+    transcript: TranscriptionTranscript
+  ) => void
   /** The newest revision of a transcript the page knows, for renaming it (T-14). */
   latestRevision?: (transcriptId: string) => number | null
   pollMs?: number
@@ -185,9 +198,11 @@ export class UploadQueue {
   private readonly uploads = new Map<string, AbortController>()
   private readonly creeps = new Map<string, ReturnType<typeof setInterval>>()
   private readonly reanalyzing = new Set<string>()
+  /** Files whose job is being deleted; their group is not saved meanwhile. */
+  private readonly removing = new Set<string>()
   private lifetime = new AbortController()
-  /** The active jobs are fetched once per page; a fetch cut short by `dispose` runs again. */
-  private restoring: 'idle' | 'running' | 'done' = 'idle'
+  /** Whether the active jobs are being listed; a listing cut short by `dispose` ends it. */
+  private restoring = false
   /** The page's view as last reported by `showView`. */
   private view: string | null = null
   private options: UploadQueueOptions
@@ -262,10 +277,12 @@ export class UploadQueue {
     })
   }
 
-  /** Takes over the queue's work again after `dispose`, and restores the active jobs once. */
+  /**
+   * Takes over the queue's work again after `dispose`. The active jobs are restored only when the
+   * upload view opens (`showView`), as kiChat restores them in its file view.
+   */
   attach(): void {
     if (this.lifetime.signal.aborted) this.lifetime = new AbortController()
-    if (this.restoring === 'idle') void this.restoreActiveJobs()
   }
 
   /**
@@ -274,7 +291,7 @@ export class UploadQueue {
    */
   dispose(): void {
     this.lifetime.abort()
-    if (this.restoring === 'running') this.restoring = 'idle'
+    this.restoring = false
     for (const controller of this.flows.values()) controller.abort()
     this.flows.clear()
     for (const timer of this.creeps.values()) clearInterval(timer)
@@ -494,8 +511,10 @@ export class UploadQueue {
   private async pollAnalysis(
     fileId: string,
     jobId: string,
-    { keepVoices }: { keepVoices: boolean }
+    { keepVoices, onPoll }: { keepVoices: boolean; onPoll?: () => void }
   ): Promise<boolean> {
+    // Removed meanwhile, e.g. during a start: nothing to poll for.
+    if (!this.file(fileId)) return false
     const controller = this.startFlow(fileId)
     const signal = controller.signal
     let errors = 0
@@ -542,6 +561,7 @@ export class UploadQueue {
           }))
           return true
         }
+        onPoll?.()
         if (job.status === 'analyzing') {
           this.patchFile(fileId, (file) => ({
             status: 'analyzingSpeakers',
@@ -568,12 +588,13 @@ export class UploadQueue {
   /**
    * Runs the speaker analysis again (T-21), from the mapping dialog or before a transcription is
    * retried. `keepVoices` keeps the names, colours and samples of voices found again and the voices
-   * added by hand (T-20). Resolves once the voices are there, or with the server's reason when it
-   * failed.
+   * added by hand (T-20). `onPoll` hears every answer that the analysis still runs (the dialog's
+   * button then says so, as kiChat's). Resolves once the voices are there, or with the server's
+   * reason when it failed.
    */
   async reanalyze(
     fileId: string,
-    { keepVoices }: { keepVoices: boolean }
+    { keepVoices, onPoll }: { keepVoices: boolean; onPoll?: () => void }
   ): Promise<{ ok: true } | { ok: false; message: string | null }> {
     const file = this.file(fileId)
     if (!file?.jobId || !file.uploaded || this.reanalyzing.has(fileId)) {
@@ -598,7 +619,7 @@ export class UploadQueue {
       } catch (error) {
         return { ok: false, message: messageOf(error) }
       }
-      const ok = await this.pollAnalysis(fileId, file.jobId, { keepVoices })
+      const ok = await this.pollAnalysis(fileId, file.jobId, { keepVoices, onPoll })
       if (ok) return { ok: true }
       return { ok: false, message: this.file(fileId)?.error?.message ?? null }
     } finally {
@@ -641,23 +662,28 @@ export class UploadQueue {
   // -------------------------------------------------------------------------
 
   /**
-   * kiChat's `loadActiveJobs`: the user's unsaved jobs come back, each as a group of its own named
-   * after its file, without a local file. Jobs the queue already has are skipped.
+   * kiChat's `loadActiveJobs`, run each time the upload view opens: the user's unsaved jobs come
+   * back, each as a group of its own named after its file, without a local file. Jobs the queue
+   * already has are skipped; a listing already under way is not started twice.
    */
   async restoreActiveJobs(): Promise<void> {
-    this.restoring = 'running'
+    if (this.restoring || this.disposed) return
+    this.restoring = true
     const lifetime = this.lifetime
     let jobs: TranscriptionJob[]
     try {
       jobs = await this.options.api.listJobs(lifetime.signal)
     } catch {
       // Like kiChat, a failed listing only means nothing is restored; the next visit tries again.
-      if (lifetime === this.lifetime) this.restoring = 'idle'
       return
+    } finally {
+      if (lifetime === this.lifetime) this.restoring = false
     }
-    // Disposed meanwhile: the next `attach` lists again.
+    // Disposed meanwhile: the upload view lists again when it shows after the next `attach`.
     if (lifetime.signal.aborted) return
-    this.restoring = 'done'
+    // A row whose job is being created may be listed before it knows its job id: once it does,
+    // the check below skips that job.
+    await this.waitFor(() => !allFiles(this.state.groups).some(creatingJob))
     for (const job of jobs) {
       if (this.disposed) return
       if (job.transcriptId !== null || job.status === 'cancelled') continue
@@ -685,8 +711,12 @@ export class UploadQueue {
       tone: 'ready',
       error: null,
       notice: noticeOf(job),
+      // An analysed job without voices still opens the dialog, to add them (kiChat's
+      // `hydrateRestoredSpeakers`); one not analysed yet has none to show.
       voices:
-        job.speakers.length > 0 ? voicesFromSpeakers(job.speakers, this.options.labels) : null,
+        job.status === 'analyzed' || job.speakers.length > 0
+          ? voicesFromSpeakers(job.speakers, this.options.labels)
+          : null,
       voicesSaved: false,
       result: null
     }
@@ -791,7 +821,11 @@ export class UploadQueue {
         if (!group || group.saved || group.files.length === 0) continue
         const results = await Promise.all(group.files.map((file) => this.processFile(file.id)))
         if (this.disposed) break
-        if (results.every((result) => result !== null)) {
+        // A file removed meanwhile (kiChat lets the user cancel it) leaves the group unsaved; the
+        // next start reuses the results of the files that stayed.
+        const now = this.group(groupId)
+        const intact = group.files.every((file) => now?.files.some(({ id }) => id === file.id))
+        if (intact && results.every((result) => result !== null)) {
           const id = await this.saveGroup(groupId)
           if (id) savedIds.push(id)
           else failed = true
@@ -929,6 +963,8 @@ export class UploadQueue {
     jobId: string,
     { restored }: { restored: boolean }
   ): Promise<TranscriptionResult | null> {
+    // Removed while it was dispatched (kiChat cancels the job then): nothing to poll for.
+    if (!this.file(fileId)) return null
     const controller = this.startFlow(fileId)
     const signal = controller.signal
     const interval = restored
@@ -1014,6 +1050,8 @@ export class UploadQueue {
   async saveGroup(groupId: string): Promise<string | null> {
     const group = this.group(groupId)
     if (!group || group.saved) return group?.saved?.id ?? null
+    // A file on its way out is not saved with its group.
+    if (group.files.some((file) => this.removing.has(file.id))) return null
     const files: FileResult[] = []
     const chosenColors = new Map<string, TranscriptionSpeakerColorId>()
     for (const file of group.files) {
@@ -1027,22 +1065,41 @@ export class UploadQueue {
     }
     const index = this.state.groups.findIndex((candidate) => candidate.id === groupId)
     const title = group.name.trim() || defaultGroupName(Math.max(0, index))
+    const input = transcriptCreate({
+      idempotencyKey: group.idempotencyKey,
+      title,
+      files,
+      chosenColors
+    })
     let transcript: TranscriptionTranscript
     try {
-      transcript = await this.options.api.createTranscript(
-        transcriptCreate({ idempotencyKey: group.idempotencyKey, title, files, chosenColors })
-      )
-    } catch {
-      this.setGroups((groups) => updateGroup(groups, groupId, { saveFailed: true }))
-      return null
+      transcript = await this.options.api.createTranscript(input)
+    } catch (error) {
+      const settled =
+        error instanceof ApiRequestError && error.status === 409
+          ? await this.savedElsewhere(input.jobIds)
+          : null
+      if (!settled || 'conflict' in settled) {
+        this.setGroups((groups) =>
+          updateGroup(groups, groupId, {
+            saveFailed: !settled,
+            saveConflict: settled?.conflict ?? null
+          })
+        )
+        return null
+      }
+      transcript = settled.transcript
+      this.options.onSaveAdopted?.(input, transcript)
     }
     this.options.onTranscriptSaved?.(transcript)
+    this.options.onTranscriptCreated?.(transcript)
     this.setGroups((groups) =>
       groups.map((candidate) =>
         candidate.id === groupId
           ? {
               ...candidate,
               saveFailed: false,
+              saveConflict: null,
               saved: { id: transcript.id, title: transcript.title, revision: transcript.revision },
               files: candidate.files.map((file) => ({
                 ...file,
@@ -1059,19 +1116,66 @@ export class UploadQueue {
     return transcript.id
   }
 
+  /**
+   * After a save refused with `409`: another page of the user that restored the same jobs may
+   * have saved them first (kiChat never stops a page from saving its own transcript). When all
+   * jobs are in one transcript, that one is the group's. Jobs in different transcripts, or not all
+   * completed, are a conflict another try cannot solve; `null` when the jobs could not be read or
+   * show no reason, so the save may be tried again.
+   */
+  private async savedElsewhere(
+    jobIds: readonly string[]
+  ): Promise<{ transcript: TranscriptionTranscript } | { conflict: SaveConflict } | null> {
+    try {
+      const jobs = await Promise.all(jobIds.map((id) => this.options.api.getJob(id)))
+      const transcriptIds = new Set(jobs.map((job) => job.transcriptId))
+      const [only] = transcriptIds
+      if (transcriptIds.size === 1 && only) {
+        return { transcript: await this.options.api.getTranscript(only) }
+      }
+      if (jobs.some((job) => job.transcriptId !== null)) return { conflict: 'savedElsewhere' }
+      if (jobs.some((job) => job.status !== 'completed')) return { conflict: 'notCompleted' }
+      return null
+    } catch {
+      return null
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Editing the queue (T-06 to T-08, T-18)
   // -------------------------------------------------------------------------
 
-  /** kiChat's `addGroup`: an empty group with the next default name. */
+  /**
+   * kiChat's `addGroup`: an empty group with the next default name, during a start too; the start
+   * goes through the groups it had when it began, and the new one takes files once it ended.
+   */
   addGroup(): void {
-    if (this.state.processing) return
     this.setGroups((groups) => [...groups, newGroup(groups.length)])
   }
 
   /** Changes a group's name while it is typed. */
   renameGroup(groupId: string, name: string): void {
     this.setGroups((groups) => updateGroup(groups, groupId, { name }))
+  }
+
+  /**
+   * The title the server gave a saved group's transcript afterwards (the AI title, T-23): its link
+   * shows it, and the group's name follows unless the user is changing it, so leaving the name
+   * field does not rename the transcript back.
+   */
+  takeGeneratedTitle(transcriptId: string, title: string): void {
+    this.setGroups((groups) =>
+      groups.map((group) => {
+        const saved = group.saved
+        if (saved?.id !== transcriptId || saved.title === title) return group
+        const name = group.name.trim()
+        return {
+          ...group,
+          name: !name || name === saved.title ? title : group.name,
+          saved: { ...saved, title }
+        }
+      })
+    )
   }
 
   /**
@@ -1141,16 +1245,20 @@ export class UploadQueue {
 
   /**
    * Removes a file: its job is deleted on the server first, and only that success removes the row
-   * (T-08). Resolves `false` when the deletion failed.
+   * (T-08). During a start too, which cancels the job (kiChat): its group then is not saved, and
+   * the next start reuses the results of the files that stay. Resolves `false` when the deletion
+   * failed.
    */
   async removeFile(fileId: string): Promise<boolean> {
     const position = findFile(this.state.groups, fileId)
-    if (!position || this.state.processing || position.group.saved) return true
+    if (!position || position.group.saved) return true
     const jobId = position.file.jobId
     if (jobId) {
       // The upload stops first, so it stores nothing after the deletion (T-08).
       this.abortUpload(fileId)
-      if (!(await this.deleteJob(jobId))) return false
+      this.removing.add(fileId)
+      const deleted = await this.deleteJob(jobId).finally(() => this.removing.delete(fileId))
+      if (!deleted) return false
       this.options.onJobsChanged?.()
     }
     this.forget(fileId)
@@ -1159,16 +1267,20 @@ export class UploadQueue {
   }
 
   /**
-   * kiChat's `removeGroup`: deletes the jobs of all its files, then the group. Files whose job
-   * could not be deleted stay, and so does the group then; resolves `false` in that case.
+   * kiChat's `removeGroup`: deletes the jobs of all its files, then the group, during a start too.
+   * Files whose job could not be deleted stay, and so does the group then; resolves `false` in
+   * that case.
    */
   async removeGroup(groupId: string): Promise<boolean> {
     const group = this.group(groupId)
-    if (!group || this.state.processing || group.saved) return true
+    if (!group || group.saved) return true
     for (const file of group.files) if (file.jobId) this.abortUpload(file.id)
+    for (const file of group.files) this.removing.add(file.id)
     const outcomes = await Promise.all(
       group.files.map((file) => (file.jobId ? this.deleteJob(file.jobId) : true))
-    )
+    ).finally(() => {
+      for (const file of group.files) this.removing.delete(file.id)
+    })
     if (group.files.some((file) => file.jobId)) this.options.onJobsChanged?.()
     const kept = new Set(group.files.filter((_, index) => !outcomes[index]).map((file) => file.id))
     for (const file of group.files) if (!kept.has(file.id)) this.forget(file.id)
@@ -1214,14 +1326,25 @@ export class UploadQueue {
   }
 
   /**
+   * Keeps what the mapping dialog changed without Save (kiChat edits `file.speakers` in place):
+   * samples, their windows, voices added or removed, colours, and names whenever kiChat's
+   * `saveCurrentInputs` would run. The voices do not count as saved by it.
+   */
+  updateVoices(fileId: string, change: (voices: VoiceDraft[]) => VoiceDraft[]): void {
+    this.patchFile(fileId, (file) => (file.voices ? { voices: change(file.voices) } : {}))
+  }
+
+  /**
    * The page shows another view. Arriving back at the entry choice clears the selection; a first
    * or repeated report of the same view (a remount of the page) does not, so jobs restored
-   * meanwhile stay.
+   * meanwhile stay. Each report of the upload view restores the active jobs (kiChat's
+   * `switchTranscriptView('file')`), so files cleared at the choice come back there (T-15).
    */
   showView(view: string): void {
     const previous = this.view
     this.view = view
     if (view === 'choice' && previous !== null && previous !== 'choice') this.resetSelection()
+    if (view === 'upload') void this.restoreActiveJobs()
   }
 
   /**

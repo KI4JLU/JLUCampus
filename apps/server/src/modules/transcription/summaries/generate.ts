@@ -16,14 +16,18 @@ import {
 
 /**
  * Summaries by template (T-48 to T-53), as kiChat's `TranscriptionController::summarize` writes
- * them: static blocks (headings, text, dividers) are rendered by the server with their
- * placeholders filled; each AI section is one request to the chat model with kiChat's prompt, its
- * instruction followed by the transcript, answered as Markdown. Section previews of the template
- * editor use the same request on kiChat's reduced sample of the transcript.
+ * them: each AI section is one request to the chat model with kiChat's prompt, its instruction
+ * followed by the transcript, answered as Markdown, and the summary is the sections alone. The
+ * template's static blocks (headings, text, dividers) only show in the editor's preview, as in
+ * kiChat. Section previews of the template editor use the same request on kiChat's reduced
+ * sample of the transcript.
  */
 
-/** Raised whenever prompts change, so stored summaries made with older ones are not reused. */
-export const PROMPT_VERSION = 2
+/**
+ * Raised whenever prompts or the summary's assembly change, so stored summaries made the older
+ * way are not reused (3: static blocks left out, as kiChat).
+ */
+export const PROMPT_VERSION = 3
 
 /** Tokens of kiChat's reduced sample a section preview reads (`getReducedTranscriptSample`). */
 export const PREVIEW_SAMPLE_TOKENS = 2000
@@ -147,33 +151,20 @@ export function templateSections(
 }
 
 /**
- * The template as Markdown: static blocks with placeholders filled, AI sections as `## Heading`
- * (none for a section without heading) followed by their generated content.
+ * The summary as Markdown, as kiChat assembles it: only the AI sections, each as `## Heading` on
+ * its own line directly followed by the generated content (none for a section without heading),
+ * a blank line between sections. Static blocks are left out.
  */
 export function assembleSummary(
   structure: readonly TranscriptionTemplateBlock[],
   values: PlaceholderValues,
   sections: Readonly<Record<string, string>>
 ): string {
-  const fill = (text: string): string => fillTemplatePlaceholders(text, values)
   const parts = structure.flatMap((block, index): string[] => {
-    switch (block.type) {
-      case 'heading': {
-        const text = fill(block.text).trim()
-        return text ? [`${'#'.repeat(block.level)} ${text}`] : []
-      }
-      case 'text': {
-        const text = fill(block.text).trim()
-        return text ? [text] : []
-      }
-      case 'divider':
-        return ['---']
-      case 'section': {
-        const content = (sections[block.id ?? `section-${index}`] ?? '').trim()
-        const heading = fill(block.heading).trim()
-        return [heading ? `## ${heading}\n\n${content}`.trim() : content].filter(Boolean)
-      }
-    }
+    if (block.type !== 'section') return []
+    const content = (sections[block.id ?? `section-${index}`] ?? '').trim()
+    const heading = fillTemplatePlaceholders(block.heading, values).trim()
+    return [heading ? `## ${heading}\n${content}`.trim() : content].filter(Boolean)
   })
   return parts.join('\n\n')
 }
