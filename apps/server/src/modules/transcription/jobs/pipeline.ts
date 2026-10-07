@@ -25,7 +25,7 @@ import { mapDiarizationSegments } from './mapping.js'
 import { cutAudio, MediaToolError, normalizeAudio, probeMedia, workDirectory } from './media.js'
 import { joinText, mergeChunks, planChunks, type ChunkPlan } from './merge.js'
 import { wavPeaks } from './peaks.js'
-import { knownSpeakers } from './references.js'
+import { knownSpeakers, speakerNamesForTurns } from './references.js'
 import { jobExpiry, type JobRow } from './rows.js'
 import {
   automaticVoice,
@@ -565,7 +565,7 @@ export async function runTranscription(run: JobRun): Promise<JobChanges> {
         )
         named = mapDiarizationSegments(merged, turns, {
           vadSegments,
-          speakerMapping: run.job.mapping,
+          speakerMapping: speakerNamesForTurns(turns, run.job.snippets, run.job.mapping),
           knownSpeakerNames: known.map((speaker) => speaker.name)
         })
       } catch (error) {

@@ -192,6 +192,31 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
           response.end('{"segments":"not a list"}')
           return
         }
+        if (request.url?.startsWith('/dswap/')) {
+          // Speaches with pyannote: ignores the known voices and may number them the other way
+          // round than the analysis did.
+          void fetch(`${mockUrl}/diarization${request.url.slice('/dswap'.length)}`, {
+            method: request.method,
+            headers: { 'Content-Type': request.headers['content-type'] ?? '' },
+            body: request.method === 'POST' ? Buffer.concat(chunks) : undefined
+          })
+            .then((answer) => answer.text())
+            .then((text) => {
+              const swap: Record<string, string> = {
+                Anna: 'SPEAKER_01',
+                SPEAKER_00: 'SPEAKER_01',
+                Ben: 'SPEAKER_00',
+                SPEAKER_01: 'SPEAKER_00'
+              }
+              const body = JSON.parse(text) as { segments?: Array<{ speaker: string }> }
+              for (const segment of Array.isArray(body.segments) ? body.segments : []) {
+                segment.speaker = swap[segment.speaker] ?? segment.speaker
+              }
+              response.writeHead(200, { 'Content-Type': 'application/json' })
+              response.end(JSON.stringify(body))
+            })
+          return
+        }
         if (request.url?.startsWith('/none/')) {
           response.writeHead(404, { 'Content-Type': 'application/json' })
           response.end('{"detail":"Not Found"}')
@@ -408,6 +433,41 @@ describe.skipIf(!hasFfmpeg)('media and pipeline with ffmpeg and the mock upstrea
     expect(new Set(single.result!.segments.map((segment) => segment.speaker))).toEqual(
       new Set(['Anna'])
     )
+  }, 60_000)
+
+  it('names the voices by their samples when the diariser numbers them anew', async () => {
+    const id = '00000000-0000-4000-8000-0000000000ab'
+    const storage = await storageWith(id, 'talk.wav')
+    const analysis = run(jobRow(id), storage)
+    const analyzed = await runAnalysis(analysis)
+    const speakers = analyzed.speakers!
+    const snippets: TranscriptionSnippet[] = speakers.flatMap((speaker, index) =>
+      speaker.samples.map((sample) => ({
+        id: speaker.id,
+        name: index === 0 ? 'Anna' : 'Ben',
+        start: sample.start,
+        end: sample.end
+      }))
+    )
+    const done = await runTranscription(
+      run(
+        {
+          ...analysis.job,
+          ...analyzed,
+          status: 'preprocessing',
+          mapping: { SPEAKER_00: 'Anna', SPEAKER_01: 'Ben' },
+          snippets,
+          settings: { language: 'auto', speakerCount: 'auto', llmCorrection: false }
+        } as JobRow,
+        storage,
+        config({ diarizationUrl: `${helperUrl}/dswap/v1` })
+      )
+    )
+    expect(done.status).toBe('completed')
+    // Anna speaks until 8 s and from 14 s, Ben in between, as in the analysis.
+    for (const segment of done.result!.segments) {
+      expect(segment.speaker).toBe(segment.start >= 8 && segment.start < 14 ? 'Ben' : 'Anna')
+    }
   }, 60_000)
 
   it('diarises again at transcription with the count chosen then (T-09)', async () => {

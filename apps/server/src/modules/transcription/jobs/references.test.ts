@@ -4,7 +4,13 @@ import { join } from 'node:path'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { knownSpeakers, REFERENCE_MAX_SECONDS, referenceWindows, wavHeader } from './references.js'
+import {
+  knownSpeakers,
+  REFERENCE_MAX_SECONDS,
+  referenceWindows,
+  speakerNamesForTurns,
+  wavHeader
+} from './references.js'
 
 let directory: string
 let wav: string
@@ -87,5 +93,58 @@ describe('known speaker references', () => {
       44 + 0.5 * RATE * 2
     )
     expect(decode(speakers[1]!.reference).seconds).toEqual([3])
+  })
+})
+
+describe('voice names for the final diarisation', () => {
+  const snippets = [
+    { id: 'SPEAKER_00', name: 'Cornelia Fritsch', start: 21, end: 26 },
+    { id: 'SPEAKER_00', name: 'Cornelia Fritsch', start: 138, end: 143 },
+    { id: 'SPEAKER_01', name: 'Frau Heißler', start: 79, end: 84 }
+  ]
+  const mapping = { SPEAKER_00: 'Cornelia Fritsch', SPEAKER_01: 'Frau Heißler' }
+
+  it('names voices by the sample windows they cover, not by their ids', () => {
+    // The diariser ignored the references and numbered the voices the other way round.
+    const turns = [
+      { start: 10, end: 70, speaker: 'SPEAKER_01' },
+      { start: 72, end: 111, speaker: 'SPEAKER_00' },
+      { start: 113, end: 260, speaker: 'SPEAKER_01' }
+    ]
+    expect(speakerNamesForTurns(turns, snippets, mapping)).toEqual({
+      SPEAKER_01: 'Cornelia Fritsch',
+      SPEAKER_00: 'Frau Heißler'
+    })
+  })
+
+  it('leaves names the diariser recognised, and falls back to the ids only for free names', () => {
+    expect(
+      speakerNamesForTurns(
+        [
+          { start: 10, end: 70, speaker: 'Cornelia Fritsch' },
+          { start: 72, end: 111, speaker: 'SPEAKER_03' }
+        ],
+        snippets,
+        mapping
+      )
+    ).toEqual({ SPEAKER_03: 'Frau Heißler' })
+    // No window overlaps SPEAKER_01 or SPEAKER_02: SPEAKER_01 keeps its analysis name, which no
+    // voice took; SPEAKER_00's name went to the voice its windows found, so SPEAKER_00 stays
+    // unnamed and becomes the next automatic label.
+    expect(
+      speakerNamesForTurns(
+        [
+          { start: 10, end: 30, speaker: 'SPEAKER_02' },
+          { start: 300, end: 310, speaker: 'SPEAKER_01' },
+          { start: 400, end: 410, speaker: 'SPEAKER_00' }
+        ],
+        snippets,
+        mapping
+      )
+    ).toEqual({ SPEAKER_02: 'Cornelia Fritsch', SPEAKER_01: 'Frau Heißler' })
+    // Jobs without windows keep the analysis' ids.
+    expect(
+      speakerNamesForTurns([{ start: 0, end: 5, speaker: 'SPEAKER_00' }], [], mapping)
+    ).toEqual({ SPEAKER_00: 'Cornelia Fritsch' })
   })
 })

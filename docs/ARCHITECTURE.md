@@ -338,7 +338,9 @@ by its masked words. The live relay passes on and logs nothing the gateway says.
 The analysis diarises the whole file and offers samples per voice; the transcription diarises
 again with the named voices as known speakers (`known_speaker_references`, WAV cut from the
 normalised audio) plus VAD, and maps words to speakers by time overlap (`jobs/mapping.ts`,
-kiChat's `mapDiarizationSegments`). `diarizationUrl` is the Speaches base up to `/v1` (empty:
+kiChat's `mapDiarizationSegments`). A diariser that ignores the known speakers (the HRZ's
+Speaches with pyannote) numbers the voices anew, not necessarily in the analysis' order, so its
+voices are named by the sample windows they overlap most (`speakerNamesForTurns`), not by id. `diarizationUrl` is the Speaches base up to `/v1` (empty:
 the first speech worker), `diarizationApiKey` its key (empty: the speech key). A diariser that
 cannot be reached or refuses the key leaves the file one automatic voice; the job then carries
 `error: {code: 'diarization_failed'}` as a notice on an `analyzed` or `completed` job, and a

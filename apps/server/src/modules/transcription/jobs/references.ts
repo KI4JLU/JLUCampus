@@ -2,7 +2,7 @@ import { open } from 'node:fs/promises'
 
 import type { TranscriptionSnippet } from '@justcampus/shared'
 
-import type { KnownSpeaker } from './diarization.js'
+import type { DiarizationTurn, KnownSpeaker } from './diarization.js'
 import { readWavLayout } from './peaks.js'
 
 /**
@@ -48,6 +48,56 @@ export function referenceWindows(
     if (kept.length > 0) voices.push({ name, windows: kept })
   }
   return voices
+}
+
+/**
+ * The names of the final diarisation's voices (`MappingOptions.speakerMapping`), read off the
+ * user's sample windows. A diariser that uses the known voices answers them by name, and those
+ * names stay. One that ignores them (the HRZ's Speaches with pyannote) numbers its voices anew,
+ * and its `SPEAKER_00` need not be the analysis' `SPEAKER_00`: the order may change between runs,
+ * which gave each name the other person's speech. So each voice takes the name whose windows it
+ * overlaps most. A voice no window overlaps falls back to the analysis' name for its id, unless
+ * another voice took that name already; it otherwise becomes the next automatic label.
+ */
+export function speakerNamesForTurns(
+  turns: readonly DiarizationTurn[],
+  snippets: readonly TranscriptionSnippet[],
+  mapping: Readonly<Record<string, string>>
+): Record<string, string> {
+  const named = snippets.filter((snippet) => snippet.name.trim() && snippet.end > snippet.start)
+  const knownNames = new Set(named.map((snippet) => snippet.name.trim()))
+  const overlaps = new Map<string, Map<string, number>>()
+  for (const turn of turns) {
+    if (knownNames.has(turn.speaker)) continue
+    for (const snippet of named) {
+      const overlap = Math.min(turn.end, snippet.end) - Math.max(turn.start, snippet.start)
+      if (overlap <= 0) continue
+      const byName = overlaps.get(turn.speaker) ?? new Map<string, number>()
+      const name = snippet.name.trim()
+      byName.set(name, (byName.get(name) ?? 0) + overlap)
+      overlaps.set(turn.speaker, byName)
+    }
+  }
+  const names: Record<string, string> = {}
+  for (const [speaker, byName] of overlaps) {
+    let best: string | null = null
+    let most = 0
+    for (const [name, overlap] of byName) {
+      if (overlap > most) {
+        most = overlap
+        best = name
+      }
+    }
+    if (best) names[speaker] = best
+  }
+  const taken = new Set(Object.values(names))
+  for (const speaker of new Set(turns.map((turn) => turn.speaker))) {
+    const name = mapping[speaker]?.trim()
+    if (speaker in names || knownNames.has(speaker) || !name || taken.has(name)) continue
+    names[speaker] = name
+    taken.add(name)
+  }
+  return names
 }
 
 /** A canonical 44-byte header for 16-bit PCM. */
