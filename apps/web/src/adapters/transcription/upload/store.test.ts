@@ -8,7 +8,7 @@ import type {
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
 import { UploadError } from '../api'
-import { allFiles, findFile, serverWaveform, type QueueFile } from './queue'
+import { allFiles, findFile, handoverGroupIndex, serverWaveform, type QueueFile } from './queue'
 import { UploadQueue, type SignedUpload, type UploadApi, type UploadQueueOptions } from './store'
 
 const NOW = '2026-10-04T10:00:00.000Z'
@@ -356,7 +356,10 @@ describe('UploadQueue: start, merge and save (T-13, T-14)', () => {
       [0, 5],
       [5, 9]
     ])
-    expect(row(queue, 'a.wav').status).toBe('done')
+    // As in kiChat, a start's save leaves the rows' status: reused or freshly transcribed.
+    expect(row(queue, 'a.wav').status).toBe('readyFromCache')
+    expect(row(queue, 'b.wav').status).toBe('transcriptionComplete')
+    expect(row(queue, 'c.wav').status).toBe('transcriptionComplete')
   })
 
   it('keeps voices added by hand when a failed transcription is retried (T-20)', async () => {
@@ -493,6 +496,8 @@ describe('UploadQueue: restoring active jobs (T-15)', () => {
     expect(api.createTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'job-b', jobIds: ['job-b'] })
     )
+    // A restored job saved by itself reads 'Fertig', as after kiChat's re-render.
+    expect(groups[1]?.files[0]).toMatchObject({ phase: 'completed', status: 'done' })
     expect(row(queue, 'job-c.wav')).toMatchObject({ phase: 'analysisFailed', tone: 'error' })
 
     // A second restore adds nothing already in the queue.
@@ -681,6 +686,25 @@ describe('UploadQueue: files per transcript (T-04, T-13)', () => {
     queue.dispose()
   })
 
+  it('adds recorded takes to the first group next to its file, within the limit (T-58)', () => {
+    const { api } = server()
+    const queue = makeQueue(api)
+    queue.configure({ maxFilesPerGroup: 3 })
+    queue.addFiles([wav('dialog-de.wav')], 0)
+    const takes = [wav('dialog-de.wav'), wav('take-1.wav'), wav('take-2.wav'), wav('take-3.wav')]
+    const groups = queue.getSnapshot().groups
+    const index = handoverGroupIndex(groups, 'first')
+    expect(index).toBe(0)
+    expect(queue.addFiles(takes, index).map((file) => file.name)).toEqual([
+      'take-1.wav',
+      'take-2.wav'
+    ])
+    expect(queue.getSnapshot().groups.map((group) => group.files.map((file) => file.name))).toEqual(
+      [['dialog-de.wav', 'take-1.wav', 'take-2.wav']]
+    )
+    queue.dispose()
+  })
+
   it('takes groups far beyond kiChat’s usual sizes without an admin limit (T-04)', () => {
     const { api } = server()
     const queue = makeQueue(api)
@@ -814,6 +838,27 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
     queue.dispose()
   })
 
+  it('lets recorded takes join the first group after the restored jobs are back (T-58)', async () => {
+    const { api } = server()
+    let answer: (jobs: TranscriptionJob[]) => void = () => undefined
+    api.listJobs.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
+    const queue = makeQueue(api)
+    queue.attach()
+    queue.showView('upload')
+    let restored = false
+    void queue.whenRestored().then(() => (restored = true))
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(restored).toBe(false)
+    answer([job('job-a', { filename: 'dialog-de.wav', status: 'analyzed', speakers: SPEAKERS })])
+    await queue.whenRestored()
+    const index = handoverGroupIndex(queue.getSnapshot().groups, 'first')
+    queue.addFiles([wav('take.wav')], index)
+    const [first] = queue.getSnapshot().groups
+    expect(first?.name).toBe('dialog-de')
+    expect(first?.files.map((file) => file.name)).toEqual(['dialog-de.wav', 'take.wav'])
+    queue.dispose()
+  })
+
   it('waits for a job being created, so it is not restored next to its own row', async () => {
     const { api, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
@@ -871,7 +916,7 @@ describe('UploadQueue: a group saved by another page (T-14)', () => {
       saveFailed: false,
       saveConflict: null
     })
-    expect(rows(queue).every((file) => file.status === 'done')).toBe(true)
+    expect(rows(queue).every((file) => file.status === 'transcriptionComplete')).toBe(true)
     expect(adopted).toHaveBeenCalledWith(
       expect.objectContaining({ jobIds: ['job-1', 'job-2'] }),
       other

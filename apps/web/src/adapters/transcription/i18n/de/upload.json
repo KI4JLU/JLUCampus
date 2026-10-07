@@ -56,7 +56,6 @@
   "provider": "Provider",
   "readyForTranscription": "Bereit für Transkription",
   "readyFromCache": "Bereit (aus Cache)",
-  "rejectedFiles": "Nicht hinzugefügt: {{names}}",
   "removeFile": "Datei entfernen",
   "removeFileNamed": "„{{name}}“ entfernen",
   "removeSpeaker": "Sprecher entfernen",

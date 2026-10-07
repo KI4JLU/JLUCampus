@@ -314,7 +314,8 @@ describe('segmentsJson', () => {
       segment({ id: 2, text: 'geheim', redactions: [{ start: 0, end: 6 }] })
     ]
     const json = segmentsJson(segments)
-    const { avgLogprob, compressionRatio, noSpeechProb, ...rest } = FIXTURE
+    const { avgLogprob, compressionRatio, noSpeechProb, redactions, ...rest } = FIXTURE
+    expect(redactions).toEqual([])
     expect(JSON.parse(json)).toEqual([
       {
         ...rest,
@@ -326,5 +327,18 @@ describe('segmentsJson', () => {
     ])
     expect(json.split('\n')[1]).toBe('  {')
     expect(json).toContain('"text": "geheim"')
+  })
+
+  it('writes redactions only on redacted segments and leaves out absent fields', () => {
+    const parsed = JSON.parse(
+      segmentsJson([
+        segment({ id: 1, words: undefined }),
+        segment({ id: 2, text: 'geheim', redactions: [{ start: 1, end: 4 }] })
+      ])
+    )
+    expect(parsed[0]).not.toHaveProperty('redactions')
+    expect(parsed[0]).not.toHaveProperty('words')
+    expect(Object.keys(parsed[0])).toEqual(['id', 'start', 'end', 'speaker', 'text'])
+    expect(parsed[1].redactions).toEqual([{ start: 1, end: 4 }])
   })
 })

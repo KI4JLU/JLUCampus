@@ -375,8 +375,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   const uploadTakes = useCallback(() => {
     const files = takesRef.current.map((take) => take.file)
     if (files.length === 0 || busyRef.current) return
-    // One normal group, through the same queue, validation and analysis as picked files.
-    enqueueUpload(files)
+    // Like kiChat, into the first group next to the files already there, through the same queue,
+    // validation and analysis as picked files.
+    enqueueUpload(files, null, { target: 'first' })
     setTakes([])
     dispatch({ type: 'takesChanged', takes: 0 })
   }, [busyRef, dispatch, enqueueUpload, setTakes, takesRef])

@@ -203,6 +203,8 @@ export class UploadQueue {
   private lifetime = new AbortController()
   /** Whether the active jobs are being listed; a listing cut short by `dispose` ends it. */
   private restoring = false
+  /** The listing the last report of the upload view started; settled once its jobs are back. */
+  private restoration: Promise<void> = Promise.resolve()
   /** The page's view as last reported by `showView`. */
   private view: string | null = null
   private options: UploadQueueOptions
@@ -826,7 +828,7 @@ export class UploadQueue {
         const now = this.group(groupId)
         const intact = group.files.every((file) => now?.files.some(({ id }) => id === file.id))
         if (intact && results.every((result) => result !== null)) {
-          const id = await this.saveGroup(groupId)
+          const id = await this.saveGroup(groupId, { afterStart: true })
           if (id) savedIds.push(id)
           else failed = true
         } else failed = true
@@ -1045,9 +1047,14 @@ export class UploadQueue {
 
   /**
    * Joins a group's results and saves them as one transcript under the group's name (T-14). A
-   * failed save keeps the results for another try with the same idempotency key.
+   * failed save keeps the results for another try with the same idempotency key. Saved by a start,
+   * the rows keep their status ('Transcription abgeschlossen' or 'Bereit (aus Cache)'),
+   * as kiChat's `saveProcessedFile` only adds the group's links; otherwise they read 'Fertig'.
    */
-  async saveGroup(groupId: string): Promise<string | null> {
+  async saveGroup(
+    groupId: string,
+    { afterStart = false }: { afterStart?: boolean } = {}
+  ): Promise<string | null> {
     const group = this.group(groupId)
     if (!group || group.saved) return group?.saved?.id ?? null
     // A file on its way out is not saved with its group.
@@ -1105,7 +1112,7 @@ export class UploadQueue {
                 ...file,
                 phase: 'completed' as const,
                 progress: PROGRESS.done,
-                status: 'done' as const,
+                status: afterStart ? file.status : ('done' as const),
                 tone: 'success' as const,
                 error: null
               }))
@@ -1344,7 +1351,15 @@ export class UploadQueue {
     const previous = this.view
     this.view = view
     if (view === 'choice' && previous !== null && previous !== 'choice') this.resetSelection()
-    if (view === 'upload') void this.restoreActiveJobs()
+    if (view === 'upload' && !this.restoring) this.restoration = this.restoreActiveJobs()
+  }
+
+  /**
+   * Settles when the jobs listed for the upload view are back in the queue, so recorded takes
+   * join the first group after them, as kiChat adds them 300 ms after `loadActiveJobs` (T-58).
+   */
+  whenRestored(): Promise<void> {
+    return this.restoration
   }
 
   /**

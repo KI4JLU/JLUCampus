@@ -32,7 +32,7 @@ import {
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { UploadDialog } from './dialogs'
 import { useDialogHost } from './use-dialog-host'
-import { dropTargetIndex, fitIntoGroup, type FilePosition } from './queue'
+import { dropTargetIndex, fitIntoGroup, handoverGroupIndex, type FilePosition } from './queue'
 import { UploadQueue, type QueueLabels } from './store'
 import { UploadContext } from './use-upload'
 import { limitMegabytes, partitionFiles } from './validation'
@@ -136,7 +136,10 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     queue.attach()
   }, [queue])
 
-  /** The catalog's alert for refused files, with their names; the admin's limit if changed. */
+  /**
+   * kiChat's alert for refused files, without their names; the admin's limit if changed. One
+   * dialog for all refused files of a pick instead of kiChat's alert per file.
+   */
   const checkFiles = useCallback(
     async (files: readonly File[]): Promise<File[]> => {
       const { accepted, rejected } = partitionFiles(files, maxBytes)
@@ -147,11 +150,8 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
             : t('transcription.upload.unsupportedFileAlertLimit', {
                 size: limitMegabytes(maxBytes)
               })
-        const names = rejected.map(({ file }) => `"${file.name}"`).join(', ')
-        await dialogs.alert({
-          title: t('transcription.common.error'),
-          message: `${alert}\n\n${t('transcription.upload.rejectedFiles', { names })}`
-        })
+        // The DS dialog needs a title; 'Fehler' stands in for the browser's alert chrome.
+        await dialogs.alert({ title: t('transcription.common.error'), message: alert })
       }
       return accepted
     },
@@ -206,7 +206,8 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     }
   }, [dialogs, queue, t])
 
-  // Files handed over by other areas join the queue as a group of their own, once it takes files.
+  // Files handed over by other areas join the queue once it takes files: as a group of their own,
+  // or the recorded takes in the first group like kiChat (T-58).
   const { pendingUploads, takePendingUploads } = workspace
   const processing = useSyncExternalStore(queue.subscribe, () => queue.getSnapshot().processing)
   useEffect(() => {
@@ -214,8 +215,13 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     void (async () => {
       for (const pending of takePendingUploads()) {
         const accepted = await checkFiles(pending.files)
-        const { overflow } = fitIntoGroup([], accepted, maxFiles)
-        queue.addGroupOfFiles(accepted, pending.title)
+        if (pending.target === 'first') await queue.whenRestored()
+        const groups = queue.getSnapshot().groups
+        const index = handoverGroupIndex(groups, pending.target)
+        const present = index === null ? [] : groups[index]!.files
+        const { overflow } = fitIntoGroup(present, accepted, Math.max(0, maxFiles - present.length))
+        if (index === null) queue.addGroupOfFiles(accepted, pending.title)
+        else queue.addFiles(accepted, index)
         if (overflow) await alertGroupFull()
       }
     })()

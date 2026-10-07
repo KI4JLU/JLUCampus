@@ -287,6 +287,20 @@ export function dropTargetIndex(groups: readonly QueueGroup[]): number {
   return open >= 0 ? open : groups.length
 }
 
+/**
+ * The group handed-over files join (T-58): with `target` `'first'` the first group, as kiChat's
+ * `uploadLiveRecording` adds the takes to group 0 next to the files already there, unless it is
+ * saved. `null`: a group of their own.
+ */
+export function handoverGroupIndex(
+  groups: readonly QueueGroup[],
+  target: 'own' | 'first'
+): number | null {
+  if (target !== 'first') return null
+  const first = groups[0]
+  return first && first.saved === null ? 0 : null
+}
+
 /** Where a file is: its group's and its own index. */
 export interface FilePosition {
   groupIndex: number

@@ -318,15 +318,21 @@ const WHISPER_FIELD_NAMES: Partial<Record<keyof TranscriptionSegment, string>> =
 /**
  * The raw segments as two-space JSON (T-47): no format, filter or anonymisation applies. The
  * decoder fields keep Whisper's names, so tools written for kiChat's export read it unchanged.
+ * Like kiChat, `redactions` appears only on redacted segments and absent fields stay absent.
  */
 export function segmentsJson(segments: readonly TranscriptionSegment[]): string {
   return JSON.stringify(
     segments.map((segment) =>
       Object.fromEntries(
-        Object.entries(segment).map(([key, value]) => [
-          WHISPER_FIELD_NAMES[key as keyof TranscriptionSegment] ?? key,
-          value
-        ])
+        Object.entries(segment)
+          .filter(
+            ([key, value]) =>
+              value !== undefined && !(key === 'redactions' && segment.redactions.length === 0)
+          )
+          .map(([key, value]) => [
+            WHISPER_FIELD_NAMES[key as keyof TranscriptionSegment] ?? key,
+            value
+          ])
       )
     ),
     null,
