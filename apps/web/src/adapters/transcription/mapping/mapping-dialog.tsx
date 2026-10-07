@@ -133,9 +133,16 @@ function MappingContent({
   const remote = useJobAudioUrl(file.file ? null : file.jobId)
   const loadedPeaks = useTimePeaks(
     file.file
-      ? { blob: file.file, jobId: file.jobId }
+      ? { blob: file.file, jobId: file.jobId, duration: file.duration }
       : file.jobId
-        ? { jobId: file.jobId, url: remote.data?.url ?? null }
+        ? {
+            jobId: file.jobId,
+            url: remote.data?.url ?? null,
+            size: file.size,
+            type: file.mimeType,
+            name: file.name,
+            duration: file.duration
+          }
         : null
   )
   const peaks = loadedPeaks ?? null
@@ -256,9 +263,10 @@ function MappingContent({
       {player.failed ? (
         <Notice tone="error" title={t('transcription.upload.mapping.audioUnavailable')} />
       ) : null}
-      {/* A large file without the server's waveform: the sample tracks draw placeholders (T-12). */}
+      {/* Audio not decoded here, without the server's waveform: the sample tracks draw placeholders
+      (T-12). */}
       {loadedPeaks === null &&
-      !decodesLocally({ size: file.size, type: file.mimeType, name: file.name }) ? (
+      !decodesLocally({ size: file.size, type: file.mimeType, name: file.name }, file.duration) ? (
         <Badge appearance="text">{t('transcription.common.player.waveformUnavailable')}</Badge>
       ) : null}
 

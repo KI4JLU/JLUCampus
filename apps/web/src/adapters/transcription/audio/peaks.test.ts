@@ -14,7 +14,8 @@ import {
   overviewPeaks,
   placeholderPeaks,
   serverTimePeaks,
-  urlWaveform
+  urlWaveform,
+  WEBM_DECODE_MAX_SECONDS
 } from './peaks'
 
 vi.mock('../api', () => ({ getJobPeaks: vi.fn() }))
@@ -46,20 +47,29 @@ describe('the decode limit', () => {
     await expect(blobWaveform(huge)).resolves.toBeNull()
   })
 
-  it('judges Opus by what it decodes to, not by its bytes', async () => {
-    const MB = 1024 * 1024
-    // Two hours of a meeting at 48 kbit/s: about 43 MB, decoded over a gigabyte.
-    const meeting = { size: 43 * MB, type: 'audio/webm' } as Blob
+  it('decodes WebM only of a known duration up to 20 minutes, however small', async () => {
+    // An hour of quiet meeting at a variable bitrate: under a megabyte, decoded 660 MB.
+    const meeting = { size: 800 * 1024, type: 'audio/webm;codecs=opus' } as Blob
     expect(decodesLocally(meeting)).toBe(false)
-    await expect(blobWaveform(meeting)).resolves.toBeNull()
-    expect(decodesLocally({ size: 3 * MB, type: 'audio/webm;codecs=opus' })).toBe(true)
-    expect(decodesLocally({ size: 4 * MB, type: 'audio/ogg' })).toBe(false)
+    expect(decodesLocally(meeting, 3600)).toBe(false)
+    await expect(blobWaveform(meeting, 3600)).resolves.toBeNull()
+    expect(decodesLocally(meeting, null)).toBe(false)
+    expect(decodesLocally(meeting, Infinity)).toBe(false)
+    expect(decodesLocally(meeting, Number.NaN)).toBe(false)
+    expect(decodesLocally(meeting, WEBM_DECODE_MAX_SECONDS)).toBe(true)
+    expect(decodesLocally(meeting, WEBM_DECODE_MAX_SECONDS + 1)).toBe(false)
     // Audio by URL has no type: its name tells.
-    expect(decodesLocally({ size: 43 * MB, name: 'max-20261007-101500.webm' })).toBe(false)
-    expect(decodesLocally({ size: 43 * MB, name: 'interview.wav' })).toBe(true)
-    // Other formats keep the limit on their bytes.
-    expect(decodesLocally({ size: 43 * MB, type: 'audio/wav', name: 'a.webm' })).toBe(true)
-    expect(decodesLocally({ size: TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1 })).toBe(false)
+    expect(decodesLocally({ size: 1024, name: 'max-20261007-101500.webm' })).toBe(false)
+    expect(decodesLocally({ size: 1024, name: 'max-20261007-101500.webm' }, 60)).toBe(true)
+  })
+
+  it('keeps the limit on the bytes of other formats', () => {
+    const limit = TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+    expect(decodesLocally({ size: limit, name: 'interview.wav' })).toBe(true)
+    expect(decodesLocally({ size: limit, type: 'audio/ogg' })).toBe(true)
+    expect(decodesLocally({ size: limit, type: 'audio/wav', name: 'a.webm' })).toBe(true)
+    expect(decodesLocally({ size: limit + 1 })).toBe(false)
+    expect(decodesLocally({ size: limit + 1, type: 'audio/webm' }, 60)).toBe(false)
   })
 
   it('does not download remote audio that declares more', async () => {

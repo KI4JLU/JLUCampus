@@ -334,8 +334,8 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   const deleteLabel = t('transcription.recording.deleteRecordingName', { name })
   const confirmLabel = t('transcription.recording.confirmDeleteRecording', { name })
   const cancelLabel = t('transcription.recording.cancelDeleteRecording', { name })
-  // A long meeting is small as Opus, but not decoded.
-  const decoded = decodesLocally(take.file)
+  // A meeting over 20 minutes is not decoded, however small its file.
+  const decoded = decodesLocally(take.file, take.duration)
 
   const download = (): void => {
     const url = URL.createObjectURL(take.file)

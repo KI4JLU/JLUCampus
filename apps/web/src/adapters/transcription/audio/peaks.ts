@@ -62,46 +62,42 @@ export async function decodeWaveform(bytes: ArrayBuffer): Promise<DecodedWavefor
   }
 }
 
-/** Opus or Vorbis, in WebM or Ogg; by the MIME type, else by the file name. */
-const OPUS_TYPE = /^(?:audio|video)\/(?:webm|ogg|opus)\b/i
-const OPUS_NAME = /\.(?:webm|weba|ogg|oga|opus)$/i
+/** WebM, e.g. a meeting recording; by the MIME type, else by the file name. */
+const WEBM_TYPE = /^(?:audio|video)\/webm\b/i
+const WEBM_NAME = /\.(?:webm|weba)$/i
+
+/** The longest WebM decoded here: 20 minutes of mono at 48 kHz are about 230 MB as float32. */
+export const WEBM_DECODE_MAX_SECONDS = 20 * 60
 
 /**
- * How many times its size a meeting recording grows when decoded: Opus at 48 kbit/s decodes to
- * 48 kHz float32, 192 kB a second from 6 kB. Lower bitrates grow more, so this errs on the side of
- * decoding, but an hour-long meeting stays far beyond the limit.
+ * Whether audio is decoded here for its waveform, which holds all of it in memory as float32. Its
+ * bytes stay within `TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES`; WebM, in addition, needs a known
+ * `duration` in seconds of at most `WEBM_DECODE_MAX_SECONDS`: a recording's variable bitrate makes
+ * an hour of quiet meeting smaller than a megabyte. Audio not decoded here shows the waveform the
+ * analysis computed, where there is a job.
  */
-export const OPUS_DECODE_GROWTH = 32
-
-/**
- * Whether audio is decoded here for its waveform: decoding holds all of it in memory as float32,
- * so the estimate of that, not the file size, must stay within
- * `TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES`. Opus in WebM or Ogg is small in bytes but grows about
- * `OPUS_DECODE_GROWTH`-fold; other formats keep the limit on their bytes. Audio not decoded here
- * shows the waveform the analysis computed, where there is a job.
- */
-export function decodesLocally({
-  size,
-  type = '',
-  name = ''
-}: {
-  size: number
-  type?: string
-  name?: string
-}): boolean {
-  const opus = type ? OPUS_TYPE.test(type) : OPUS_NAME.test(name)
-  return size * (opus ? OPUS_DECODE_GROWTH : 1) <= TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+export function decodesLocally(
+  { size, type = '', name = '' }: { size: number; type?: string; name?: string },
+  duration?: number | null
+): boolean {
+  if (size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES) return false
+  const webm = type ? WEBM_TYPE.test(type) : WEBM_NAME.test(name)
+  // Unknown, `Infinity` or `NaN`: not decoded.
+  return !webm || (duration ?? Infinity) <= WEBM_DECODE_MAX_SECONDS
 }
 
 // Decoded per file, so re-rendered lists do not decode again.
 const blobCache = new WeakMap<Blob, Promise<DecodedWaveform | null>>()
 
 /**
- * The waveform of a local file or recording; `null` when it is not decoded here
- * (`decodesLocally`) or cannot be decoded.
+ * The waveform of a local file or recording of `duration` seconds, if known; `null` when it is not
+ * decoded here (`decodesLocally`) or cannot be decoded.
  */
-export function blobWaveform(blob: Blob): Promise<DecodedWaveform | null> {
-  if (!decodesLocally(blob)) return Promise.resolve(null)
+export function blobWaveform(
+  blob: Blob,
+  duration?: number | null
+): Promise<DecodedWaveform | null> {
+  if (!decodesLocally(blob, duration)) return Promise.resolve(null)
   let decoded = blobCache.get(blob)
   if (!decoded) {
     decoded = blob.arrayBuffer().then(decodeWaveform)

@@ -164,7 +164,10 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
           busy: { current: false } as Box<boolean>,
           /** Until the page is left for good. */
           mounted: { current: true } as Box<boolean>,
-          /** The releases of the meeting backups this page holds, by meeting. */
+          /**
+           * The releases of the meeting backups this page holds, by meeting: its takes', and an
+           * uploaded take's until storage has it.
+           */
           meetingLocks: new Map<string, () => void>(),
           /** Whether the backup was searched for leftovers, once per page. */
           scanned: { current: false } as Box<boolean>,
@@ -223,42 +226,20 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   )
 
   /**
-   * Hands a meeting take's backup over to its upload: it stays, held by this page, until storage
-   * has the file and is deleted then. An upload that failed or was dropped lets it go, so the next
-   * visit offers it again; a retry that stores it after all still deletes it, unless another page
-   * took it meanwhile.
+   * Deletes a meeting take's backup, once the take is deleted or its upload stored, and lets go of
+   * it. A page left meanwhile let go already: it claims the backup again, unless another page took
+   * it since.
    */
-  const handOverMeeting = useCallback(
-    (id: string): ((stored: boolean) => void) => {
-      let held = meetingLocks.get(id) ?? null
+  const removeMeeting = useCallback(
+    async (id: string): Promise<void> => {
+      const held = meetingLocks.get(id)
       meetingLocks.delete(id)
-      return (stored) => {
-        const release = held
-        held = null
-        if (!stored) {
-          release?.()
-          return
-        }
-        void (async () => {
-          const own = release ?? (await claimMeetingLock(id))
-          if (!own) return
-          await removeStoredMeeting(meetingsDirectory(), id)
-          own()
-        })()
-      }
+      const release = held ?? (await claimMeetingLock(id))
+      if (!release) return
+      await removeStoredMeeting(meetingsDirectory(), id)
+      release()
     },
     [meetingLocks]
-  )
-
-  /** Deletes the backups of deleted meeting takes. */
-  const forgetMeetings = useCallback(
-    (removed: readonly RecordedTake[]) => {
-      for (const take of removed) {
-        const id = take.meetingId
-        if (id) void removeStoredMeeting(meetingsDirectory(), id).finally(() => unlockMeeting(id))
-      }
-    },
-    [unlockMeeting]
   )
 
   /** Lists the backups no page holds and no take of this page uses. */
@@ -671,30 +652,35 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
 
   const deleteTake = useCallback(
     (id: string) => {
+      const meetingId = takesRef.current.find((take) => take.id === id)?.meetingId
+      if (meetingId) void removeMeeting(meetingId)
       const next = takesRef.current.filter((take) => take.id !== id)
-      forgetMeetings(takesRef.current.filter((take) => take.id === id))
       setTakes(next)
       dispatch({ type: 'takesChanged', takes: next.length })
     },
-    [dispatch, forgetMeetings, setTakes, takesRef]
+    [dispatch, removeMeeting, setTakes, takesRef]
   )
 
   const uploadTakes = useCallback(() => {
     const taken = takesRef.current
     if (taken.length === 0 || busyRef.current) return
-    // A meeting's backup stays until its upload is stored: a refused file, a failed upload or a
-    // reload meanwhile does not lose it.
-    const meetings = new Map<File, (stored: boolean) => void>()
-    for (const take of taken)
-      if (take.meetingId) meetings.set(take.file, handOverMeeting(take.meetingId))
+    // A meeting's backup stays, held by this page, until storage has its upload: a refused file, a
+    // failed upload or leaving the page meanwhile does not lose it. The files are held weakly.
+    const meetings = new WeakMap<File, string>()
+    for (const take of taken) if (take.meetingId) meetings.set(take.file, take.meetingId)
     // One normal group, through the same queue, validation and analysis as picked files.
     enqueueUpload(
       taken.map((take) => take.file),
-      { onSettled: (file, stored) => meetings.get(file)?.(stored) }
+      {
+        onStored: (file) => {
+          const id = meetings.get(file)
+          if (id) void removeMeeting(id)
+        }
+      }
     )
     setTakes([])
     dispatch({ type: 'takesChanged', takes: 0 })
-  }, [busyRef, dispatch, enqueueUpload, handOverMeeting, setTakes, takesRef])
+  }, [busyRef, dispatch, enqueueUpload, removeMeeting, setTakes, takesRef])
 
   const restoreLeftover = useCallback(
     async (id: string): Promise<void> => {

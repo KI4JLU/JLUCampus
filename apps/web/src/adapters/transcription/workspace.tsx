@@ -38,11 +38,8 @@ const FALLBACK_UPLOAD_SETTINGS: UploadSettings = {
   llmCorrection: true
 }
 
-/**
- * How a handed-over file's upload ended: `stored` once storage has its bytes, else refused,
- * failed, removed or never taken into the queue. A failed file may report again after a retry.
- */
-export type UploadSettled = (file: File, stored: boolean) => void
+/** Hears that storage has a handed-over file's bytes; a failed upload says nothing. */
+export type UploadStored = (file: File) => void
 
 /** Files handed to the upload queue from elsewhere, e.g. recorded takes (T-58). */
 export interface PendingUpload {
@@ -50,13 +47,13 @@ export interface PendingUpload {
   files: File[]
   /** Name of the group they form; `null`: the queue's next `Transcript n`. */
   title: string | null
-  onSettled?: UploadSettled
+  onStored?: UploadStored
 }
 
 export interface EnqueueOptions {
   title?: string | null
-  /** Hears how each file's upload ends, e.g. to keep a meeting's backup until then. */
-  onSettled?: UploadSettled
+  /** Hears when each file is stored, e.g. to keep a meeting's backup until then. */
+  onStored?: UploadStored
 }
 
 /**
@@ -141,14 +138,7 @@ export function TranscriptionWorkspaceProvider({
     memory.cell('workspace.historySearch', () => '')
   )
   const [currentDocument, setCurrentDocument] = useState<TranscriptDocument | null>(null)
-  const pendingCell = memory.cell<PendingUpload[]>('workspace.pendingUploads', () => {
-    // Files the queue never took were not uploaded.
-    memory.onDispose(() => {
-      const left = memory.cell<PendingUpload[]>('workspace.pendingUploads', () => []).value
-      for (const pending of left) for (const file of pending.files) pending.onSettled?.(file, false)
-    })
-    return []
-  })
+  const pendingCell = memory.cell<PendingUpload[]>('workspace.pendingUploads', () => [])
   const [pendingUploads, setPendingUploads] = useMemoryCell(pendingCell)
   const beforeLeave = useRef<BeforeLeave | null>(null)
 
@@ -179,11 +169,11 @@ export function TranscriptionWorkspaceProvider({
   }, [mayLeave, setHistorySearch, setResultTab, setTranscriptId, setView])
 
   const enqueueUpload = useCallback(
-    (files: File[], { title = null, onSettled }: EnqueueOptions = {}) => {
+    (files: File[], { title = null, onStored }: EnqueueOptions = {}) => {
       if (files.length === 0) return
       setPendingUploads((current) => [
         ...current,
-        { id: crypto.randomUUID(), files, title, onSettled }
+        { id: crypto.randomUUID(), files, title, onStored }
       ])
       setView('upload')
     },

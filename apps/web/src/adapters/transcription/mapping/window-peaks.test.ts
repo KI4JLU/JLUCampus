@@ -34,6 +34,8 @@ describe('peaksBetween', () => {
 })
 
 describe('the editor’s peaks of large files (T-19)', () => {
+  const wav = { size: 1024, type: 'audio/wav', name: 'interview.wav', duration: null }
+
   it('takes the server’s waveform for a local file above the decode limit', async () => {
     vi.mocked(getJobPeaks).mockResolvedValueOnce({
       perSecond: 20,
@@ -42,24 +44,39 @@ describe('the editor’s peaks of large files (T-19)', () => {
     })
     // A blob claiming its size; its bytes are never read.
     const large = { size: TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1 } as Blob
-    expect(await loadTimePeaks({ blob: large, jobId: 'job-editor' })).toEqual({
+    expect(await loadTimePeaks({ blob: large, jobId: 'job-editor', duration: null })).toEqual({
       peaks: [0, 1],
       duration: 0.1
     })
-    expect(await loadTimePeaks({ blob: large, jobId: null })).toBeNull()
+    expect(await loadTimePeaks({ blob: large, jobId: null, duration: null })).toBeNull()
   })
 
   it('waits for a restored job’s URL only when the server has no waveform', async () => {
     vi.mocked(getJobPeaks).mockResolvedValueOnce(null)
-    expect(await loadTimePeaks({ jobId: 'job-restored', url: null })).toBeNull()
+    expect(await loadTimePeaks({ ...wav, jobId: 'job-restored', url: null })).toBeNull()
     vi.mocked(getJobPeaks).mockResolvedValueOnce({
       perSecond: 20,
       duration: 0.05,
       peaks: btoa(String.fromCharCode(128))
     })
-    expect(await loadTimePeaks({ jobId: 'job-restored-2', url: null })).toEqual({
+    expect(await loadTimePeaks({ ...wav, jobId: 'job-restored-2', url: null })).toEqual({
       peaks: [128 / 255],
       duration: 0.05
     })
+  })
+
+  it('does not download a restored WebM of unknown or long duration', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const meeting = { size: 1024, type: 'audio/webm', name: 'meeting.webm' }
+    vi.mocked(getJobPeaks).mockResolvedValue(null)
+    const url = 'https://storage.example/meeting.webm'
+    expect(
+      await loadTimePeaks({ ...meeting, jobId: 'job-meeting', url, duration: null })
+    ).toBeNull()
+    expect(await loadTimePeaks({ ...meeting, jobId: 'job-long', url, duration: 3600 })).toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
+    vi.mocked(getJobPeaks).mockReset()
+    vi.unstubAllGlobals()
   })
 })

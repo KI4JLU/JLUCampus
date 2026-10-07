@@ -63,7 +63,10 @@ export interface WaveformPlayerProps {
   name?: string
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
-  /** Seconds, for audio that names no duration of its own (recorded WebM) and is not decoded. */
+  /**
+   * Seconds, for audio that names no duration of its own (recorded WebM); WebM is decoded here only
+   * with one (`decodesLocally`).
+   */
   knownDuration?: number
   /**
    * The analysed job of this audio: above the decode limit the waveform the analysis computed is
@@ -103,9 +106,9 @@ function cssColor(element: Element, name: string): string {
  * The audio player the transcription page uses everywhere, after kiChat's `WaveformAudioPlayer`
  * and its global player: play/pause, a waveform that is the seek bar (pointer and keyboard), the
  * time, an optional speaker timeline and a highlighted region. Local files play from an object
- * URL; remote audio from the job's audio URL. Audio that would decode to more than 100 MB (by
- * `decodesLocally`, e.g. a long meeting) is not decoded here: the waveform the analysis computed is
- * drawn (`jobId`), and the audio plays either way.
+ * URL; remote audio from the job's audio URL. Audio `decodesLocally` refuses (too large, or WebM
+ * of unknown or long duration) is not decoded here: the waveform the analysis computed is drawn
+ * (`jobId`), and the audio plays either way.
  */
 export function WaveformPlayer({
   source,
@@ -137,14 +140,11 @@ export function WaveformPlayer({
   const rangeEnd = useRef<number | null>(null)
   const seeking = useRef(false)
   const byteSize = size ?? (source instanceof Blob ? source.size : undefined)
-  const tooLarge =
-    byteSize !== undefined &&
-    !decodesLocally({
-      size: byteSize,
-      type: source instanceof Blob ? source.type : undefined,
-      name
-    })
-  const local = !tooLarge
+  // Remote audio of unknown size is held to the limit while it loads (`urlWaveform`).
+  const local = decodesLocally(
+    { size: byteSize ?? 0, type: source instanceof Blob ? source.type : undefined, name },
+    givenDuration
+  )
   // A waveform decoded for an earlier source no longer counts.
   const waveform = decoded?.source === source ? decoded.waveform : null
 
@@ -173,7 +173,7 @@ export function WaveformPlayer({
         ? jobWaveform(jobId)
         : null
       : source instanceof Blob
-        ? blobWaveform(source)
+        ? blobWaveform(source, givenDuration)
         : urlWaveform(source, controller.signal)
     if (!decoding) return
     void decoding.then((result) => {
@@ -181,7 +181,7 @@ export function WaveformPlayer({
     })
     return () => controller.abort()
     // `jobRevision` only asks again; `jobWaveform` keeps what it found.
-  }, [jobId, jobRevision, local, source])
+  }, [givenDuration, jobId, jobRevision, local, source])
 
   const knownDuration = duration || waveform?.duration || givenDuration || 0
   useEffect(() => {
@@ -404,7 +404,7 @@ export function WaveformPlayer({
           <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" />
         </div>
       </div>
-      {tooLarge && !waveform && !compact ? (
+      {source && !local && !waveform && !compact ? (
         <span>{t('transcription.common.player.waveformUnavailable')}</span>
       ) : null}
       <audio
