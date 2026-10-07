@@ -21,6 +21,7 @@ import {
 import { TRANSCRIPTION_LIVE_FONT_SIZE, type TranscriptionRealtimeMode } from '@justcampus/shared'
 import { cn } from '@/lib/utils'
 import { Notice } from '../notice'
+import { BackupFailedNotice } from '../recording/backup-views'
 import { useRecording } from '../recording/context'
 import { isRecordingBusy } from '../recording/state'
 import { RecordingControls, RecordingStatusCard, RecordingTabs, TakeList } from '../recording/views'
@@ -173,6 +174,7 @@ export function LiveView(): React.JSX.Element {
       ) : live.modes.length === 0 ? (
         <Notice tone="warning">{t('transcription.recording.liveUnavailable')}</Notice>
       ) : null}
+      <BackupFailedNotice />
       {failed || state.status === 'requesting' || state.status === 'stopping' ? (
         <RecordingStatusCard kind="live" />
       ) : null}

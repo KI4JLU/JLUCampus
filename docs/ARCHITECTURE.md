@@ -541,7 +541,7 @@ protocol and lifecycle in the server itself.
   suppression and gain control) into an AudioWorklet (`live/pcm-worklet.ts`) that low-pass filters
   and resamples to the mode's rate and posts 100 ms PCM16 frames (`live/pcm.ts`). Vite builds the
   worklet as an asset of its own (`?worker&url`), so it loads under `script-src 'self'` in the
-  browser, the PWA and the desktop app. The local WAV take records the same stream.
+  browser, the PWA and the desktop app. The local take records the same stream (WebM, in Safari MP4).
 - **Reverse proxy.** It must pass WebSocket upgrades for `/api` (nginx:
   `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`,
   `proxy_set_header Connection $connection_upgrade`) and allow a read timeout above a minute

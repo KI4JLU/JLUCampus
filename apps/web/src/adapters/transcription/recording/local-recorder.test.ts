@@ -11,13 +11,18 @@ const made: FakeRecorder[] = []
 /** A MediaRecorder that, as the browser's, delivers its last chunk and `stop` after `stop()`. */
 class FakeRecorder extends EventTarget {
   state: RecordingState = 'inactive'
-  constructor() {
+  mimeType = ''
+  constructor(
+    _stream: MediaStream,
+    private readonly options: MediaRecorderOptions = {}
+  ) {
     super()
     made.push(this)
   }
-  mimeType = 'audio/webm'
+  /** The browser's own choice where none was asked for, as Firefox's Ogg. */
   start(): void {
     this.state = 'recording'
+    this.mimeType = this.options.mimeType ?? 'audio/ogg;codecs=opus'
   }
   stop(): void {
     this.state = 'inactive'
@@ -53,5 +58,13 @@ describe('startLocalRecorder', () => {
     recorder.stop()
     const blob = await local.stop()
     expect(await blob.text()).toBe('firstlast')
+  })
+
+  it('tells the format the recorder writes once it started', () => {
+    vi.stubGlobal('MediaRecorder', FakeRecorder)
+    expect(
+      startLocalRecorder({} as MediaStream, { mimeType: 'audio/webm;codecs=opus' }).mimeType
+    ).toBe('audio/webm;codecs=opus')
+    expect(startLocalRecorder({} as MediaStream).mimeType).toBe('audio/ogg;codecs=opus')
   })
 })

@@ -1,6 +1,6 @@
 /**
- * The crash backup of meeting recordings in the browser's Origin Private File System: one
- * directory per recording under `transcription-meetings/<id>/` with `meta.json` and numbered
+ * The crash backup of recorded takes in the browser's Origin Private File System: one
+ * directory per take under `transcription-recordings/<id>/` with `meta.json` and numbered
  * chunk files. A writable only commits on `close()`, so every few seconds the recorder's chunks
  * become one closed file; a crash or reload loses at most the last few seconds. The directory
  * stays until its take is uploaded or deleted; what is left over is offered again on the next
@@ -8,15 +8,15 @@
  * (or discards) a recording that is running or kept there.
  */
 
-export const MEETINGS_DIRECTORY = 'transcription-meetings'
+export const BACKUP_DIRECTORY = 'transcription-recordings'
 export const META_FILE = 'meta.json'
 
 /** About five seconds of audio at the recorder's one-second chunks. */
 export const CHUNKS_PER_FILE = 5
 
-const LOCK_PREFIX = 'justcampus-transcription-meeting:'
+const LOCK_PREFIX = 'justcampus-transcription-recording:'
 
-export interface MeetingMeta {
+export interface BackupMeta {
   id: string
   /** Milliseconds since the epoch. */
   startedAt: number
@@ -41,8 +41,8 @@ export interface StoreDirectory {
   keys: () => AsyncIterable<string>
 }
 
-/** A leftover recording as the meeting tab offers it. */
-export interface StoredMeeting extends MeetingMeta {
+/** A leftover recording as the record tab offers it. */
+export interface StoredRecording extends BackupMeta {
   /** Bytes of all chunks. */
   size: number
   chunks: number
@@ -50,18 +50,21 @@ export interface StoredMeeting extends MeetingMeta {
   duration: number | null
 }
 
-/** `chunk-000000.webm`: zero-padded, so the names sort in recording order. */
+/**
+ * `chunk-000000.part`: zero-padded, so the names sort in recording order. The parts are in the
+ * recorder's format, named in `meta.json`.
+ */
 export function chunkName(index: number): string {
-  return `chunk-${String(index).padStart(6, '0')}.webm`
+  return `chunk-${String(index).padStart(6, '0')}.part`
 }
 
 export function isChunkName(name: string): boolean {
-  return /^chunk-\d{6}\.webm$/.test(name)
+  return /^chunk-\d{6}\.part$/.test(name)
 }
 
-export function parseMeetingMeta(text: string): MeetingMeta | null {
+export function parseBackupMeta(text: string): BackupMeta | null {
   try {
-    const value = JSON.parse(text) as Partial<MeetingMeta> | null
+    const value = JSON.parse(text) as Partial<BackupMeta> | null
     if (
       typeof value?.id === 'string' &&
       typeof value.startedAt === 'number' &&
@@ -83,13 +86,13 @@ export function parseMeetingMeta(text: string): MeetingMeta | null {
 let root: Promise<StoreDirectory | null> | null = null
 
 /** The backup's directory; `null` where the browser has no OPFS or refuses it. */
-export function meetingsDirectory(): Promise<StoreDirectory | null> {
+export function backupDirectory(): Promise<StoreDirectory | null> {
   root ??= (async () => {
     try {
       const storage = typeof navigator === 'undefined' ? undefined : navigator.storage
       if (!storage?.getDirectory) return null
       const origin = (await storage.getDirectory()) as unknown as StoreDirectory
-      return await origin.getDirectoryHandle(MEETINGS_DIRECTORY, { create: true })
+      return await origin.getDirectoryHandle(BACKUP_DIRECTORY, { create: true })
     } catch {
       return null
     }
@@ -108,7 +111,7 @@ async function writeFile(
   await writable.close()
 }
 
-export interface MeetingJournal {
+export interface BackupJournal {
   /** One recorder chunk; every `CHUNKS_PER_FILE` of them are written as one file. */
   add: (chunk: Blob) => void
   /** Writes what is pending and waits for every write; never rejects. */
@@ -118,15 +121,16 @@ export interface MeetingJournal {
 /**
  * Backs one recording up while it runs. Writes run one after another through one promise chain.
  * Batches follow the recorder's chunks rather than a timer, since Chrome throttles timers of a
- * tab in the background, which is where this tab is during a meeting. The first failure (no OPFS,
- * quota, a refused write) ends the backup and calls `onFailure` once; the recording goes on.
+ * tab in the background, which is where this tab is while another tab's meeting is recorded. The
+ * first failure (no OPFS, quota, a refused write) ends the backup and calls `onFailure` once; the
+ * recording goes on.
  */
-export function createMeetingJournal(
+export function createBackupJournal(
   directory: Promise<StoreDirectory | null>,
-  meta: MeetingMeta,
+  meta: BackupMeta,
   onFailure: () => void,
   chunksPerFile = CHUNKS_PER_FILE
-): MeetingJournal {
+): BackupJournal {
   let failed = false
   let index = 0
   let pending: Blob[] = []
@@ -184,28 +188,28 @@ async function chunkNames(folder: StoreDirectory): Promise<string[]> {
  * Every recording in the backup that `skip` does not name, oldest first. Directories without a
  * readable `meta.json` are left alone.
  */
-export async function listStoredMeetings(
+export async function listStoredRecordings(
   directory: StoreDirectory,
   skip: ReadonlySet<string> = new Set()
-): Promise<StoredMeeting[]> {
+): Promise<StoredRecording[]> {
   const ids: string[] = []
   for await (const id of directory.keys()) if (!skip.has(id)) ids.push(id)
-  const meetings: StoredMeeting[] = []
+  const recordings: StoredRecording[] = []
   for (const id of ids) {
-    const meeting = await readMeetingInfo(directory, id)
-    if (meeting) meetings.push(meeting)
+    const recording = await readStoredInfo(directory, id)
+    if (recording) recordings.push(recording)
   }
-  return meetings.sort((a, b) => a.startedAt - b.startedAt)
+  return recordings.sort((a, b) => a.startedAt - b.startedAt)
 }
 
 /** One recording as offered; `null` when it is gone or has no readable `meta.json`. */
-export async function readMeetingInfo(
+export async function readStoredInfo(
   directory: StoreDirectory,
   id: string
-): Promise<StoredMeeting | null> {
+): Promise<StoredRecording | null> {
   try {
     const folder = await directory.getDirectoryHandle(id)
-    const meta = parseMeetingMeta(
+    const meta = parseBackupMeta(
       await (await (await folder.getFileHandle(META_FILE)).getFile()).text()
     )
     if (!meta || meta.id !== id) return null
@@ -230,12 +234,13 @@ export async function readMeetingInfo(
 }
 
 /**
- * The recording's chunks as one WebM blob, in order. The bytes are copied into memory: a blob
- * backed by an OPFS file cannot be read once the backup is removed, and the upload reads later.
+ * The recording's chunks as one blob in the recorder's format, in order. The bytes are copied into
+ * memory: a blob backed by an OPFS file cannot be read once the backup is removed, and the upload
+ * reads later.
  */
-export async function readStoredMeeting(directory: StoreDirectory, id: string): Promise<Blob> {
+export async function readStoredRecording(directory: StoreDirectory, id: string): Promise<Blob> {
   const folder = await directory.getDirectoryHandle(id)
-  const meta = parseMeetingMeta(
+  const meta = parseBackupMeta(
     await (await (await folder.getFileHandle(META_FILE)).getFile()).text()
   )
   const parts: ArrayBuffer[] = []
@@ -245,7 +250,7 @@ export async function readStoredMeeting(directory: StoreDirectory, id: string): 
 }
 
 /** Removes a recording from the backup; one that is gone already counts as removed. */
-export async function removeStoredMeeting(
+export async function removeStoredRecording(
   directory: Promise<StoreDirectory | null>,
   id: string
 ): Promise<void> {
@@ -261,7 +266,7 @@ export async function removeStoredMeeting(
  * granted asynchronously: `held` resolves once it is, and the backup's first write waits for it,
  * so another tab never sees the new directory unlocked.
  */
-export function holdMeetingLock(id: string): { held: Promise<void>; release: () => void } {
+export function holdBackupLock(id: string): { held: Promise<void>; release: () => void } {
   const lock = holdLock(id, false)
   return { held: lock.acquired.then(() => undefined), release: lock.release }
 }
@@ -270,7 +275,7 @@ export function holdMeetingLock(id: string): { held: Promise<void>; release: () 
  * Takes the recording's lock if no page holds it: the release, else `null`. Without Web Locks
  * every recording counts as free.
  */
-export async function claimMeetingLock(id: string): Promise<(() => void) | null> {
+export async function claimBackupLock(id: string): Promise<(() => void) | null> {
   const lock = holdLock(id, true)
   return (await lock.acquired) ? lock.release : null
 }
@@ -299,7 +304,7 @@ function holdLock(
 }
 
 /** The recordings some page holds, in any tab of this browser profile. */
-export async function heldMeetingIds(): Promise<Set<string>> {
+export async function heldBackupIds(): Promise<Set<string>> {
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
   if (!locks) return new Set()
   try {

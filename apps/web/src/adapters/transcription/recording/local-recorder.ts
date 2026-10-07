@@ -1,10 +1,12 @@
-/** A MediaRecorder on a microphone (or meeting) stream, collecting its chunks in memory. */
+/** A MediaRecorder on a microphone or mixed stream, collecting its chunks in memory. */
 export interface LocalRecorder {
+  /** What the recorder writes, as it named it on starting; `''` if it named nothing. */
+  mimeType: string
   /** Waits for the last chunk and returns the recording in the browser's own format. */
   stop: () => Promise<Blob>
   /**
    * Drops what was recorded, e.g. when the page goes away. Resolves once the recorder ended: its
-   * last chunk still goes to `onChunk`, so a meeting's backup gets it.
+   * last chunk still goes to `onChunk`, so the take's backup gets it.
    */
   discard: () => Promise<void>
 }
@@ -16,13 +18,13 @@ export interface LocalRecorderOptions {
   /** The browser's own format when left out. */
   mimeType?: string
   audioBitsPerSecond?: number
-  /** Every chunk as it arrives, e.g. to back a meeting up in the browser's storage. */
+  /** Every chunk as it arrives, e.g. to back the take up in the browser's storage. */
   onChunk?: (chunk: Blob) => void
 }
 
 /**
- * Records `stream` locally (T-56, T-57). Regular recording, live transcription and meetings share
- * it: live transcription records the stream it sends, so a stopped session also yields a take.
+ * Records `stream` locally (T-56, T-57). Regular recording records its mix; live transcription
+ * records the stream it sends, so a stopped session also yields a take.
  */
 export function startLocalRecorder(
   stream: MediaStream,
@@ -56,6 +58,7 @@ export function startLocalRecorder(
   let stopping: Promise<Blob> | null = null
 
   return {
+    mimeType: recorder.mimeType || mimeType || '',
     stop: () => {
       stopping ??= end().then(() => new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }))
       return stopping

@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   chunkName,
-  createMeetingJournal,
+  createBackupJournal,
   isChunkName,
-  listStoredMeetings,
+  listStoredRecordings,
   META_FILE,
-  parseMeetingMeta,
-  readStoredMeeting,
-  removeStoredMeeting,
-  type MeetingMeta,
+  parseBackupMeta,
+  readStoredRecording,
+  removeStoredRecording,
+  type BackupMeta,
   type StoreDirectory,
   type StoreFile
-} from './meeting-store'
+} from './backup-store'
 
 /** An in-memory OPFS directory: files commit on `close`, as in the browser. */
 class FakeDirectory implements StoreDirectory {
@@ -67,7 +67,7 @@ class FakeDirectory implements StoreDirectory {
   }
 }
 
-const meta: MeetingMeta = {
+const meta: BackupMeta = {
   id: 'm1',
   startedAt: 1_000_000,
   filename: 'max-20261007-100000.webm',
@@ -78,8 +78,8 @@ const chunk = (text: string): Blob => new Blob([text])
 
 describe('chunk names', () => {
   it('pads the index so the names sort in recording order', () => {
-    expect(chunkName(0)).toBe('chunk-000000.webm')
-    expect(chunkName(12)).toBe('chunk-000012.webm')
+    expect(chunkName(0)).toBe('chunk-000000.part')
+    expect(chunkName(12)).toBe('chunk-000012.part')
     expect([chunkName(10), chunkName(9), chunkName(100)].sort()).toEqual([
       chunkName(9),
       chunkName(10),
@@ -87,27 +87,27 @@ describe('chunk names', () => {
     ])
     expect(isChunkName(chunkName(3))).toBe(true)
     expect(isChunkName(META_FILE)).toBe(false)
-    expect(isChunkName('chunk-1.webm.crswap')).toBe(false)
+    expect(isChunkName('chunk-000001.part.crswap')).toBe(false)
   })
 })
 
-describe('parseMeetingMeta', () => {
+describe('parseBackupMeta', () => {
   it('reads valid metadata and refuses anything else', () => {
-    expect(parseMeetingMeta(JSON.stringify(meta))).toEqual(meta)
-    expect(parseMeetingMeta('{"id":"m1"}')).toBeNull()
-    expect(parseMeetingMeta('not json')).toBeNull()
-    expect(parseMeetingMeta('null')).toBeNull()
+    expect(parseBackupMeta(JSON.stringify(meta))).toEqual(meta)
+    expect(parseBackupMeta('{"id":"m1"}')).toBeNull()
+    expect(parseBackupMeta('not json')).toBeNull()
+    expect(parseBackupMeta('null')).toBeNull()
   })
 })
 
-describe('createMeetingJournal', () => {
+describe('createBackupJournal', () => {
   it('writes the metadata, then every few chunks as one closed file', async () => {
     const root = new FakeDirectory()
-    const journal = createMeetingJournal(Promise.resolve(root), meta, () => undefined, 2)
+    const journal = createBackupJournal(Promise.resolve(root), meta, () => undefined, 2)
     for (const text of ['a', 'b', 'c', 'd', 'e']) journal.add(chunk(text))
     await journal.close()
     const folder = root.folders.get('m1')!
-    expect(parseMeetingMeta(await folder.files.get(META_FILE)!.text())).toEqual(meta)
+    expect(parseBackupMeta(await folder.files.get(META_FILE)!.text())).toEqual(meta)
     expect(await folder.files.get(chunkName(0))!.text()).toBe('ab')
     expect(await folder.files.get(chunkName(1))!.text()).toBe('cd')
     // `close` writes what is left.
@@ -118,7 +118,7 @@ describe('createMeetingJournal', () => {
     const root = new FakeDirectory()
     root.failing.add(chunkName(1))
     let failures = 0
-    const journal = createMeetingJournal(Promise.resolve(root), meta, () => failures++, 1)
+    const journal = createBackupJournal(Promise.resolve(root), meta, () => failures++, 1)
     for (const text of ['a', 'b', 'c']) journal.add(chunk(text))
     await journal.close()
     expect(failures).toBe(1)
@@ -127,16 +127,16 @@ describe('createMeetingJournal', () => {
 
   it('reports a missing storage without throwing', async () => {
     let failures = 0
-    const journal = createMeetingJournal(Promise.resolve(null), meta, () => failures++, 1)
+    const journal = createBackupJournal(Promise.resolve(null), meta, () => failures++, 1)
     journal.add(chunk('a'))
     await expect(journal.close()).resolves.toBeUndefined()
     expect(failures).toBe(1)
   })
 })
 
-describe('stored meetings', () => {
+describe('stored recordings', () => {
   async function stored(root: FakeDirectory, at: number, id = meta.id): Promise<void> {
-    const journal = createMeetingJournal(
+    const journal = createBackupJournal(
       Promise.resolve(root),
       { ...meta, id, startedAt: at },
       () => undefined,
@@ -156,7 +156,7 @@ describe('stored meetings', () => {
     await stored(root, 1_000_000, 'earlier')
     await stored(root, 3_000_000, 'held')
     await root.getDirectoryHandle('broken', { create: true })
-    const list = await listStoredMeetings(root, new Set(['held']))
+    const list = await listStoredRecordings(root, new Set(['held']))
     expect(list.map((entry) => entry.id)).toEqual(['earlier', 'later'])
     expect(list[0]).toMatchObject({ size: 13, chunks: 3, duration: 61 })
   })
@@ -164,12 +164,12 @@ describe('stored meetings', () => {
   it('reads the chunks in order into one blob and removes the folder', async () => {
     const root = new FakeDirectory()
     await stored(root, 1_000_000)
-    const blob = await readStoredMeeting(root, meta.id)
+    const blob = await readStoredRecording(root, meta.id)
     expect(await blob.text()).toBe('one-two-three')
     expect(blob.type).toBe(meta.mimeType)
-    await removeStoredMeeting(Promise.resolve(root), meta.id)
+    await removeStoredRecording(Promise.resolve(root), meta.id)
     expect(root.folders.size).toBe(0)
     // Removing again is no error.
-    await expect(removeStoredMeeting(Promise.resolve(root), meta.id)).resolves.toBeUndefined()
+    await expect(removeStoredRecording(Promise.resolve(root), meta.id)).resolves.toBeUndefined()
   })
 })

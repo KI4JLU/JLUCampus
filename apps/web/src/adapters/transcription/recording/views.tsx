@@ -8,7 +8,6 @@ import {
   SquareIcon,
   Trash2Icon,
   UploadIcon,
-  UsersIcon,
   XIcon
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -39,10 +38,12 @@ import {
 import { decodesLocally, formatTime, WaveformPlayer } from '../audio'
 import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
+import { BackupFailedNotice, LeftoverNotices } from './backup-views'
 import { useRecording, type RecordedTake } from './context'
 import { DEFAULT_DEVICE_ID } from './devices'
 import { useElapsedSeconds, useRecordingStatusTexts } from './hooks'
-import { isRecordingBusy, type RecordingKind } from './state'
+import { AddSourceMenu, SourceList, SourceNotices } from './source-views'
+import { areSourcesLocked, isRecordingBusy, type RecordingKind } from './state'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 
@@ -50,9 +51,9 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 const DEFAULT_OPTION = '__default__'
 
 /**
- * Regular recording, live transcription and meetings as tabs of one work area, as in kiChat. While
- * something records, the other tabs stay closed; live transcription needs a live mode, recording
- * and meetings need speech recognition to upload to.
+ * Regular recording and live transcription as tabs of one work area, as in kiChat. While something
+ * records, the other tab stays closed; live transcription needs a live mode, recording needs
+ * speech recognition to upload to.
  */
 export function RecordingTabs({
   current,
@@ -75,11 +76,6 @@ export function RecordingTabs({
       kind: 'live',
       label: t('transcription.common.tabLiveTranscription'),
       available: (capabilities?.realtimeModes.length ?? 0) > 0
-    },
-    {
-      kind: 'meeting',
-      label: t('transcription.recording.meeting.tab'),
-      available: capabilities?.batch ?? false
     }
   ]
 
@@ -115,13 +111,13 @@ function KindIcon({
   kind: RecordingKind
   className: string
 }): React.JSX.Element {
-  const Icon = kind === 'live' ? RadioIcon : kind === 'meeting' ? UsersIcon : MicIcon
+  const Icon = kind === 'live' ? RadioIcon : MicIcon
   return <Icon aria-hidden="true" className={className} />
 }
 
 /** Title and hint of the recording state (kiChat's status in the middle of the card). */
 export function RecordingStatusCard({ kind }: { kind: RecordingKind }): React.JSX.Element {
-  const texts = useRecordingStatusTexts(kind)
+  const texts = useRecordingStatusTexts()
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-stack-md py-12 text-center">
@@ -159,7 +155,10 @@ function ElapsedBadge(): React.JSX.Element | null {
   )
 }
 
-/** The shared microphone choice (T-55): default input first, locked while busy. */
+/**
+ * The main microphone (T-55): default input first. Regular recording swaps it while it runs; it is
+ * locked while a take starts or ends, and while live transcription runs.
+ */
 export function DeviceSelect({
   id,
   compact = false
@@ -169,8 +168,7 @@ export function DeviceSelect({
   compact?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const { state, microphones } = useRecording()
-  const busy = isRecordingBusy(state.status)
+  const { state, microphones, selectMicrophone } = useRecording()
   const unavailable =
     microphones.list === 'loading'
       ? compact
@@ -195,11 +193,9 @@ export function DeviceSelect({
   const value = microphones.selected === DEFAULT_DEVICE_ID ? DEFAULT_OPTION : microphones.selected
   return (
     <Select
-      disabled={busy}
+      disabled={areSourcesLocked(state)}
       value={value}
-      onValueChange={(next) =>
-        microphones.select(next === DEFAULT_OPTION ? DEFAULT_DEVICE_ID : next)
-      }
+      onValueChange={(next) => selectMicrophone(next === DEFAULT_OPTION ? DEFAULT_DEVICE_ID : next)}
     >
       <SelectTrigger id={id}>
         <SelectValue />
@@ -218,31 +214,26 @@ export function DeviceSelect({
   )
 }
 
-/** Start and stop, uploading the takes, and the microphone (kiChat's bar under the card). */
+/**
+ * Start and stop, uploading the takes, and the microphone (kiChat's bar under the card); regular
+ * recording adds and lists its other sources beside the microphone.
+ */
 export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.Element {
   const { t } = useTranslation()
   const { capabilities } = useTranscriptionWorkspace()
-  const { state, takes, start, stop, uploadTakes, live, meeting } = useRecording()
+  const { state, takes, start, stop, uploadTakes, live } = useRecording()
   const id = useId()
   const status = state.status
   const running = status === 'recording'
   const pending = status === 'requesting' || status === 'stopping'
-  // A meeting starts only where tab audio can be shared, and after everyone agreed.
-  const unavailable =
-    kind === 'live'
-      ? live.mode === null
-      : kind === 'meeting'
-        ? meeting.support !== 'supported' || !meeting.consented
-        : false
+  const unavailable = kind === 'live' && live.mode === null
   const batch = capabilities?.batch ?? false
   const label = running
     ? t('transcription.recording.stopRecording')
     : status === 'requesting'
       ? state.step === 'connecting'
         ? t('transcription.recording.connecting')
-        : state.step === 'display'
-          ? t('transcription.recording.meeting.selectTab')
-          : t('transcription.recording.grantMicrophone')
+        : t('transcription.recording.grantMicrophone')
       : status === 'stopping'
         ? t('transcription.recording.recordingStopping')
         : t('transcription.recording.startRecording')
@@ -280,17 +271,24 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
             </Button>
           ) : null}
         </div>
-        <div className="flex min-w-56 flex-1 flex-col gap-1 sm:max-w-sm">
+        <div className="flex min-w-56 flex-1 flex-col gap-2 sm:max-w-sm">
           <Label htmlFor={`${id}-device`} className="sr-only">
             {t('transcription.recording.microphone')}
           </Label>
-          <DeviceSelect id={`${id}-device`} />
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <DeviceSelect id={`${id}-device`} />
+            </div>
+            {kind === 'record' ? <AddSourceMenu /> : null}
+          </div>
+          {kind === 'record' ? <SourceList /> : null}
         </div>
         {!batch && takes.length > 0 ? (
           <p id={`${id}-upload-hint`} className="m-0 basis-full">
             {t('transcription.recording.uploadUnavailable')}
           </p>
         ) : null}
+        {kind === 'record' ? <SourceNotices /> : null}
       </CardContent>
     </Card>
   )
@@ -334,7 +332,7 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   const deleteLabel = t('transcription.recording.deleteRecordingName', { name })
   const confirmLabel = t('transcription.recording.confirmDeleteRecording', { name })
   const cancelLabel = t('transcription.recording.cancelDeleteRecording', { name })
-  // A meeting over 20 minutes is not decoded, however small its file.
+  // WebM over 20 minutes is not decoded, however small its file.
   const decoded = decodesLocally(take.file, take.duration)
 
   const download = (): void => {
@@ -361,9 +359,7 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
     <li className="flex flex-wrap items-center gap-stack-sm">
       <div className="flex min-w-64 flex-1 flex-col gap-1">
         <WaveformPlayer source={take.file} name={name} knownDuration={take.duration} />
-        {decoded ? null : (
-          <p className="m-0">{t('transcription.recording.meeting.waveformSkipped')}</p>
-        )}
+        {decoded ? null : <p className="m-0">{t('transcription.recording.waveformSkipped')}</p>}
       </div>
       <div className="flex items-center gap-1">
         <IconButton label={downloadLabel} onClick={download}>
@@ -435,10 +431,15 @@ function IconButton({
   )
 }
 
-/** The work area of the `record` view, with the tab to live transcription (T-56 to T-58). */
+/**
+ * The work area of the `record` view, with the tab to live transcription (T-56 to T-58), and the
+ * recordings a crash left in the backup.
+ */
 export function RecordView(): React.JSX.Element {
   return (
     <RecordingTabs current="record">
+      <LeftoverNotices />
+      <BackupFailedNotice />
       <RecordingStatusCard kind="record" />
       <RecordingControls kind="record" />
       <TakeList />
@@ -446,16 +447,14 @@ export function RecordView(): React.JSX.Element {
   )
 }
 
-/** The side column of the `record` view: the status and the microphone, as in kiChat. */
-export function RecordingSettings({
-  kind = 'record'
-}: {
-  /** The view's tab, for its status at rest. */
-  kind?: RecordingKind
-}): React.JSX.Element {
+/**
+ * The side column of the `record` view: the status and the microphone, as in kiChat, with the
+ * other sources.
+ */
+export function RecordingSettings(): React.JSX.Element {
   const { t } = useTranslation()
   const id = useId()
-  const texts = useRecordingStatusTexts(kind)
+  const texts = useRecordingStatusTexts()
   return (
     <>
       <PanelSection title={t('transcription.common.statusLabel')}>
@@ -471,7 +470,13 @@ export function RecordingSettings({
       <PanelSection
         title={<Label htmlFor={`${id}-device`}>{t('transcription.recording.microphone')}</Label>}
       >
-        <DeviceSelect id={`${id}-device`} compact />
+        <div className="flex items-center gap-1">
+          <div className="min-w-0 flex-1">
+            <DeviceSelect id={`${id}-device`} compact />
+          </div>
+          <AddSourceMenu />
+        </div>
+        <SourceList />
       </PanelSection>
     </>
   )

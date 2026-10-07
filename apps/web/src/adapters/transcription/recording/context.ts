@@ -1,39 +1,55 @@
 import { createContext, useContext } from 'react'
 import type { TranscriptionRealtimeConfig, TranscriptionRealtimeMode } from '@justcampus/shared'
-import type { MeetingSupport } from './meeting-capture'
-import type { StoredMeeting } from './meeting-store'
+import type { StoredRecording } from './backup-store'
+import type { MicrophoneChoice } from './devices'
+import type { DisplaySupport } from './display-capture'
+import type { RecordingSource, SourceAnnouncement } from './sources'
 import type { RecordingKind, RecordingState } from './state'
 import type { Microphones } from './use-microphones'
 
 /**
- * One recorded take, kept in memory (T-57): a real WAV file, or a meeting's WebM file, which is
- * also backed up in the browser's storage until it is uploaded or deleted.
+ * One recorded take, kept in memory (T-57) in the recorder's own format, and backed up in the
+ * browser's storage until it is uploaded or deleted.
  */
 export interface RecordedTake {
   id: string
   file: File
   /** Seconds, from the recording's running time; recorded WebM names no duration of its own. */
   duration?: number
-  /** The meeting's backup in the browser (`meeting-store.ts`). */
-  meetingId?: string
+  /** The take's backup in the browser (`backup-store.ts`); none for a take that failed it. */
+  backupId?: string
 }
 
-/** The meeting tab: tab audio and microphone, mixed into one take. */
-export interface MeetingRecording {
-  support: MeetingSupport
-  /** Everyone in the meeting agreed; asked again for every recording. */
-  consented: boolean
-  setConsented: (consented: boolean) => void
-  /** The backup in the browser failed for the running or last meeting; the take is complete. */
-  backupFailed: boolean
+/** The crash backup of the takes (`backup-store.ts`). */
+export interface RecordingBackup {
+  /** The backup in the browser failed for the running or last take; the take is complete. */
+  failed: boolean
   /** Recordings a crash, reload or leaving the page left in the backup. */
-  leftovers: readonly StoredMeeting[]
+  leftovers: readonly StoredRecording[]
   /** Adds a leftover to the takes. */
   restore: (id: string) => Promise<void>
   /** Deletes a leftover from the backup. */
   discard: (id: string) => Promise<void>
   /** Why the last restore or discard failed. */
   leftoverError: string | null
+}
+
+/** What regular recording mixes besides the main microphone, and adding to it. */
+export interface RecordingSources {
+  list: readonly RecordingSource[]
+  /** The last change, for a polite announcement; an ended source also shows a notice. */
+  announcement: SourceAnnouncement | null
+  dismissAnnouncement: () => void
+  /** Why the last source could not be added or opened. */
+  error: string | null
+  /** Whether a tab, window or screen can be shared here. */
+  displaySupport: DisplaySupport
+  /** Input devices that are neither the main microphone nor added. */
+  addableMicrophones: readonly MicrophoneChoice[]
+  addMicrophone: (choice: MicrophoneChoice) => void
+  /** Opens the browser's picker; call it straight from the click. */
+  addDisplay: () => void
+  remove: (id: string) => void
 }
 
 /** How the live transcript is shown (T-61). None of it changes the text. */
@@ -65,8 +81,11 @@ export interface LiveTranscription {
 export interface Recording {
   state: RecordingState
   microphones: Microphones
+  /** Chooses the main microphone; while regular recording runs, it is swapped in the mix. */
+  selectMicrophone: (deviceId: string) => void
+  sources: RecordingSources
   takes: readonly RecordedTake[]
-  /** Starts regular recording, live transcription or a meeting; ignored while busy. */
+  /** Starts regular recording or live transcription; ignored while busy. */
   start: (kind: RecordingKind) => Promise<void>
   /** Stops what runs; repeated calls join the first. */
   stop: () => Promise<void>
@@ -74,13 +93,13 @@ export interface Recording {
   /** Hands every take to the upload queue as one group and clears the list (T-58). */
   uploadTakes: () => void
   live: LiveTranscription
-  meeting: MeetingRecording
+  backup: RecordingBackup
 }
 
 /** Provided by `RecordingProvider`. */
 export const RecordingContext = createContext<Recording | null>(null)
 
-/** Microphone, takes and live session of the transcription page; only inside `RecordingProvider`. */
+/** Sources, takes and live session of the transcription page; only inside `RecordingProvider`. */
 export function useRecording(): Recording {
   const recording = useContext(RecordingContext)
   if (!recording) throw new Error('useRecording outside RecordingProvider')

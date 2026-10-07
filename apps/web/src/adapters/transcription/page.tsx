@@ -10,13 +10,7 @@ import { ChoiceView } from './choice'
 import { ExportSettings } from './export'
 import { HistorySection } from './history'
 import { LiveSettings, LiveView } from './live'
-import {
-  MeetingSettings,
-  MeetingView,
-  RecordingProvider,
-  RecordingSettings,
-  RecordView
-} from './recording'
+import { RecordingProvider, RecordingSettings, RecordView } from './recording'
 import { ResultTools, ResultView } from './result'
 import { Notice } from './notice'
 import { UploadProvider, UploadSettings, UploadView } from './upload'
@@ -25,9 +19,9 @@ import { TranscriptionWorkspaceProvider } from './workspace'
 
 /**
  * The transcription module's page, after kiChat's transcription service: the work area shows the
- * entry choice, the upload queue, recording, live transcription, a meeting recording or a saved
- * transcript; the settings of that view and the history sit in the shell's column on the right
- * from `lg` up, and in a card below the work area on narrow screens.
+ * entry choice, the upload queue, recording, live transcription or a saved transcript; the
+ * settings of that view and the history sit in the shell's column on the right from `lg` up, and
+ * in a card below the work area on narrow screens.
  */
 export function TranscriptionPage({
   component
@@ -122,8 +116,6 @@ function WorkArea(): React.JSX.Element | null {
       return <RecordView />
     case 'live':
       return <LiveView />
-    case 'meeting':
-      return <MeetingView />
     case 'result':
       return transcriptId ? <ResultView key={transcriptId} /> : <ChoiceView />
   }
@@ -148,8 +140,6 @@ function ViewSettings(): React.JSX.Element | null {
       return <RecordingSettings />
     case 'live':
       return <LiveSettings />
-    case 'meeting':
-      return <MeetingSettings />
     case 'result':
       return resultTab === 'export' ? <ExportSettings /> : <ResultTools />
     case 'choice':
