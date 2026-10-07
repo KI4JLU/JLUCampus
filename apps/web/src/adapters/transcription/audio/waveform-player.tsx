@@ -20,7 +20,7 @@ import {
 import { cn } from '@/lib/utils'
 import { drawWaveform, segmentTitle, type WaveformColors } from './draw'
 import { playExclusively } from './exclusive'
-import { sourceLength, type MediaLength } from './length'
+import { nextLoad, sourceLength, type MediaLength, type SourceLoad } from './length'
 import {
   blobWaveform,
   formatMegabytes,
@@ -152,10 +152,17 @@ export function WaveformPlayer({
     source: Blob | string
     waveform: DecodedWaveform | null
   } | null>(null)
-  /** What the media reported for the source it loaded; an earlier source's no longer counts. */
+  /**
+   * The audio element's current load, a new one with every change of the source, clearing it
+   * too: what an earlier load reported no longer counts, also when its source comes back.
+   */
+  const [load, setLoad] = useState<SourceLoad>({ source, id: 0 })
+  const currentLoad = nextLoad(load, source)
+  if (currentLoad !== load) setLoad(currentLoad)
+  /** What the media reported in a load; `null` while the element loads anew. */
   const [media, setMedia] = useState<MediaLength | null>(null)
-  /** The source the audio element was last given, which its metadata belongs to. */
-  const loading = useRef<Blob | string | null>(null)
+  /** The load the audio element was last given, which its metadata belongs to. */
+  const loading = useRef(0)
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const rangeEnd = useRef<number | null>(null)
@@ -175,18 +182,19 @@ export function WaveformPlayer({
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    loading.current = source
-    if (!source) {
+    const { source: loaded, id } = load
+    loading.current = id
+    if (!loaded) {
       audio.removeAttribute('src')
       audio.load()
       return
     }
-    const url = source instanceof Blob ? URL.createObjectURL(source) : source
+    const url = loaded instanceof Blob ? URL.createObjectURL(loaded) : loaded
     audio.src = url
     return () => {
-      if (source instanceof Blob) URL.revokeObjectURL(url)
+      if (loaded instanceof Blob) URL.revokeObjectURL(url)
     }
-  }, [source])
+  }, [load])
 
   useEffect(() => {
     if (!source || external) return
@@ -207,7 +215,12 @@ export function WaveformPlayer({
     // `jobRevision` only asks again; `jobWaveform` keeps what it found.
   }, [jobId, jobRevision, source, tooLarge, external])
 
-  const knownDuration = sourceLength(source, media, waveform?.duration, timeline?.sourceDuration)
+  const knownDuration = sourceLength(
+    currentLoad,
+    media,
+    waveform?.duration,
+    timeline?.sourceDuration
+  )
   useEffect(() => {
     if (knownDuration > 0) onDuration?.(knownDuration)
   }, [knownDuration, onDuration])
@@ -462,11 +475,12 @@ export function WaveformPlayer({
         preload="metadata"
         hidden
         onEmptied={() => setTime(0)}
+        // The same source loaded again (`load()`, e.g. after an error) reports its length anew.
+        onLoadStart={() => setMedia(null)}
         onLoadedMetadata={(event) => {
           // Recordings may report Infinity; the decoded waveform's duration covers them, or the
           // time line's length of this file (`sourceLength`).
-          const loaded = loading.current
-          if (loaded) setMedia({ source: loaded, duration: event.currentTarget.duration })
+          setMedia({ load: loading.current, duration: event.currentTarget.duration })
         }}
         onTimeUpdate={(event) => {
           setTime(event.currentTarget.currentTime)

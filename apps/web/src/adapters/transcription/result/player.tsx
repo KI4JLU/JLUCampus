@@ -158,6 +158,20 @@ export function GlobalPlayer({
     setIndex(target)
   }, [])
 
+  /**
+   * Fetches the playing file's audio URL anew; a waiting action applies once its audio reported
+   * its length again (`onDuration`). The backend's URLs stay the same, and the element does not
+   * load an unchanged source by itself, so it is told to.
+   */
+  const reload = useCallback(async () => {
+    const before = media?.url
+    const result = await refetchAudio()
+    const element = wave.current?.audio()
+    if (!before || result.isError || result.data?.url !== before) return
+    // Unless another file was loaded meanwhile.
+    if (element?.getAttribute('src') === before) element.load()
+  }, [media, refetchAudio])
+
   const go = useCallback(
     (global: number, play: boolean) => {
       const target = sourceIndexAt(sources, global)
@@ -172,10 +186,10 @@ export function GlobalPlayer({
         setIndex(target)
       } else if (media && mediaUrlExpiresSoon(media)) {
         ready.current = false
-        void refetchAudio()
+        void reload()
       } else apply()
     },
-    [sources, index, media, refetchAudio, apply, onTime]
+    [sources, index, media, reload, apply, onTime]
   )
 
   const onDuration = useCallback(() => {
@@ -255,7 +269,7 @@ export function GlobalPlayer({
       retried.current = true
       pending.current = { local: element.currentTime, play: playing.current }
       ready.current = false
-      void refetchAudio()
+      void reload()
     }
     const onPlaying = (): void => {
       retried.current = false
@@ -268,7 +282,7 @@ export function GlobalPlayer({
       element.removeEventListener('error', onError)
       element.removeEventListener('playing', onPlaying)
     }
-  }, [index, sources, refetchAudio, load])
+  }, [index, sources, reload, load])
 
   if (sources.length === 0) {
     return <p className="m-0">{t('transcription.result.noAudio')}</p>
@@ -319,7 +333,8 @@ export function GlobalPlayer({
             onClick={() => {
               setFailed(false)
               retried.current = false
-              void refetchAudio()
+              ready.current = false
+              void reload()
             }}
           >
             {t('transcription.common.retry')}
