@@ -4,6 +4,8 @@ import { getModuleRuntime } from '../context.js'
 import type { AppEnvironment, ServerModule } from '../types.js'
 import { adminRouter } from './admin/index.js'
 import { capabilitiesOf, transcriptionConfigSchema, transcriptionDefaultConfig } from './config.js'
+import { eventsRouter } from './events/index.js'
+import { transcriptionEventsHub } from './events/hub.js'
 import { formatsRouter } from './formats/index.js'
 import { jobsRouter } from './jobs/index.js'
 import { startJobWorker } from './jobs/worker.js'
@@ -26,6 +28,7 @@ transcriptionApp.get('/capabilities', (context) => {
   return context.json(capabilitiesOf(config, secrets, transcriptionStorage() !== null))
 })
 
+transcriptionApp.route('/', eventsRouter)
 transcriptionApp.route('/', jobsRouter)
 transcriptionApp.route('/', transcriptsRouter)
 transcriptionApp.route('/', formatsRouter)
@@ -38,9 +41,12 @@ export const transcriptionAdminApp = new Hono<AppEnvironment>()
 
 transcriptionAdminApp.route('/', adminRouter)
 
-/** Starts the job worker and the transcript retention sweep. */
+/** Starts the event listener, job worker and transcript retention sweep. */
 function startTranscription(): () => void {
-  const stops = [startJobWorker(), startTranscriptRetention()]
+  void transcriptionEventsHub.start().catch((error: unknown) => {
+    console.error('Transcription event listener could not be started', error)
+  })
+  const stops = [() => transcriptionEventsHub.stop(), startJobWorker(), startTranscriptRetention()]
   return () => {
     for (const stop of stops) stop()
   }

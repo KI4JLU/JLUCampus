@@ -97,12 +97,15 @@ export const TRANSCRIPTION_SAMPLE_MAX_SECONDS = 5
 /** Structural edits the result workspace can undo (T-34). */
 export const TRANSCRIPTION_UNDO_MAX = 10
 
-/** Status polling while a job analyses or transcribes; restored transcriptions poll slower (T-15). */
-export const TRANSCRIPTION_POLL_MS = 2000
-export const TRANSCRIPTION_RESTORED_POLL_MS = 3000
-/** AI subtitles arrive after saving; the detail is fetched again this often, this many times (T-23). */
-export const TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS = 5
-export const TRANSCRIPTION_SUBTITLE_POLL_MS = 2000
+/** The event stream's keep-alive comment, well inside proxies' read timeouts of a minute. */
+export const TRANSCRIPTION_EVENTS_HEARTBEAT_MS = 25_000
+/** The `retry:` the event stream asks for: how long the browser waits before reconnecting. */
+export const TRANSCRIPTION_EVENTS_RETRY_MS = 3000
+/**
+ * The AI subtitle arrives after saving with a `transcriptMetadata` event (T-23); a page that heard
+ * none by then stops waiting, e.g. when the process that saved it stopped.
+ */
+export const TRANSCRIPTION_SUBTITLE_WAIT_MS = 60_000
 
 /**
  * How long a job takes uploads after it was created, and how long playback and sample URLs are
@@ -393,7 +396,7 @@ export function isTerminalJobStatus(status: TranscriptionJobStatus): boolean {
   return (TRANSCRIPTION_TERMINAL_STATUSES as readonly TranscriptionJobStatus[]).includes(status)
 }
 
-/** Whether the client should keep polling the job. */
+/** Whether the server is working on the job, so more `job` events are to come. */
 export function isActiveJobStatus(status: TranscriptionJobStatus): boolean {
   return (
     (TRANSCRIPTION_ANALYSIS_STATUSES as readonly TranscriptionJobStatus[]).includes(status) ||
@@ -568,6 +571,48 @@ export type TranscriptionJobCreated = z.infer<typeof transcriptionJobCreatedSche
 /** `GET TRANSCRIPTION_API.jobs`: the user's jobs not yet saved, deleted or expired (T-15). */
 export const transcriptionJobListSchema = z.object({ jobs: z.array(transcriptionJobSchema) })
 export type TranscriptionJobList = z.infer<typeof transcriptionJobListSchema>
+
+/**
+ * The server-sent events of `TRANSCRIPTION_API.events`, by SSE event name, with their JSON `data`:
+ *
+ * - `jobs`: first on every connection, the user's jobs as `GET TRANSCRIPTION_API.jobs` lists them.
+ *   Events missed while disconnected are not sent again; this snapshot replaces them.
+ * - `job`: one job changed (status, progress, voices, saved, …), as `GET TRANSCRIPTION_API.job`
+ *   answers but without `result`; fetch the job once it is `completed`. Saved jobs come too,
+ *   with `transcriptId` set.
+ * - `jobRemoved`: the job was deleted or expired and is gone for good.
+ * - `transcriptMetadata`: the chat model is done with a transcript just saved; its title and
+ *   subtitle may have changed (T-23). Sent also when it wrote nothing.
+ *
+ * Between events the stream sends a comment every `TRANSCRIPTION_EVENTS_HEARTBEAT_MS`.
+ */
+export const TRANSCRIPTION_EVENT_NAMES = [
+  'jobs',
+  'job',
+  'jobRemoved',
+  'transcriptMetadata'
+] as const
+export type TranscriptionEventName = (typeof TRANSCRIPTION_EVENT_NAMES)[number]
+
+export const transcriptionJobRemovedEventSchema = z.object({ id: z.uuid() })
+export const transcriptionTranscriptMetadataEventSchema = z.object({ id: z.uuid() })
+
+/** The `data` of each event, parsed. */
+export const transcriptionEventSchemas = {
+  jobs: transcriptionJobListSchema,
+  job: transcriptionJobSchema,
+  jobRemoved: transcriptionJobRemovedEventSchema,
+  transcriptMetadata: transcriptionTranscriptMetadataEventSchema
+} as const satisfies Record<TranscriptionEventName, z.ZodType>
+
+export type TranscriptionEvent =
+  | { type: 'jobs'; data: TranscriptionJobList }
+  | { type: 'job'; data: TranscriptionJob }
+  | { type: 'jobRemoved'; data: z.infer<typeof transcriptionJobRemovedEventSchema> }
+  | {
+      type: 'transcriptMetadata'
+      data: z.infer<typeof transcriptionTranscriptMetadataEventSchema>
+    }
 
 /**
  * Where the browser plays a job's audio or a voice sample (`TRANSCRIPTION_API.jobAudioFile`,
@@ -1646,6 +1691,11 @@ const ADMIN = '/api/admin/modules/transcription'
 export const TRANSCRIPTION_API = {
   /** GET: `transcriptionCapabilitiesSchema`. */
   capabilities: `${MODULE}/capabilities`,
+  /**
+   * GET: `text/event-stream` of the user's job changes and transcript metadata (see
+   * `TRANSCRIPTION_EVENT_NAMES`), in place of polling. One stream per page serves every job.
+   */
+  events: `${MODULE}/events`,
   /**
    * GET: `transcriptionJobListSchema`. POST: `transcriptionJobCreateSchema` → 201
    * `transcriptionJobCreatedSchema`; a file over `maxFileBytes` answers `400 validation`.

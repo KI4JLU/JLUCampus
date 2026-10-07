@@ -16,6 +16,7 @@ import {
 } from '@justcampus/shared'
 import {
   analyzeJob,
+  awaitGeneratedTitle,
   createJob,
   createTranscript,
   deleteJob,
@@ -24,11 +25,12 @@ import {
   getTranscript,
   listJobs,
   patchTranscript,
-  pollGeneratedTitle,
   reportTranscriptAdopted,
   transcriptionKeys,
-  uploadToTarget
+  uploadToTarget,
+  useTranscriptionEvents
 } from '../api'
+import { transcriptionEvents } from '../events'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { UploadDialog } from './dialogs'
 import { useDialogHost } from './use-dialog-host'
@@ -76,7 +78,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
   const workspace = useTranscriptionWorkspace()
   const { dialogs, request, close } = useDialogHost()
 
-  // Kept in the page's memory, so uploads and polling go on through a remount of the page.
+  // Kept in the page's memory, so uploads and job updates go on through a remount of the page.
   const { memory } = workspace
   const [queue] = useState(() => {
     const cell = memory.cell<UploadQueue | null>('upload.queue', () => null)
@@ -94,6 +96,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
         patchTranscript
       },
       upload: uploadToTarget,
+      events: transcriptionEvents(),
       settings: workspace.uploadSettings,
       labels: labelsOf(t),
       measureDuration,
@@ -105,7 +108,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
       },
       // kiChat's `pollForTitleUpdate`: the AI title reaches the history and the group's link.
       onTranscriptCreated: (transcript) =>
-        pollGeneratedTitle(client, transcript, {
+        awaitGeneratedTitle(client, transcript, {
           onTitle: (latest) => created.takeGeneratedTitle(latest.id, latest.title)
         }),
       onSaveAdopted: reportTranscriptAdopted,
@@ -119,6 +122,8 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
   })
 
   const { capabilities } = workspace
+  // The job list in the cache stays current while the page is open, as the widgets show it.
+  useTranscriptionEvents(capabilities?.batch ?? false)
   const maxBytes = capabilities?.limits.maxFileBytes ?? TRANSCRIPTION_MAX_FILE_BYTES
   // The admin's limit per transcript; without one (kiChat has none) only the contract's
   // anti-abuse bound, far above usual groups.

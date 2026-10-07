@@ -127,6 +127,13 @@
       "when": 1791236580168,
       "tag": "0017_keycloak_session",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791320000000,
+      "tag": "0018_transcription_events",
+      "breakpoints": true
     }
   ]
 }

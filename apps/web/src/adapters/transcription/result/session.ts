@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import {
-  TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS,
-  TRANSCRIPTION_SUBTITLE_POLL_MS,
+  TRANSCRIPTION_SUBTITLE_WAIT_MS,
   type TranscriptionSegment,
   type TranscriptionSpeakerColorMap,
   type TranscriptionSpeakerOptimization,
@@ -10,6 +9,7 @@ import {
   type TranscriptionTranscriptPatch
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
+import type { TranscriptionEvents } from '../events'
 import {
   applyOptimizedSpeakers,
   buildSpeakerBlocks,
@@ -78,9 +78,11 @@ export interface SessionDeps {
   onServerCopy?: (transcript: TranscriptionTranscript) => void
   /** Stores a transcript only this browser has; `false` when the browser did not take it. */
   saveLocal?: (transcript: TranscriptionTranscript) => boolean
+  /** The page's event stream, which says when the AI subtitle is written (T-23). */
+  events?: TranscriptionEvents
 }
 
-/** A transcript saved this long ago may still get its AI subtitle; older ones are not polled. */
+/** A transcript saved this long ago may still get its AI subtitle; older ones are not awaited. */
 const SUBTITLE_EXPECT_MS = 10 * 60 * 1000
 
 export type OptimizeResult = { ok: true } | { ok: false; message: string | null }
@@ -114,8 +116,14 @@ export class ResultSession {
   private titleTouched = false
   private subtitleTouched = false
   private editingSubtitle = false
-  private pollTimer: ReturnType<typeof setTimeout> | null = null
-  private polled = false
+  private subtitleExpected = false
+  /** The title shown when the wait began; the AI title is awaited until it differs. */
+  private awaitedTitle = ''
+  /** Ends the wait for the AI subtitle while it runs. */
+  private stopAwaiting: (() => void) | null = null
+  /** Counts the fetches of the details while waiting, so an older answer never wins. */
+  private detailFetches = 0
+  private detailsTaken = 0
 
   constructor(
     transcript: TranscriptionTranscript,
@@ -170,8 +178,7 @@ export class ResultSession {
   /** Stops waiting for the AI subtitle; saves already queued still finish. */
   close(): void {
     this.closed = true
-    if (this.pollTimer) clearTimeout(this.pollTimer)
-    this.pollTimer = null
+    this.stopAwaiting?.()
   }
 
   // -------------------------------------------------------------------------
@@ -429,6 +436,7 @@ export class ResultSession {
     if (!next || next === previous) return true
     this.titleTouched = true
     this.setTranscript({ title: next })
+    this.settleAwaiting()
     // Not stored locally, the title stays shown and unsaved until a retry stores it.
     if (this.state.local) return this.saveLocally()
     return this.enqueue(async () => {
@@ -449,7 +457,7 @@ export class ResultSession {
     const previous = this.state.transcript
     if (next === (previous.subtitle ?? '')) return true
     this.subtitleTouched = true
-    this.set({ awaitingSubtitle: false })
+    this.settleAwaiting()
     this.setTranscript({ subtitle: next || null, subtitleSource: next ? 'manual' : null })
     if (this.state.local) return this.saveLocally()
     return this.enqueue(async () => {
@@ -488,6 +496,7 @@ export class ResultSession {
           subtitleSource: saved.subtitleSource,
           revision: this.base.revision
         })
+        this.settleAwaiting()
         return true
       })
     } catch {
@@ -503,43 +512,71 @@ export class ResultSession {
    */
   expectSubtitle(): void {
     const { transcript, local, keptCopy } = this.state
-    if (this.polled || this.closed || local || keptCopy) return
-    if (Date.now() - Date.parse(transcript.createdAt) >= SUBTITLE_EXPECT_MS) return
-    this.polled = true
-    this.pollSubtitle()
+    const events = this.deps.events
+    if (this.subtitleExpected || this.closed || local || keptCopy) return
+    if (!events || Date.now() - Date.parse(transcript.createdAt) >= SUBTITLE_EXPECT_MS) return
+    this.subtitleExpected = true
+    this.awaitSubtitle(events)
   }
 
   /**
-   * kiChat's `pollForTitleUpdate`: the AI subtitle and title of a new transcript arrive after
-   * saving, so the detail is fetched again up to five times, every two seconds, until the title
-   * differs from the one shown at the start and a subtitle is there. What the user typed in the
-   * meantime wins, and ends the wait for that part.
+   * kiChat's `pollForTitleUpdate`, without the polling: the chat model writes the AI subtitle and
+   * title of a new transcript after saving, and a `transcriptMetadata` event says it is done. The
+   * detail is fetched then, and once after each (re)connect of the stream in case the event came
+   * before. What the user typed in the meantime wins, and ends the wait for that part. The wait
+   * ends once the title differs from the one shown at the start and a subtitle is there, after the
+   * event's fetch, or after `TRANSCRIPTION_SUBTITLE_WAIT_MS`.
    */
-  private pollSubtitle(): void {
-    const awaitedTitle = this.state.transcript.title
+  private awaitSubtitle(events: TranscriptionEvents): void {
+    this.awaitedTitle = this.state.transcript.title
     if (!this.state.transcript.subtitle) this.set({ awaitingSubtitle: true })
-    let attempts = 0
-    const tick = async (): Promise<void> => {
-      attempts++
-      try {
-        const latest = await this.deps.get(this.id)
-        if (this.closed) return
-        // The module writes the AI subtitle without a new revision; a newer one is fine too, as long
-        // as only details changed.
-        if (latest.revision >= this.base.revision && sameContent(latest, this.base)) {
-          this.adoptDetails(latest)
+    const timer = setTimeout(() => this.stopAwaiting?.(), TRANSCRIPTION_SUBTITLE_WAIT_MS)
+    const unsubscribe = events.subscribe({
+      onOpen: () => void this.fetchDetails(false),
+      onEvent: (event) => {
+        if (event.type === 'transcriptMetadata' && event.data.id === this.id) {
+          void this.fetchDetails(true)
         }
-      } catch {
-        // A failed attempt counts; the next one may work.
       }
-      if (this.closed) return
-      const subtitled = Boolean(this.state.transcript.subtitle) || this.subtitleTouched
-      const titled = this.state.transcript.title !== awaitedTitle || this.titleTouched
-      const done = (subtitled && titled) || attempts >= TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS
-      if ((subtitled || done) && this.state.awaitingSubtitle) this.set({ awaitingSubtitle: false })
-      if (!done) this.pollTimer = setTimeout(() => void tick(), TRANSCRIPTION_SUBTITLE_POLL_MS)
+    })
+    this.stopAwaiting = () => {
+      this.stopAwaiting = null
+      clearTimeout(timer)
+      unsubscribe()
+      this.set({ awaitingSubtitle: false })
     }
-    this.pollTimer = setTimeout(() => void tick(), TRANSCRIPTION_SUBTITLE_POLL_MS)
+  }
+
+  /**
+   * Ends the busy state once a subtitle is there (or typed), and the wait once the title is new
+   * (or typed) too; `final` ends it in any case.
+   */
+  private settleAwaiting(final = false): void {
+    if (!this.stopAwaiting) return
+    const subtitled = Boolean(this.state.transcript.subtitle) || this.subtitleTouched
+    const titled = this.state.transcript.title !== this.awaitedTitle || this.titleTouched
+    if (final || (subtitled && titled)) this.stopAwaiting()
+    else if (subtitled && this.state.awaitingSubtitle) this.set({ awaitingSubtitle: false })
+  }
+
+  /** Fetches the detail while waiting for the AI subtitle; `final` after the chat model is done. */
+  private async fetchDetails(final: boolean): Promise<void> {
+    const order = ++this.detailFetches
+    let latest: TranscriptionTranscript
+    try {
+      latest = await this.deps.get(this.id)
+    } catch {
+      // The next connect of the stream or the event fetches again.
+      return
+    }
+    if (!this.stopAwaiting || order < this.detailsTaken) return
+    this.detailsTaken = order
+    // The module writes the AI subtitle without a new revision; a newer one is fine too, as long as
+    // only details changed.
+    if (latest.revision >= this.base.revision && sameContent(latest, this.base)) {
+      this.adoptDetails(latest)
+    }
+    this.settleAwaiting(final)
   }
 
   // -------------------------------------------------------------------------

@@ -8,6 +8,7 @@ import type {
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
 import { UploadError } from '../api'
+import { fakeEvents, type FakeEvents } from '../fake-events'
 import { allFiles, findFile, handoverGroupIndex, serverWaveform, type QueueFile } from './queue'
 import { UploadQueue, type SignedUpload, type UploadApi, type UploadQueueOptions } from './store'
 
@@ -95,19 +96,31 @@ type FakeApi = { [Name in keyof UploadApi]: Mock<UploadApi[Name]> }
 
 interface FakeServer {
   api: FakeApi
-  /** Sets the statuses a job answers with, one per request, the last one staying. */
+  events: FakeEvents
+  /**
+   * Sets the states a job goes through: the first one at once, each next one a moment later. Every
+   * change is sent as a `job` event without the result; `getJob` answers the current state.
+   */
   script: (id: string, ...steps: Partial<TranscriptionJob>[]) => void
 }
 
-/** A stand-in server; a new script of a job replaces the rest of its old one. */
+/** A stand-in server and its stream; a new script of a job replaces the rest of its old one. */
 function server(): FakeServer {
-  const statuses = new Map<string, TranscriptionJob[]>()
+  const events = fakeEvents()
+  const states = new Map<string, TranscriptionJob>()
+  const timers = new Map<string, ReturnType<typeof setTimeout>>()
   let created = 0
   const script = (id: string, ...steps: Partial<TranscriptionJob>[]): void => {
-    statuses.set(
-      id,
-      steps.map((step) => job(id, step))
-    )
+    clearTimeout(timers.get(id))
+    const pending = steps.map((step) => job(id, step))
+    const next = (): void => {
+      const state = pending.shift()
+      if (!state) return
+      states.set(id, state)
+      events.emit({ type: 'job', data: { ...state, result: null } })
+      if (pending.length > 0) timers.set(id, setTimeout(next, 1))
+    }
+    next()
   }
   const api: FakeApi = {
     listJobs: vi.fn<UploadApi['listJobs']>(async () => []),
@@ -119,10 +132,9 @@ function server(): FakeServer {
       }
     }),
     getJob: vi.fn<UploadApi['getJob']>(async (id) => {
-      const steps = statuses.get(id) ?? []
-      const next = steps.length > 1 ? steps.shift() : steps[0]
-      if (!next) throw new ApiRequestError(404, null)
-      return next
+      const state = states.get(id)
+      if (!state) throw new ApiRequestError(404, null)
+      return state
     }),
     analyzeJob: vi.fn<UploadApi['analyzeJob']>(async (id) =>
       job(id, { status: 'analyzingQueued' })
@@ -135,22 +147,23 @@ function server(): FakeServer {
     getTranscript: vi.fn<UploadApi['getTranscript']>(),
     patchTranscript: vi.fn<UploadApi['patchTranscript']>()
   }
-  return { api, script }
+  return { api, events, script }
 }
 
 function makeQueue(
   api: UploadApi,
+  events: FakeEvents,
   upload: SignedUpload = async () => undefined,
   extra: Partial<UploadQueueOptions> = {}
 ): UploadQueue {
   const queue = new UploadQueue({
     api,
     upload,
+    events,
     settings: { language: 'de', speakerCount: 'multi', llmCorrection: false },
     labels: { autoLabel: (n) => `Voice ${n}`, sampleLabel: (n) => `Sample ${n}` },
     measureDuration: async () => 12,
-    pollMs: 1,
-    restoredPollMs: 1,
+    syncRetryMs: 1,
     creepMs: 10_000,
     ...extra
   })
@@ -176,7 +189,7 @@ const row = (queue: UploadQueue, name: string): QueueFile =>
 
 describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
   it('creates the job, uploads, analyses and names the voices', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script(
       'job-1',
       { status: 'analyzingQueued' },
@@ -188,7 +201,7 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
         options.onProgress?.(0.5)
       }
     )
-    const queue = makeQueue(api, upload)
+    const queue = makeQueue(api, events, upload)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'ready')
     const file = row(queue, 'a.wav')
@@ -215,12 +228,12 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
   })
 
   it('shows a failed analysis with the server detail', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', {
       status: 'failed',
       error: { code: 'diarization_failed', message: 'Diarization-Server antwortete mit Status 415' }
     })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('bad.wav')])
     await until(() => row(queue, 'bad.wav').phase === 'analysisFailed')
     expect(row(queue, 'bad.wav')).toMatchObject({
@@ -232,13 +245,13 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
   })
 
   it('notes an unavailable diariser and a skipped correction without failing', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', {
       status: 'analyzed',
       speakers: SPEAKERS,
       error: { code: 'diarization_failed', message: 'Sprechererkennung nicht verfügbar (403).' }
     })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'ready')
     expect(row(queue, 'a.wav')).toMatchObject({
@@ -258,12 +271,12 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
   })
 
   it('still shows the server waveform after the speaker analysis failed (T-12)', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', {
       status: 'failed',
       error: { code: 'analysis_failed', message: 'Sprecheranalyse fehlgeschlagen (503)' }
     })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('large.wav')])
     await until(() => row(queue, 'large.wav').phase === 'analysisFailed')
     const file = row(queue, 'large.wav')
@@ -273,9 +286,10 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
   })
 
   it('tells storage errors and session errors apart', async () => {
-    const { api } = server()
+    const { api, events } = server()
     const queue = makeQueue(
       api,
+      events,
       vi.fn(async () => {
         throw new UploadError('status', 403)
       })
@@ -292,13 +306,95 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
   })
 })
 
+describe('UploadQueue: following jobs by their events (T-10, T-11)', () => {
+  it('shows the states events report and fetches a completed job once for its result', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    api.getJob.mockClear()
+
+    const started = queue.start()
+    // One fetch once the flow listens, as events may have been missed before.
+    await until(() => api.getJob.mock.calls.length === 1)
+    script('job-1', { status: 'transcribing', progress: null })
+    await until(() => row(queue, 'a.wav').status === 'preparing')
+    expect(row(queue, 'a.wav').progress).toBe(40)
+    expect(api.getJob).toHaveBeenCalledTimes(1)
+
+    script('job-1', { status: 'completed', result: result('A', 5) })
+    expect(await started).toMatchObject({ failed: false })
+    // The event has no result: one more fetch got it.
+    expect(api.getJob).toHaveBeenCalledTimes(2)
+    expect(row(queue, 'a.wav').result?.text).toBe('A')
+    expect(events.subscribers).toBe(0)
+  })
+
+  it('catches up after the stream reconnects', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzing' })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').status === 'analyzingSpeakers')
+    events.setOpen(false)
+    // Missed while the stream is down.
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(row(queue, 'a.wav').phase).toBe('analyzing')
+    events.setOpen(true)
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    queue.dispose()
+  })
+
+  it('fails a file whose job was removed on the server', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzing' })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').status === 'analyzingSpeakers')
+    events.emit({ type: 'jobRemoved', data: { id: 'job-1' } })
+    await until(() => row(queue, 'a.wav').phase === 'analysisFailed')
+    expect(row(queue, 'a.wav').error).toEqual({ key: 'analysisError', message: null })
+    expect(events.subscribers).toBe(0)
+  })
+
+  it('tries a failed fetch again and gives up after five in a row', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    api.getJob.mockRejectedValueOnce(new Error('offline'))
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    expect(api.getJob).toHaveBeenCalledTimes(2)
+
+    api.getJob.mockClear()
+    api.getJob.mockRejectedValue(new Error('offline'))
+    expect(await queue.reanalyze(row(queue, 'a.wav').id, { keepVoices: true })).toEqual({
+      ok: false,
+      message: 'offline'
+    })
+    expect(api.getJob).toHaveBeenCalledTimes(5)
+  })
+
+  it('stops listening when the page goes', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzing' })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => events.subscribers === 1)
+    queue.dispose()
+    await until(() => events.subscribers === 0)
+  })
+})
+
 describe('UploadQueue: start, merge and save (T-13, T-14)', () => {
   it('saves each group once all its files succeeded, and retries only what failed', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     for (const id of ['job-1', 'job-2', 'job-3']) {
       script(id, { status: 'analyzed', speakers: SPEAKERS })
     }
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav'), wav('b.wav')], 0)
     queue.addFiles([wav('c.wav')], 1)
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
@@ -363,9 +459,9 @@ describe('UploadQueue: start, merge and save (T-13, T-14)', () => {
   })
 
   it('keeps voices added by hand when a failed transcription is retried (T-20)', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'ready')
     const fileId = row(queue, 'a.wav').id
@@ -413,17 +509,17 @@ describe('UploadQueue: start, merge and save (T-13, T-14)', () => {
   })
 
   it('reports an empty queue', async () => {
-    const { api } = server()
-    const queue = makeQueue(api)
+    const { api, events } = server()
+    const queue = makeQueue(api, events)
     expect(await queue.start()).toMatchObject({ status: 'empty' })
   })
 })
 
 describe('UploadQueue: removing (T-08)', () => {
   it('removes a row only once its job is deleted', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: [] })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav')?.phase === 'ready')
     const id = row(queue, 'a.wav').id
@@ -439,9 +535,9 @@ describe('UploadQueue: removing (T-08)', () => {
   })
 
   it('counts a job the server no longer has as deleted', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: [] })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav')?.phase === 'ready')
     api.deleteJob.mockRejectedValueOnce(new ApiRequestError(404, null))
@@ -450,10 +546,10 @@ describe('UploadQueue: removing (T-08)', () => {
   })
 
   it('keeps a group with the files whose jobs could not be deleted', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed' })
     script('job-2', { status: 'analyzed' })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav'), wav('b.wav')])
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
     api.deleteJob.mockImplementation(async (id: string) => {
@@ -467,7 +563,7 @@ describe('UploadQueue: removing (T-08)', () => {
 
 describe('UploadQueue: restoring active jobs (T-15)', () => {
   it('restores each job as its own group and saves finished transcriptions', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     const statuses: [string, TranscriptionJobStatus][] = [
       ['job-a', 'analyzed'],
       ['job-b', 'transcribing'],
@@ -479,7 +575,7 @@ describe('UploadQueue: restoring active jobs (T-15)', () => {
       )
     )
     script('job-b', { status: 'completed', result: result('B', 4) })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.attach()
     queue.showView('upload')
     await until(() => rows(queue).length === 3 && Boolean(queue.getSnapshot().groups[1]?.saved))
@@ -507,7 +603,7 @@ describe('UploadQueue: restoring active jobs (T-15)', () => {
   })
 
   it('lists again when the page left before the listing answered', async () => {
-    const { api } = server()
+    const { api, events } = server()
     api.listJobs.mockImplementation(
       (signal) =>
         new Promise((resolve, reject) => {
@@ -518,7 +614,7 @@ describe('UploadQueue: restoring active jobs (T-15)', () => {
           })
         })
     )
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     // As React's StrictMode mounts at the upload view: attach and report, dispose, again.
     queue.attach()
     queue.showView('upload')
@@ -533,10 +629,10 @@ describe('UploadQueue: restoring active jobs (T-15)', () => {
 
 describe('UploadQueue: while a start runs (T-11)', () => {
   it('takes no files and moves nothing, but adds an empty group', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed' })
     script('job-2', { status: 'analyzed' })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav'), wav('b.wav')])
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
     // The dispatch never answers, so the start keeps running.
@@ -554,10 +650,10 @@ describe('UploadQueue: while a start runs (T-11)', () => {
   })
 
   it('cancels a removed file, leaves its group unsaved and reuses the rest next time', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
     script('job-2', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav'), wav('b.wav')])
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
     script('job-1', { status: 'completed', result: result('A', 5) })
@@ -581,11 +677,36 @@ describe('UploadQueue: while a start runs (T-11)', () => {
     queue.dispose()
   })
 
+  it('does not fail a removed file whose job the stream reports gone first', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav')?.phase === 'ready')
+    script('job-1', { status: 'transcribing' })
+    const started = queue.start()
+    // The transcription is followed.
+    await until(() => events.subscribers === 1)
+    const phases: string[] = []
+    queue.subscribe(() => phases.push(rows(queue)[0]?.phase ?? 'gone'))
+    // The server hides the job at once, so `jobRemoved` comes before the deletion's answer.
+    api.deleteJob.mockImplementationOnce(async (id) => {
+      events.emit({ type: 'jobRemoved', data: { id } })
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    })
+    expect(await queue.removeFile(row(queue, 'a.wav').id)).toBe(true)
+    expect(await started).toMatchObject({ savedIds: [], failed: true })
+    expect(phases).not.toContain('failed')
+    expect(rows(queue)).toEqual([])
+    expect(events.subscribers).toBe(0)
+    queue.dispose()
+  })
+
   it('cancels a whole group and goes on with the next one', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
     script('job-2', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')], 0)
     queue.addFiles([wav('b.wav')], 1)
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
@@ -605,9 +726,9 @@ describe('UploadQueue: while a start runs (T-11)', () => {
 
 describe('UploadQueue: back at the entry choice (T-01)', () => {
   it('clears an unfinished selection, so the next file starts a new transcript', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'failed', error: { code: 'analysis_failed', message: 'x' } })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('old.wav')])
     await until(() => row(queue, 'old.wav').phase === 'analysisFailed')
     // The page mounted at the choice, went to the upload and back; a remount reports it again.
@@ -626,9 +747,9 @@ describe('UploadQueue: back at the entry choice (T-01)', () => {
   })
 
   it('keeps everything while a start runs', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed' })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'ready')
     api.dispatchJob.mockImplementation(() => new Promise(() => undefined))
@@ -641,8 +762,8 @@ describe('UploadQueue: back at the entry choice (T-01)', () => {
 
 describe('UploadQueue: files per transcript (T-04, T-13)', () => {
   it('adds and moves no more files into a group than a transcript takes', async () => {
-    const { api } = server()
-    const queue = makeQueue(api)
+    const { api, events } = server()
+    const queue = makeQueue(api, events)
     queue.configure({ maxFilesPerGroup: 2 })
     expect(queue.addFiles([wav('a.wav'), wav('b.wav'), wav('c.wav')], 0)).toHaveLength(2)
     queue.addGroup()
@@ -656,8 +777,8 @@ describe('UploadQueue: files per transcript (T-04, T-13)', () => {
   })
 
   it('takes a distinct file when the selection repeats one already there (T-05)', async () => {
-    const { api } = server()
-    const queue = makeQueue(api)
+    const { api, events } = server()
+    const queue = makeQueue(api, events)
     queue.configure({ maxFilesPerGroup: 2 })
     queue.addFiles([wav('a.wav')], 0)
     expect(queue.addFiles([wav('a.wav'), wav('b.wav')], 0).map((file) => file.name)).toEqual([
@@ -668,11 +789,11 @@ describe('UploadQueue: files per transcript (T-04, T-13)', () => {
   })
 
   it('lets a file moved out free its place for a new upload (T-07)', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
     script('job-2', { status: 'analyzed', speakers: SPEAKERS })
     script('job-3', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.configure({ maxFilesPerGroup: 2 })
     queue.addFiles([wav('a.wav'), wav('b.wav')], 0)
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
@@ -687,8 +808,8 @@ describe('UploadQueue: files per transcript (T-04, T-13)', () => {
   })
 
   it('adds recorded takes to the first group next to its file, within the limit (T-58)', () => {
-    const { api } = server()
-    const queue = makeQueue(api)
+    const { api, events } = server()
+    const queue = makeQueue(api, events)
     queue.configure({ maxFilesPerGroup: 3 })
     queue.addFiles([wav('dialog-de.wav')], 0)
     const takes = [wav('dialog-de.wav'), wav('take-1.wav'), wav('take-2.wav'), wav('take-3.wav')]
@@ -706,8 +827,8 @@ describe('UploadQueue: files per transcript (T-04, T-13)', () => {
   })
 
   it('takes groups far beyond kiChat’s usual sizes without an admin limit (T-04)', () => {
-    const { api } = server()
-    const queue = makeQueue(api)
+    const { api, events } = server()
+    const queue = makeQueue(api, events)
     queue.configure({ maxFilesPerGroup: null })
     const files = Array.from({ length: 150 }, (_, index) => wav(`${index}.wav`))
     expect(queue.addFiles(files, 0)).toHaveLength(150)
@@ -717,14 +838,14 @@ describe('UploadQueue: files per transcript (T-04, T-13)', () => {
 
 describe('UploadQueue: removing during an upload (T-08)', () => {
   it('stops the upload before the job is deleted', async () => {
-    const { api } = server()
+    const { api, events } = server()
     let uploadSignal: AbortSignal | undefined
     const upload: SignedUpload = (_target, _body, options) =>
       new Promise((_resolve, reject) => {
         uploadSignal = options.signal
         options.signal?.addEventListener('abort', () => reject(new UploadError('aborted', null)))
       })
-    const queue = makeQueue(api, upload)
+    const queue = makeQueue(api, events, upload)
     let abortedAtDelete: boolean | undefined
     api.deleteJob.mockImplementation(async () => {
       abortedAtDelete = uploadSignal?.aborted
@@ -738,13 +859,13 @@ describe('UploadQueue: removing during an upload (T-08)', () => {
   })
 
   it('stops the uploads of a group before deleting its jobs', async () => {
-    const { api } = server()
+    const { api, events } = server()
     const signals: AbortSignal[] = []
     const upload: SignedUpload = (_target, _body, options) =>
       new Promise(() => {
         if (options.signal) signals.push(options.signal)
       })
-    const queue = makeQueue(api, upload)
+    const queue = makeQueue(api, events, upload)
     const abortedAtDelete: boolean[] = []
     api.deleteJob.mockImplementation(async () => {
       abortedAtDelete.push(signals.every((signal) => signal.aborted))
@@ -759,10 +880,14 @@ describe('UploadQueue: removing during an upload (T-08)', () => {
 
 describe('UploadQueue: removing while a group is saved (T-08, T-14)', () => {
   /** Two analysed files whose transcriptions completed, ready for a start to save them. */
-  async function completedGroup(api: FakeApi, script: FakeServer['script']): Promise<UploadQueue> {
+  async function completedGroup(
+    api: FakeApi,
+    events: FakeEvents,
+    script: FakeServer['script']
+  ): Promise<UploadQueue> {
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
     script('job-2', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav'), wav('b.wav')])
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
     script('job-1', { status: 'completed', result: result('A', 5) })
@@ -771,8 +896,8 @@ describe('UploadQueue: removing while a group is saved (T-08, T-14)', () => {
   }
 
   it('deletes no job while the save’s answer is pending, and the group ends saved', async () => {
-    const { api, script } = server()
-    const queue = await completedGroup(api, script)
+    const { api, events, script } = server()
+    const queue = await completedGroup(api, events, script)
     let answer: () => void = () => undefined
     api.createTranscript.mockImplementationOnce(
       (input) => new Promise((resolve) => (answer = () => resolve(transcript(input))))
@@ -803,8 +928,8 @@ describe('UploadQueue: removing while a group is saved (T-08, T-14)', () => {
   })
 
   it('deletes no job while a refused save adopts another page’s transcript', async () => {
-    const { api, script } = server()
-    const queue = await completedGroup(api, script)
+    const { api, events, script } = server()
+    const queue = await completedGroup(api, events, script)
     script('job-1', { status: 'completed', result: result('A', 5), transcriptId: 'other-1' })
     script('job-2', { status: 'completed', result: result('B', 4), transcriptId: 'other-1' })
     api.createTranscript.mockRejectedValue(new ApiRequestError(409, null))
@@ -828,8 +953,8 @@ describe('UploadQueue: removing while a group is saved (T-08, T-14)', () => {
   })
 
   it('removes the file as confirmed once the save failed', async () => {
-    const { api, script } = server()
-    const queue = await completedGroup(api, script)
+    const { api, events, script } = server()
+    const queue = await completedGroup(api, events, script)
     let fail: () => void = () => undefined
     api.createTranscript.mockImplementationOnce(
       () => new Promise((_resolve, reject) => (fail = () => reject(new Error('offline'))))
@@ -848,12 +973,12 @@ describe('UploadQueue: removing while a group is saved (T-08, T-14)', () => {
 
 describe('UploadQueue: the mapping dialog’s voices (T-18, T-21)', () => {
   it('offers the dialog for a restored analysed job without voices', async () => {
-    const { api } = server()
+    const { api, events } = server()
     api.listJobs.mockResolvedValue([
       job('job-a', { status: 'analyzed', speakers: [] }),
       job('job-b', { status: 'analyzing', speakers: [] })
     ])
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     await queue.restoreActiveJobs()
     // kiChat opens an empty dialog for an analysed job, to add voices there.
     expect(row(queue, 'job-a.wav').voices).toEqual([])
@@ -862,9 +987,9 @@ describe('UploadQueue: the mapping dialog’s voices (T-18, T-21)', () => {
   })
 
   it('keeps edits made without Save, which do not count as saved', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'ready')
     const fileId = row(queue, 'a.wav').id
@@ -875,9 +1000,9 @@ describe('UploadQueue: the mapping dialog’s voices (T-18, T-21)', () => {
   })
 
   it('tells the dialog when the repeated analysis answers that it runs', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'ready')
     script('job-1', { status: 'analyzing' }, { status: 'analyzed', speakers: SPEAKERS })
@@ -891,9 +1016,9 @@ describe('UploadQueue: the mapping dialog’s voices (T-18, T-21)', () => {
 
 describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
   it('restores nothing at the page load, then each time the upload view opens', async () => {
-    const { api } = server()
+    const { api, events } = server()
     api.listJobs.mockResolvedValue([job('job-a', { status: 'analyzed', speakers: SPEAKERS })])
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.attach()
     queue.showView('choice')
     await new Promise((resolve) => setTimeout(resolve, 5))
@@ -915,10 +1040,10 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
   })
 
   it('does not list twice while a listing runs', async () => {
-    const { api } = server()
+    const { api, events } = server()
     let answer: (jobs: TranscriptionJob[]) => void = () => undefined
     api.listJobs.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.showView('upload')
     queue.showView('upload')
     expect(api.listJobs).toHaveBeenCalledOnce()
@@ -928,10 +1053,10 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
   })
 
   it('lets recorded takes join the first group after the restored jobs are back (T-58)', async () => {
-    const { api } = server()
+    const { api, events } = server()
     let answer: (jobs: TranscriptionJob[]) => void = () => undefined
     api.listJobs.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.attach()
     queue.showView('upload')
     let restored = false
@@ -949,7 +1074,7 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
   })
 
   it('waits for a job being created, so it is not restored next to its own row', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
     let created: () => void = () => undefined
     const create = api.createJob.getMockImplementation()!
@@ -958,7 +1083,7 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
     )
     // The server lists the job before the row hears its id.
     api.listJobs.mockResolvedValue([job('job-1', { status: 'uploading' })])
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'uploading')
     const restoring = queue.restoreActiveJobs()
@@ -970,11 +1095,11 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
   })
 
   it('restores nothing listed after the page went back to the choice', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-a', { status: 'completed', result: result('A', 5) })
     let answer: (jobs: TranscriptionJob[]) => void = () => undefined
     api.listJobs.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.attach()
     queue.showView('choice')
     queue.showView('upload')
@@ -996,7 +1121,7 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
   })
 
   it('restores nothing after a dispose and re-attach while it waited for a job being created', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
     let created: () => void = () => undefined
     const create = api.createJob.getMockImplementation()!
@@ -1007,7 +1132,7 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
       job('job-1', { status: 'uploading' }),
       job('job-x', { status: 'analyzed', speakers: SPEAKERS })
     ])
-    const queue = makeQueue(api)
+    const queue = makeQueue(api, events)
     queue.attach()
     queue.addFiles([wav('a.wav')])
     await until(() => row(queue, 'a.wav').phase === 'uploading')
@@ -1035,13 +1160,14 @@ describe('UploadQueue: a group saved by another page (T-14)', () => {
   /** Two analysed files whose jobs then end as `saved` says; the save answers `409`. */
   async function completedGroup(
     api: FakeApi,
+    events: FakeEvents,
     script: FakeServer['script'],
     saved: [string | null, string | null],
     extra: Partial<UploadQueueOptions> = {}
   ): Promise<UploadQueue> {
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
     script('job-2', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api, undefined, extra)
+    const queue = makeQueue(api, events, undefined, extra)
     queue.addFiles([wav('a.wav'), wav('b.wav')])
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
     script('job-1', { status: 'completed', result: result('A', 5), transcriptId: saved[0] })
@@ -1051,9 +1177,9 @@ describe('UploadQueue: a group saved by another page (T-14)', () => {
   }
 
   it('takes the transcript another page saved the jobs as', async () => {
-    const { api, script } = server()
+    const { api, events, script } = server()
     const adopted = vi.fn()
-    const queue = await completedGroup(api, script, ['other-1', 'other-1'], {
+    const queue = await completedGroup(api, events, script, ['other-1', 'other-1'], {
       onSaveAdopted: adopted
     })
     const other = transcript({ title: 'b.wav' } as TranscriptionTranscriptCreate, 'other-1')
@@ -1075,8 +1201,8 @@ describe('UploadQueue: a group saved by another page (T-14)', () => {
   })
 
   it('offers no retry when the jobs are in different transcripts or not completed', async () => {
-    const { api, script } = server()
-    const queue = await completedGroup(api, script, ['other-1', null])
+    const { api, events, script } = server()
+    const queue = await completedGroup(api, events, script, ['other-1', null])
     expect(await queue.start()).toMatchObject({ savedIds: [], failed: true })
     expect(queue.getSnapshot().groups[0]).toMatchObject({
       saved: null,
@@ -1095,8 +1221,8 @@ describe('UploadQueue: a group saved by another page (T-14)', () => {
   })
 
   it('keeps the retry for other failures', async () => {
-    const { api, script } = server()
-    const queue = await completedGroup(api, script, [null, null])
+    const { api, events, script } = server()
+    const queue = await completedGroup(api, events, script, [null, null])
     api.createTranscript.mockRejectedValue(new Error('offline'))
     expect(await queue.start()).toMatchObject({ failed: true })
     expect(queue.getSnapshot().groups[0]).toMatchObject({ saveFailed: true, saveConflict: null })
@@ -1108,9 +1234,9 @@ describe('UploadQueue: the AI title after saving (T-23)', () => {
   async function savedQueue(
     onTranscriptCreated: UploadQueueOptions['onTranscriptCreated']
   ): Promise<{ queue: UploadQueue; api: FakeApi }> {
-    const { api, script } = server()
+    const { api, events, script } = server()
     script('job-1', { status: 'analyzed', speakers: SPEAKERS })
-    const queue = makeQueue(api, undefined, { onTranscriptCreated })
+    const queue = makeQueue(api, events, undefined, { onTranscriptCreated })
     queue.addFiles([wav('a.wav')], 0)
     await until(() => rows(queue).every((file) => file.phase === 'ready'))
     script('job-1', { status: 'completed', result: result('A', 5) })

@@ -3,14 +3,15 @@ import { QueryClient } from '@tanstack/react-query'
 import type { TranscriptionTranscript, TranscriptionTranscriptSummary } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
 import {
+  awaitGeneratedTitle,
   fetchAdminModels,
   liveSocketUrl,
   mediaUrlExpiresSoon,
-  pollGeneratedTitle,
   transcriptionKeys,
   UploadError,
   uploadToTarget
 } from './api'
+import { fakeEvents } from './fake-events'
 
 /** A stand-in for `XMLHttpRequest` that finishes as `outcome` says when sent. */
 function stubXhr(outcome: { status?: number; error?: boolean }): {
@@ -129,7 +130,7 @@ describe('liveSocketUrl', () => {
   })
 })
 
-describe('pollGeneratedTitle', () => {
+describe('awaitGeneratedTitle', () => {
   const saved: TranscriptionTranscript = {
     id: '0b7c2a4e-6f4d-4b8e-9a51-1d1f1c3e5a77',
     title: 'alice-20261007-154501',
@@ -175,6 +176,8 @@ describe('pollGeneratedTitle', () => {
   const listed = (client: QueryClient): TranscriptionTranscriptSummary | undefined =>
     client.getQueryData<TranscriptionTranscriptSummary[]>(transcriptionKeys.transcripts)?.[0]
 
+  const metadata = { type: 'transcriptMetadata', data: { id: saved.id } } as const
+
   afterEach(() => {
     vi.useRealTimers()
   })
@@ -182,42 +185,54 @@ describe('pollGeneratedTitle', () => {
   it('brings the AI title into the history without the transcript open (T-23)', async () => {
     vi.useFakeTimers()
     const client = cached()
-    const answers = [saved, named, done]
+    const events = fakeEvents(false)
+    const answers = [named, done]
     const get = vi.fn(async () => answers.shift() ?? done)
     const onTitle = vi.fn()
-    pollGeneratedTitle(client, saved, { get, onTitle })
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(listed(client)?.title).toBe(saved.title)
-    // The title first; the poll goes on for the subtitle.
-    await vi.advanceTimersByTimeAsync(2000)
+    awaitGeneratedTitle(client, saved, { get, onTitle, events })
+    expect(events.subscribers).toBe(1)
+    // A (re)connect fetches in case the event came before: the title first, the wait goes on.
+    events.setOpen(true)
+    await vi.advanceTimersByTimeAsync(0)
     expect(listed(client)).toMatchObject({ title: named.title, subtitle: null })
     expect(onTitle).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(2000)
+    expect(events.subscribers).toBe(1)
+    // The chat model is done.
+    events.emit(metadata)
+    await vi.advanceTimersByTimeAsync(0)
     expect(listed(client)).toMatchObject({ title: named.title, subtitle: 'Ein Test' })
     expect(client.getQueryData(transcriptionKeys.transcript(saved.id))).toMatchObject({
       title: named.title,
       subtitle: 'Ein Test',
       subtitleSource: 'ai'
     })
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(get).toHaveBeenCalledTimes(3)
+    expect(get).toHaveBeenCalledTimes(2)
     expect(onTitle).toHaveBeenCalledTimes(1)
+    expect(events.subscribers).toBe(0)
   })
 
-  it('asks five times, two seconds apart, while the title stays', async () => {
+  it('ignores the events of other transcripts and stops waiting after a minute', async () => {
     vi.useFakeTimers()
-    const client = cached()
-    const get = vi.fn(async () => ({ ...saved, subtitle: 'Ein Test' }))
-    pollGeneratedTitle(client, saved, { get })
-    await vi.advanceTimersByTimeAsync(1999)
-    expect(get).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(20_000)
-    expect(get).toHaveBeenCalledTimes(5)
+    const events = fakeEvents()
+    const get = vi.fn(async () => saved)
+    awaitGeneratedTitle(cached(), saved, { get, events })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(get).toHaveBeenCalledTimes(1)
+    events.emit({
+      type: 'transcriptMetadata',
+      data: { id: '1d1f1c3e-6f4d-4b8e-9a51-0b7c2a4e5a77' }
+    })
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(events.subscribers).toBe(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(events.subscribers).toBe(0)
   })
 
-  it('drops the late answer of a poll a newer save replaced', async () => {
+  it('drops the late answer of a wait a newer save replaced, or of an earlier fetch', async () => {
     vi.useFakeTimers()
     const client = cached()
+    const events = fakeEvents()
     let answer: (latest: TranscriptionTranscript) => void = () => undefined
     const stale = vi.fn(
       () =>
@@ -225,41 +240,62 @@ describe('pollGeneratedTitle', () => {
           answer = resolve
         })
     )
-    pollGeneratedTitle(client, saved, { get: stale })
-    await vi.advanceTimersByTimeAsync(2000)
+    awaitGeneratedTitle(client, saved, { get: stale, events })
+    await vi.advanceTimersByTimeAsync(0)
     expect(stale).toHaveBeenCalledTimes(1)
-    // Saved again while the first poll's request is under way; the new poll finds the AI title.
+    // Saved again while the first wait's request is under way; the new wait finds the AI title.
     const onTitle = vi.fn()
-    pollGeneratedTitle(client, saved, { get: vi.fn(async () => done), onTitle })
-    await vi.advanceTimersByTimeAsync(2000)
+    awaitGeneratedTitle(client, saved, { get: vi.fn(async () => done), onTitle, events })
+    events.emit(metadata)
+    await vi.advanceTimersByTimeAsync(0)
     expect(listed(client)).toMatchObject({ title: done.title, subtitle: 'Ein Test' })
     expect(onTitle).toHaveBeenCalledTimes(1)
-    // The replaced poll's answer comes last, still with the saved title.
+    // The replaced wait's answer comes last, still with the saved title.
     answer(saved)
-    await vi.advanceTimersByTimeAsync(20_000)
+    await vi.advanceTimersByTimeAsync(0)
     expect(listed(client)).toMatchObject({ title: done.title, subtitle: 'Ein Test' })
     expect(client.getQueryData(transcriptionKeys.transcript(saved.id))).toMatchObject({
       title: done.title,
       subtitle: 'Ein Test'
     })
-    expect(stale).toHaveBeenCalledTimes(1)
+    expect(events.subscribers).toBe(0)
+
+    // Within one wait, the first reconnect's fetch answers after the second's.
+    const other = cached()
+    const reconnecting = fakeEvents(false)
+    const slow: ((latest: TranscriptionTranscript) => void)[] = []
+    const get = vi.fn((): Promise<TranscriptionTranscript> => {
+      if (get.mock.calls.length > 1) return Promise.resolve(named)
+      return new Promise((resolve) => slow.push(resolve))
+    })
+    awaitGeneratedTitle(other, saved, { get, events: reconnecting })
+    reconnecting.setOpen(true)
+    reconnecting.setOpen(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listed(other)?.title).toBe(named.title)
+    slow[0]?.(saved)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listed(other)?.title).toBe(named.title)
+    expect(get).toHaveBeenCalledTimes(2)
   })
 
   it('leaves a copy edited meanwhile alone, and stops when the transcript is gone', async () => {
     vi.useFakeTimers()
     const edited = { ...saved, title: 'Mein Titel', revision: 2 }
     const client = cached(edited)
-    const get = vi.fn(async () => done)
-    pollGeneratedTitle(client, saved, { get })
-    await vi.advanceTimersByTimeAsync(2000)
+    const events = fakeEvents()
+    awaitGeneratedTitle(client, saved, { get: vi.fn(async () => done), events })
+    events.emit(metadata)
+    await vi.advanceTimersByTimeAsync(0)
     expect(client.getQueryData(transcriptionKeys.transcript(saved.id))).toEqual(edited)
     expect(listed(client)?.title).toBe(saved.title)
 
     const gone = vi.fn(async () => {
       throw new ApiRequestError(404, null)
     })
-    pollGeneratedTitle(cached(), saved, { get: gone })
-    await vi.advanceTimersByTimeAsync(20_000)
+    awaitGeneratedTitle(cached(), saved, { get: gone, events })
+    await vi.advanceTimersByTimeAsync(0)
     expect(gone).toHaveBeenCalledTimes(1)
+    expect(events.subscribers).toBe(0)
   })
 })
