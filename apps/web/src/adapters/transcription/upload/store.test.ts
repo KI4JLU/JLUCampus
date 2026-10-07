@@ -331,6 +331,32 @@ describe('UploadQueue: following jobs by their events (T-10, T-11)', () => {
     expect(events.subscribers).toBe(0)
   })
 
+  it('drops a fetch the stream reported a newer state during, and fetches the result', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    api.getJob.mockClear()
+    let answer: (state: TranscriptionJob) => void = () => undefined
+    api.getJob.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        })
+    )
+
+    const started = queue.start()
+    await until(() => api.getJob.mock.calls.length === 1)
+    // Completed while the fetch is under way, which then answers with an older state.
+    script('job-1', { status: 'completed', result: result('A', 5) })
+    answer(job('job-1', { status: 'failed', error: { code: 'asr_failed', message: 'alt' } }))
+    expect(await started).toMatchObject({ failed: false })
+    expect(api.getJob).toHaveBeenCalledTimes(2)
+    expect(row(queue, 'a.wav').result?.text).toBe('A')
+    expect(events.subscribers).toBe(0)
+  })
+
   it('catches up after the stream reconnects', async () => {
     const { api, events, script } = server()
     script('job-1', { status: 'analyzing' })
@@ -698,6 +724,27 @@ describe('UploadQueue: while a start runs (T-11)', () => {
     expect(await started).toMatchObject({ savedIds: [], failed: true })
     expect(phases).not.toContain('failed')
     expect(rows(queue)).toEqual([])
+    expect(events.subscribers).toBe(0)
+    queue.dispose()
+  })
+
+  it('fails a file whose job was lost while its deletion failed, so the start ends', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav')?.phase === 'ready')
+    script('job-1', { status: 'transcribing' })
+    const started = queue.start()
+    await until(() => events.subscribers === 1)
+    api.deleteJob.mockImplementationOnce(async (id) => {
+      events.emit({ type: 'jobRemoved', data: { id } })
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      throw new ApiRequestError(500, null)
+    })
+    expect(await queue.removeFile(row(queue, 'a.wav').id)).toBe(false)
+    expect(await started).toMatchObject({ savedIds: [], failed: true })
+    expect(row(queue, 'a.wav')).toMatchObject({ phase: 'failed', tone: 'error' })
     expect(events.subscribers).toBe(0)
     queue.dispose()
   })

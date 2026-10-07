@@ -193,8 +193,11 @@ export class UploadQueue {
   private readonly uploads = new Map<string, AbortController>()
   private readonly creeps = new Map<string, ReturnType<typeof setInterval>>()
   private readonly reanalyzing = new Set<string>()
-  /** Files whose job is being deleted; their group is not saved meanwhile. */
-  private readonly removing = new Set<string>()
+  /**
+   * Files whose job is being deleted, with whether that worked; their group is not saved meanwhile,
+   * and a flow that loses the job then waits for the outcome (`keptAfterRemoval`).
+   */
+  private readonly removals = new Map<string, Promise<boolean>>()
   /**
    * Groups whose transcript is being saved, with the save's outcome. Neither they nor their files
    * are removed or moved meanwhile: deleting a job deletes its audio, a saved one's too.
@@ -517,16 +520,19 @@ export class UploadQueue {
    * The job as the event stream reports it, one state at a time, until the flow is aborted
    * (`Aborted`) or the job is lost (`JobLost`). It is fetched once after each (re)connect of the
    * stream, and once right away when the stream is up already, as events may have been missed
-   * meanwhile; a `completed` job is fetched for its result, which events leave out. A failed fetch
-   * is tried again on the next (re)connect, or after `syncRetryMs` at the latest, so a passing
-   * failure does not leave the file waiting; after `MAX_SYNC_ERRORS` failures in a row, or once the
-   * job is gone, it is lost.
+   * meanwhile; a `completed` job is fetched for its result, which events leave out. A fetch answers
+   * for the states reported before it; one the stream reported on the job while it ran may be older
+   * than those reports and is dropped, as they follow. A failed fetch is tried again on the next
+   * (re)connect, or after `syncRetryMs` at the latest, so a passing failure does not leave the file
+   * waiting; after `MAX_SYNC_ERRORS` failures in a row, or once the job is gone, it is lost.
    */
   private async *jobStates(jobId: string, signal: AbortSignal): AsyncGenerator<TranscriptionJob> {
     type Item = { kind: 'job'; job: TranscriptionJob } | { kind: 'sync' } | { kind: 'gone' }
     const inbox: Item[] = []
     let wake: (() => void) | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
+    // The stream's reports on the job, counted to tell a fetch they overtook.
+    let reports = 0
     const push = (item: Item): void => {
       inbox.push(item)
       wake?.()
@@ -537,10 +543,14 @@ export class UploadQueue {
       onOpen: () => push({ kind: 'sync' }),
       onEvent: (event) => {
         if (event.type === 'job' && event.data.id === jobId) {
+          reports++
           push(
             event.data.status === 'completed' ? { kind: 'sync' } : { kind: 'job', job: event.data }
           )
-        } else if (event.type === 'jobRemoved' && event.data.id === jobId) push({ kind: 'gone' })
+        } else if (event.type === 'jobRemoved' && event.data.id === jobId) {
+          reports++
+          push({ kind: 'gone' })
+        }
       }
     })
     let errors = 0
@@ -560,12 +570,13 @@ export class UploadQueue {
           yield item.job
           continue
         }
-        // One fetch answers every sync asked for so far.
+        // One fetch answers every sync asked for and every state reported so far.
         for (let index = inbox.length - 1; index >= 0; index--) {
-          if (inbox[index]!.kind === 'sync') inbox.splice(index, 1)
+          if (inbox[index]!.kind !== 'gone') inbox.splice(index, 1)
         }
         if (retryTimer) clearTimeout(retryTimer)
         retryTimer = null
+        const reportsBefore = reports
         let job: TranscriptionJob
         try {
           job = await this.options.api.getJob(jobId, signal)
@@ -580,6 +591,9 @@ export class UploadQueue {
           continue
         }
         if (signal.aborted) throw new Aborted()
+        // Reported on meanwhile: the answer may predate those reports, which are in the inbox (a
+        // `completed` one as a sync, so its result is still fetched).
+        if (reports !== reportsBefore) continue
         yield job
       }
     } finally {
@@ -647,9 +661,8 @@ export class UploadQueue {
       }
       return false
     } catch (error) {
-      // A file being removed loses its job on purpose (`jobRemoved` may come before the deletion's
-      // answer); its row goes, without failing first.
-      if (error instanceof Aborted || signal.aborted || this.removing.has(fileId)) return false
+      if (error instanceof Aborted || signal.aborted) return false
+      if (!(await this.keptAfterRemoval(fileId)) || signal.aborted) return false
       this.fail(fileId, 'analysisFailed', {
         key: 'analysisError',
         message: lostMessage(error)
@@ -1098,8 +1111,8 @@ export class UploadQueue {
       }
       return null
     } catch (error) {
-      // As in `followAnalysis`: a file being removed is not failed.
-      if (error instanceof Aborted || signal.aborted || this.removing.has(fileId)) return null
+      if (error instanceof Aborted || signal.aborted) return null
+      if (!(await this.keptAfterRemoval(fileId)) || signal.aborted) return null
       this.fail(fileId, 'failed', { key: 'transcriptionError', message: lostMessage(error) })
       return null
     } finally {
@@ -1123,7 +1136,7 @@ export class UploadQueue {
     const group = this.group(groupId)
     if (!group || group.saved) return group?.saved?.id ?? null
     // A file on its way out is not saved with its group.
-    if (group.files.some((file) => this.removing.has(file.id))) return null
+    if (group.files.some((file) => this.removals.has(file.id))) return null
     const files: FileResult[] = []
     const chosenColors = new Map<string, TranscriptionSpeakerColorId>()
     for (const file of group.files) {
@@ -1357,9 +1370,7 @@ export class UploadQueue {
     if (jobId) {
       // The upload stops first, so it stores nothing after the deletion (T-08).
       this.abortUpload(fileId)
-      this.removing.add(fileId)
-      const deleted = await this.deleteJob(jobId).finally(() => this.removing.delete(fileId))
-      if (!deleted) return false
+      if (!(await this.deleteForRemoval(fileId, jobId))) return false
       this.options.onJobsChanged?.()
     }
     this.forget(fileId)
@@ -1381,12 +1392,9 @@ export class UploadQueue {
       return this.removeGroup(groupId)
     }
     for (const file of group.files) if (file.jobId) this.abortUpload(file.id)
-    for (const file of group.files) this.removing.add(file.id)
     const outcomes = await Promise.all(
-      group.files.map((file) => (file.jobId ? this.deleteJob(file.jobId) : true))
-    ).finally(() => {
-      for (const file of group.files) this.removing.delete(file.id)
-    })
+      group.files.map((file) => (file.jobId ? this.deleteForRemoval(file.id, file.jobId) : true))
+    )
     if (group.files.some((file) => file.jobId)) this.options.onJobsChanged?.()
     const kept = new Set(group.files.filter((_, index) => !outcomes[index]).map((file) => file.id))
     for (const file of group.files) if (!kept.has(file.id)) this.forget(file.id)
@@ -1410,6 +1418,29 @@ export class UploadQueue {
     } catch (error) {
       return isGone(error)
     }
+  }
+
+  /** Deletes the job of a file being removed, noted in `removals` until the answer is there. */
+  private async deleteForRemoval(fileId: string, jobId: string): Promise<boolean> {
+    const deletion = this.deleteJob(jobId)
+    this.removals.set(fileId, deletion)
+    try {
+      return await deletion
+    } finally {
+      if (this.removals.get(fileId) === deletion) this.removals.delete(fileId)
+    }
+  }
+
+  /**
+   * Whether a file whose flow lost its job still stays in the queue. A file being removed loses
+   * it on purpose, and `jobRemoved` may come before the deletion's answer: the flow holds its
+   * outcome until then. Once deleted, the row goes without failing first; kept because the
+   * deletion failed, it fails as any other file whose job was lost, so a start waiting on it ends.
+   */
+  private async keptAfterRemoval(fileId: string): Promise<boolean> {
+    const removal = this.removals.get(fileId)
+    if (removal && (await removal)) return false
+    return Boolean(this.file(fileId))
   }
 
   /** Stops a file's running upload; its row then shows the upload as cancelled. */
