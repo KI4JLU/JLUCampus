@@ -10,6 +10,7 @@ import {
   S3Client,
   S3ServiceException
 } from '@aws-sdk/client-s3'
+import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
@@ -68,17 +69,41 @@ export interface ObjectRead {
   range: string | null
 }
 
+/**
+ * Adds `Content-MD5` to `DeleteObjects`. S3 requires a checksum on it; newer SDKs send CRC32 only,
+ * and older MinIO releases (the HRZ bucket store) refuse that with `MissingContentMD5`.
+ */
+function withContentMd5(s3: S3Client): S3Client {
+  s3.middlewareStack.add(
+    (next, context) => async (args) => {
+      const request = args.request as { headers?: Record<string, string>; body?: unknown }
+      if (
+        context.commandName === 'DeleteObjectsCommand' &&
+        request.headers &&
+        (typeof request.body === 'string' || request.body instanceof Uint8Array)
+      ) {
+        request.headers['content-md5'] = createHash('md5').update(request.body).digest('base64')
+      }
+      return next(args)
+    },
+    { step: 'build', name: 'deleteObjectsContentMd5' }
+  )
+  return s3
+}
+
 function client(settings: StorageSettings): S3Client {
-  return new S3Client({
-    endpoint: settings.endpoint,
-    region: settings.region,
-    forcePathStyle: settings.forcePathStyle,
-    credentials: { accessKeyId: settings.accessKeyId, secretAccessKey: settings.secretAccessKey },
-    // Newer SDKs add CRC32 checksums to every upload, which a streamed body of known length
-    // cannot carry up front, and MinIO versions differ in what they accept. Only where required.
-    requestChecksumCalculation: 'WHEN_REQUIRED',
-    responseChecksumValidation: 'WHEN_REQUIRED'
-  })
+  return withContentMd5(
+    new S3Client({
+      endpoint: settings.endpoint,
+      region: settings.region,
+      forcePathStyle: settings.forcePathStyle,
+      credentials: { accessKeyId: settings.accessKeyId, secretAccessKey: settings.secretAccessKey },
+      // Newer SDKs add CRC32 checksums to every upload, which a streamed body of known length
+      // cannot carry up front, and MinIO versions differ in what they accept. Only where required.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED'
+    })
+  )
 }
 
 /**

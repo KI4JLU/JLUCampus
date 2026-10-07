@@ -1,4 +1,7 @@
 import { DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
+import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -20,6 +23,39 @@ const storage = new TranscriptionStorage({
 const now = new Date('2026-10-04T08:00:00.000Z')
 
 describe('TranscriptionStorage', () => {
+  it('sends Content-MD5 with a multi-delete, as older MinIO releases require', async () => {
+    const seen: Array<{ md5: string | undefined; body: string }> = []
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on('data', (chunk: Buffer) => chunks.push(chunk))
+      request.on('end', () => {
+        seen.push({
+          md5: request.headers['content-md5'] as string | undefined,
+          body: Buffer.concat(chunks).toString()
+        })
+        response.writeHead(200, { 'Content-Type': 'application/xml' })
+        response.end('<?xml version="1.0" encoding="UTF-8"?><DeleteResult></DeleteResult>')
+      })
+    })
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+    try {
+      const local = new TranscriptionStorage({
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        region: 'us-east-1',
+        bucket: 'b',
+        accessKeyId: 'access',
+        secretAccessKey: 'secret',
+        forcePathStyle: true
+      })
+      expect(await local.deleteObjects(['job/source', 'job/normalized.wav'])).toEqual([])
+      expect(seen).toHaveLength(1)
+      expect(seen[0]!.body).toContain('job/normalized.wav')
+      expect(seen[0]!.md5).toBe(createHash('md5').update(seen[0]!.body).digest('base64'))
+    } finally {
+      server.close()
+    }
+  })
+
   it('refuses to delete a prefix that is not a folder', async () => {
     await expect(storage.deletePrefix('transcription/c/jobs/j')).rejects.toThrow('must end with')
   })
