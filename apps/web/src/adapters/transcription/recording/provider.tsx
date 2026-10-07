@@ -13,9 +13,36 @@ import { RealtimeError, RealtimeSession, type RealtimeDependencies } from '../li
 import { useMemoryCell } from '../page-memory'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { WidgetTargetReceiver } from '../widgets/target'
-import { RecordingContext, type LiveAppearance, type RecordedTake, type Recording } from './context'
+import {
+  RecordingContext,
+  type LiveAppearance,
+  type MeetingRecording,
+  type RecordedTake,
+  type Recording
+} from './context'
 import { audioConstraint, DEFAULT_DEVICE_ID } from './devices'
 import { releaseStream, startLocalRecorder, type LocalRecorder } from './local-recorder'
+import {
+  detectMeetingSupport,
+  MEETING_AUDIO_BITS_PER_SECOND,
+  MEETING_FILE_TYPE,
+  MeetingCaptureError,
+  meetingMimeType,
+  startMeetingCapture,
+  type MeetingCapture
+} from './meeting-capture'
+import {
+  claimMeetingLock,
+  createMeetingJournal,
+  heldMeetingIds,
+  holdMeetingLock,
+  listStoredMeetings,
+  meetingsDirectory,
+  readStoredMeeting,
+  removeStoredMeeting,
+  type MeetingJournal,
+  type StoredMeeting
+} from './meeting-store'
 import {
   INITIAL_RECORDING_STATE,
   recordingReducer,
@@ -45,6 +72,10 @@ interface RunningSession {
   recorder: LocalRecorder | null
   realtime: RealtimeSession | null
   startedAt: number
+  /** Ends the capture: the microphone, for a meeting also the tab's sharing and the mix. */
+  release: () => void
+  /** A meeting's backup in the browser and the name of its take. */
+  meeting: { id: string; filename: string; journal: MeetingJournal } | null
 }
 
 function errorName(error: unknown): string {
@@ -64,9 +95,11 @@ interface Box<T> {
 
 /**
  * Holds the microphone choice, the recorded takes and the live session for as long as the page
- * lives, so they survive switching between recording, live transcription and other views, and a
- * remount of the page (`page-memory.ts`). Takes stay in memory only: leaving the page drops them
- * and releases the microphone (T-57).
+ * lives, so they survive switching between recording, live transcription, meetings and other
+ * views, and a remount of the page (`page-memory.ts`). Takes stay in memory: leaving the page
+ * drops them and releases the microphone (T-57). Meeting takes are also backed up in the
+ * browser (`meeting-store.ts`) until uploaded or deleted, so a crash or leaving the page does not
+ * lose an hour-long meeting; the meeting tab offers such leftovers again.
  */
 export function RecordingProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const { t } = useTranslation()
@@ -110,33 +143,108 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   )
 
   // Boxes in the page's memory: what runs belongs to the page, not to one mount of it.
-  const [{ session: sessionRef, stopping: stoppingRef, busy: busyRef, mounted: mountedRef }] =
-    useState(
-      () =>
-        memory.cell('recording.boxes', () => {
-          const boxes = {
-            session: { current: null } as Box<RunningSession | null>,
-            stopping: { current: null } as Box<Promise<void> | null>,
-            /** Set from the first click to the end of stopping, so nothing starts twice. */
-            busy: { current: false } as Box<boolean>,
-            /** Until the page is left for good. */
-            mounted: { current: true } as Box<boolean>
-          }
-          // Leaving the page drops what runs without finishing it, and frees the microphone.
-          memory.onDispose(() => {
-            boxes.mounted.current = false
-            const running = boxes.session.current
-            boxes.session.current = null
-            running?.recorder?.discard()
-            running?.realtime?.teardown()
-            releaseStream(running?.stream ?? null)
-            boxes.busy.current = false
+  const [
+    {
+      session: sessionRef,
+      stopping: stoppingRef,
+      busy: busyRef,
+      mounted: mountedRef,
+      meetingLocks,
+      scanned: scannedRef
+    }
+  ] = useState(
+    () =>
+      memory.cell('recording.boxes', () => {
+        const boxes = {
+          session: { current: null } as Box<RunningSession | null>,
+          stopping: { current: null } as Box<Promise<void> | null>,
+          /** Set from the first click to the end of stopping, so nothing starts twice. */
+          busy: { current: false } as Box<boolean>,
+          /** Until the page is left for good. */
+          mounted: { current: true } as Box<boolean>,
+          /** The releases of the meeting backups this page holds, by meeting. */
+          meetingLocks: new Map<string, () => void>(),
+          /** Whether the backup was searched for leftovers, once per page. */
+          scanned: { current: false } as Box<boolean>
+        }
+        // Leaving the page drops what runs without finishing it, and frees the microphone. A
+        // meeting's backup stays and is offered again on the next visit.
+        memory.onDispose(() => {
+          boxes.mounted.current = false
+          const running = boxes.session.current
+          boxes.session.current = null
+          running?.recorder?.discard()
+          running?.realtime?.teardown()
+          running?.release()
+          const pending = running?.meeting?.journal.close() ?? Promise.resolve()
+          const locks = [...boxes.meetingLocks.values()]
+          boxes.meetingLocks.clear()
+          void pending.finally(() => {
+            for (const release of locks) release()
           })
-          return boxes
-        }).value
-    )
+          boxes.busy.current = false
+        })
+        return boxes
+      }).value
+  )
 
   const setTakes = useCallback((next: RecordedTake[]) => setTakesState(next), [setTakesState])
+
+  const [meetingSupport] = useState(detectMeetingSupport)
+  const [consented, setConsented] = useMemoryCell(
+    memory.cell('recording.meetingConsent', () => false)
+  )
+  const [backupFailed, setBackupFailed] = useMemoryCell(
+    memory.cell('recording.meetingBackupFailed', () => false)
+  )
+  const [leftovers, setLeftovers] = useMemoryCell(
+    memory.cell<StoredMeeting[]>('recording.meetingLeftovers', () => [])
+  )
+  const [leftoverError, setLeftoverError] = useMemoryCell(
+    memory.cell<string | null>('recording.meetingLeftoverError', () => null)
+  )
+
+  /** Lets go of a meeting's backup: another tab, or the next visit, may offer it. */
+  const unlockMeeting = useCallback(
+    (id: string) => {
+      meetingLocks.get(id)?.()
+      meetingLocks.delete(id)
+    },
+    [meetingLocks]
+  )
+
+  /** Deletes the backups of uploaded or deleted meeting takes. */
+  const forgetMeetings = useCallback(
+    (removed: readonly RecordedTake[]) => {
+      for (const take of removed) {
+        const id = take.meetingId
+        if (id) void removeStoredMeeting(meetingsDirectory(), id).finally(() => unlockMeeting(id))
+      }
+    },
+    [unlockMeeting]
+  )
+
+  /** Lists the backups no page holds and no take of this page uses. */
+  const findLeftovers = useCallback(async (): Promise<void> => {
+    const directory = await meetingsDirectory()
+    if (!directory) return
+    const skip = await heldMeetingIds()
+    for (const take of takesRef.current) if (take.meetingId) skip.add(take.meetingId)
+    const running = sessionRef.current?.meeting?.id
+    if (running) skip.add(running)
+    const found = await listStoredMeetings(directory, skip)
+    // Started but never got a chunk: nothing to offer.
+    for (const empty of found.filter((meeting) => meeting.chunks === 0))
+      void removeStoredMeeting(Promise.resolve(directory), empty.id)
+    if (mountedRef.current) setLeftovers(found.filter((meeting) => meeting.chunks > 0))
+  }, [mountedRef, sessionRef, setLeftovers, takesRef])
+
+  // Once per page, where meetings can be recorded at all.
+  useEffect(() => {
+    if (meetingSupport !== 'supported' || scannedRef.current) return
+    scannedRef.current = true
+    void findLeftovers()
+  }, [findLeftovers, meetingSupport, scannedRef])
 
   const fail = useCallback(
     (message: string) => {
@@ -167,6 +275,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       const running = sessionRef.current
       if (!running?.recorder) return Promise.resolve()
       const recorder = running.recorder
+      const meeting = running.meeting
+      const duration = (Date.now() - running.startedAt) / 1000
       dispatch({ type: 'stop' })
       stoppingRef.current = (async () => {
         let error = lost
@@ -178,29 +288,47 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
           let converting: Promise<File> | null = null
           try {
             const blob = await recorded
-            const filename = recordingFilename(
-              recordingUsername(me ?? null),
-              new Date(running.startedAt)
-            )
-            converting = recordingToWav(blob, filename)
-            // Awaited after the drain; until then a failure must not count as unhandled.
-            converting.catch(() => undefined)
+            if (meeting) {
+              // A meeting stays WebM: decoding an hour or more for a WAV would take over a
+              // gigabyte of memory and exceed the upload limit. WebM is labelled WebM (T-57).
+              converting = Promise.resolve(
+                new File([blob], meeting.filename, { type: MEETING_FILE_TYPE })
+              )
+            } else {
+              const filename = recordingFilename(
+                recordingUsername(me ?? null),
+                new Date(running.startedAt)
+              )
+              converting = recordingToWav(blob, filename)
+              // Awaited after the drain; until then a failure must not count as unhandled.
+              converting.catch(() => undefined)
+            }
           } catch {
             error ??= t('transcription.recording.stopRecordingFailed')
           }
           await draining
+          // The backup gets its last chunks and stays until the take is uploaded or deleted.
+          await meeting?.journal.close()
           if (converting) {
             try {
-              take = { id: crypto.randomUUID(), file: await converting }
+              take = {
+                id: crypto.randomUUID(),
+                file: await converting,
+                duration,
+                meetingId: meeting?.id
+              }
             } catch {
               error ??= t('transcription.recording.recordingProcessFailed')
             }
           }
         } finally {
-          releaseStream(running.stream)
+          running.release()
           if (sessionRef.current === running) sessionRef.current = null
         }
+        // Without a take the backup is all there is: offered as a leftover.
+        if (meeting && !take) unlockMeeting(meeting.id)
         if (!mountedRef.current) return
+        if (meeting && !take) void findLeftovers()
         const next = take ? [...takesRef.current, take] : takesRef.current
         if (take) setTakes(next)
         busyRef.current = false
@@ -214,7 +342,19 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       })
       return stoppingRef.current
     },
-    [busyRef, dispatch, me, mountedRef, sessionRef, setTakes, stoppingRef, t, takesRef]
+    [
+      busyRef,
+      dispatch,
+      findLeftovers,
+      me,
+      mountedRef,
+      sessionRef,
+      setTakes,
+      stoppingRef,
+      t,
+      takesRef,
+      unlockMeeting
+    ]
   )
 
   const stop = useCallback(() => finish(null), [finish])
@@ -225,6 +365,131 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   useEffect(() => {
     finishRef.current = finish
   })
+
+  /** A refused or missing microphone, as a recoverable error (T-55). */
+  const failMicrophone = useCallback(
+    (error: unknown) => {
+      const name = errorName(error)
+      if (
+        name === 'NotAllowedError' ||
+        name === 'PermissionDeniedError' ||
+        name === 'SecurityError'
+      )
+        fail(t('transcription.recording.microphonePermissionDenied') + errorText(error))
+      else {
+        // The chosen device is gone or busy: the next start tries the default input.
+        if (name === 'NotFoundError' || name === 'OverconstrainedError')
+          microphones.select(DEFAULT_DEVICE_ID)
+        fail(errorText(error) || t('transcription.recording.startRecordingFailed'))
+      }
+    },
+    [fail, microphones, t]
+  )
+
+  /**
+   * Asks for the meeting's tab and the microphone, mixes them and records the mix with its
+   * backup. Runs straight from the click: `startMeetingCapture` opens the tab picker before
+   * anything awaits.
+   */
+  const startMeeting = useCallback(
+    async (devices: MediaDevices): Promise<void> => {
+      if (meetingSupport !== 'supported') {
+        fail(t('transcription.recording.meeting.unsupported'))
+        return
+      }
+      if (!consented) {
+        fail(t('transcription.recording.meeting.consentMissing'))
+        return
+      }
+      let capture: MeetingCapture
+      try {
+        capture = await startMeetingCapture(devices, audioConstraint(microphones.selected), () =>
+          dispatch({ type: 'microphone' })
+        )
+      } catch (error) {
+        const failure = error instanceof MeetingCaptureError ? error.failure : 'audio'
+        const reason = error instanceof MeetingCaptureError ? error.reason : error
+        if (failure === 'microphone') failMicrophone(reason)
+        else if (failure === 'noTabAudio') fail(t('transcription.recording.meeting.noTabAudio'))
+        else if (failure === 'display')
+          fail(
+            errorName(reason) === 'NotAllowedError'
+              ? t('transcription.recording.meeting.displayCancelled')
+              : t('transcription.recording.meeting.displayFailed', { message: errorText(reason) })
+          )
+        else fail(t('transcription.recording.meeting.audioFailed'))
+        return
+      }
+      if (!mountedRef.current) {
+        capture.release()
+        return
+      }
+      microphones.markGranted()
+
+      const id = crypto.randomUUID()
+      const startedAt = Date.now()
+      const mimeType = meetingMimeType((type) => MediaRecorder.isTypeSupported(type))
+      const meta = {
+        id,
+        startedAt,
+        filename: recordingFilename(recordingUsername(me ?? null), new Date(startedAt), 'webm'),
+        mimeType: mimeType ?? MEETING_FILE_TYPE
+      }
+      setBackupFailed(false)
+      // Taken before the first write, so no other tab offers the backup while it grows.
+      meetingLocks.set(id, holdMeetingLock(id))
+      // The recording goes on without its backup; the meeting tab says so.
+      const journal = createMeetingJournal(meetingsDirectory(), meta, () => {
+        if (mountedRef.current) setBackupFailed(true)
+      })
+      let recorder: LocalRecorder
+      try {
+        recorder = startLocalRecorder(capture.stream, {
+          mimeType,
+          audioBitsPerSecond: MEETING_AUDIO_BITS_PER_SECOND,
+          onChunk: journal.add
+        })
+      } catch (error) {
+        capture.release()
+        void removeStoredMeeting(meetingsDirectory(), id).finally(() => unlockMeeting(id))
+        fail(errorText(error) || t('transcription.recording.startRecordingFailed'))
+        return
+      }
+      sessionRef.current = {
+        kind: 'meeting',
+        stream: capture.stream,
+        recorder,
+        realtime: null,
+        startedAt,
+        release: capture.release,
+        meeting: { id, filename: meta.filename, journal }
+      }
+      // The user stopped sharing, closed the meeting's tab or lost the microphone: the take
+      // ends with what it recorded.
+      for (const track of capture.sources)
+        track.addEventListener('ended', () => void finishRef.current(null), { once: true })
+      // Agreed for this recording only.
+      setConsented(false)
+      dispatch({ type: 'started', at: startedAt })
+    },
+    [
+      consented,
+      dispatch,
+      fail,
+      failMicrophone,
+      finishRef,
+      me,
+      meetingLocks,
+      meetingSupport,
+      microphones,
+      mountedRef,
+      sessionRef,
+      setBackupFailed,
+      setConsented,
+      t,
+      unlockMeeting
+    ]
+  )
 
   const start = useCallback(
     async (kind: RecordingKind): Promise<void> => {
@@ -237,6 +502,11 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         fail(t('transcription.recording.microphoneAccessUnsupported'))
         return
       }
+      if (kind === 'meeting') {
+        // Nothing may await before this: the tab picker needs the click (see `startMeeting`).
+        await startMeeting(devices)
+        return
+      }
       if (kind === 'live' && !mode) {
         fail(t('transcription.recording.liveUnavailable'))
         return
@@ -246,19 +516,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       try {
         stream = await devices.getUserMedia({ audio: audioConstraint(microphones.selected) })
       } catch (error) {
-        const name = errorName(error)
-        if (
-          name === 'NotAllowedError' ||
-          name === 'PermissionDeniedError' ||
-          name === 'SecurityError'
-        )
-          fail(t('transcription.recording.microphonePermissionDenied') + errorText(error))
-        else {
-          // The chosen device is gone or busy: the next start tries the default input.
-          if (name === 'NotFoundError' || name === 'OverconstrainedError')
-            microphones.select(DEFAULT_DEVICE_ID)
-          fail(errorText(error) || t('transcription.recording.startRecordingFailed'))
-        }
+        failMicrophone(error)
         return
       }
       if (!mountedRef.current) {
@@ -287,7 +545,15 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
           },
           browserRealtime
         )
-        sessionRef.current = { kind, stream, recorder: null, realtime, startedAt: Date.now() }
+        sessionRef.current = {
+          kind,
+          stream,
+          recorder: null,
+          realtime,
+          startedAt: Date.now(),
+          release: () => releaseStream(stream),
+          meeting: null
+        }
         try {
           await realtime.start({ stream, mode })
         } catch (error) {
@@ -310,7 +576,15 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         return
       }
       const startedAt = Date.now()
-      sessionRef.current = { kind, stream, recorder, realtime, startedAt }
+      sessionRef.current = {
+        kind,
+        stream,
+        recorder,
+        realtime,
+        startedAt,
+        release: () => releaseStream(stream),
+        meeting: null
+      }
       // A microphone that disappears ends the take with what it recorded (T-55).
       for (const track of stream.getAudioTracks())
         track.addEventListener('ended', () => void finishRef.current(null), { once: true })
@@ -320,6 +594,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       busyRef,
       dispatch,
       fail,
+      failMicrophone,
       finishRef,
       microphones,
       mode,
@@ -328,6 +603,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       sessionRef,
       setServiceError,
       setText,
+      startMeeting,
       t
     ]
   )
@@ -335,20 +611,108 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   const deleteTake = useCallback(
     (id: string) => {
       const next = takesRef.current.filter((take) => take.id !== id)
+      forgetMeetings(takesRef.current.filter((take) => take.id === id))
       setTakes(next)
       dispatch({ type: 'takesChanged', takes: next.length })
     },
-    [dispatch, setTakes, takesRef]
+    [dispatch, forgetMeetings, setTakes, takesRef]
   )
 
   const uploadTakes = useCallback(() => {
-    const files = takesRef.current.map((take) => take.file)
-    if (files.length === 0 || busyRef.current) return
+    const taken = takesRef.current
+    if (taken.length === 0 || busyRef.current) return
     // One normal group, through the same queue, validation and analysis as picked files.
-    enqueueUpload(files)
+    enqueueUpload(taken.map((take) => take.file))
+    forgetMeetings(taken)
     setTakes([])
     dispatch({ type: 'takesChanged', takes: 0 })
-  }, [busyRef, dispatch, enqueueUpload, setTakes, takesRef])
+  }, [busyRef, dispatch, enqueueUpload, forgetMeetings, setTakes, takesRef])
+
+  const restoreLeftover = useCallback(
+    async (id: string): Promise<void> => {
+      const leftover = leftovers.find((entry) => entry.id === id)
+      const directory = await meetingsDirectory()
+      if (!leftover || !directory) return
+      setLeftoverError(null)
+      // Another tab may have taken it meanwhile.
+      const release = await claimMeetingLock(id)
+      if (!release) {
+        setLeftovers((current) => current.filter((entry) => entry.id !== id))
+        return
+      }
+      let file: File
+      try {
+        const blob = await readStoredMeeting(directory, id)
+        file = new File([blob], leftover.filename, { type: MEETING_FILE_TYPE })
+      } catch {
+        release()
+        if (mountedRef.current) setLeftoverError(t('transcription.recording.meeting.restoreFailed'))
+        return
+      }
+      if (!mountedRef.current) {
+        release()
+        return
+      }
+      meetingLocks.set(id, release)
+      const take: RecordedTake = {
+        id: crypto.randomUUID(),
+        file,
+        duration: leftover.duration ?? undefined,
+        meetingId: id
+      }
+      const next = [...takesRef.current, take]
+      setTakes(next)
+      setLeftovers((current) => current.filter((entry) => entry.id !== id))
+      dispatch({ type: 'takesChanged', takes: next.length })
+    },
+    [
+      dispatch,
+      leftovers,
+      meetingLocks,
+      mountedRef,
+      setLeftoverError,
+      setLeftovers,
+      setTakes,
+      t,
+      takesRef
+    ]
+  )
+
+  const discardLeftover = useCallback(
+    async (id: string): Promise<void> => {
+      setLeftoverError(null)
+      const release = await claimMeetingLock(id)
+      if (release) {
+        await removeStoredMeeting(meetingsDirectory(), id)
+        release()
+      }
+      if (mountedRef.current) setLeftovers((current) => current.filter((entry) => entry.id !== id))
+    },
+    [mountedRef, setLeftoverError, setLeftovers]
+  )
+
+  const meeting = useMemo<MeetingRecording>(
+    () => ({
+      support: meetingSupport,
+      consented,
+      setConsented,
+      backupFailed,
+      leftovers,
+      restore: restoreLeftover,
+      discard: discardLeftover,
+      leftoverError
+    }),
+    [
+      meetingSupport,
+      consented,
+      setConsented,
+      backupFailed,
+      leftovers,
+      restoreLeftover,
+      discardLeftover,
+      leftoverError
+    ]
+  )
 
   const setAppearance = useCallback(
     (change: Partial<LiveAppearance>) => {
@@ -386,7 +750,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         appearance,
         setAppearance,
         resetAppearance
-      }
+      },
+      meeting
     }),
     [
       state,
@@ -405,7 +770,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       clearText,
       appearance,
       setAppearance,
-      resetAppearance
+      resetAppearance,
+      meeting
     ]
   )
 

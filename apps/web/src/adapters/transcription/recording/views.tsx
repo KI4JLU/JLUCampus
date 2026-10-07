@@ -8,6 +8,7 @@ import {
   SquareIcon,
   Trash2Icon,
   UploadIcon,
+  UsersIcon,
   XIcon
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -48,10 +49,13 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 /** Radix Select takes no empty value; this one stands for the browser's default input. */
 const DEFAULT_OPTION = '__default__'
 
+/** Takes longer than this are not decoded for a waveform: it would take too much memory. */
+const DECODE_MAX_SECONDS = 20 * 60
+
 /**
- * Regular recording and live transcription as two tabs of one work area, as in kiChat. While
- * something records, the other tab stays closed; live transcription needs a live mode, uploading
- * recordings needs speech recognition.
+ * Regular recording, live transcription and meetings as tabs of one work area, as in kiChat. While
+ * something records, the other tabs stay closed; live transcription needs a live mode, recording
+ * and meetings need speech recognition to upload to.
  */
 export function RecordingTabs({
   current,
@@ -74,13 +78,18 @@ export function RecordingTabs({
       kind: 'live',
       label: t('transcription.common.tabLiveTranscription'),
       available: (capabilities?.realtimeModes.length ?? 0) > 0
+    },
+    {
+      kind: 'meeting',
+      label: t('transcription.recording.meeting.tab'),
+      available: capabilities?.batch ?? false
     }
   ]
 
   return (
     <Tabs
       value={current}
-      onValueChange={(value) => setView(value === 'live' ? 'live' : 'record')}
+      onValueChange={(value) => setView(tabs.find((tab) => tab.kind === value)?.kind ?? 'record')}
       activationMode="manual"
     >
       <TabsList aria-label={t('transcription.recording.tabsLabel')}>
@@ -90,7 +99,7 @@ export function RecordingTabs({
             value={tab.kind}
             disabled={tab.kind !== current && (busy || !tab.available)}
           >
-            {tab.kind === 'live' ? <RadioIcon {...ICON} /> : <MicIcon {...ICON} />}
+            <KindIcon kind={tab.kind} className="size-4" />
             {tab.label}
           </TabsTrigger>
         ))}
@@ -102,17 +111,24 @@ export function RecordingTabs({
   )
 }
 
+function KindIcon({
+  kind,
+  className
+}: {
+  kind: RecordingKind
+  className: string
+}): React.JSX.Element {
+  const Icon = kind === 'live' ? RadioIcon : kind === 'meeting' ? UsersIcon : MicIcon
+  return <Icon aria-hidden="true" className={className} />
+}
+
 /** Title and hint of the recording state (kiChat's status in the middle of the card). */
 export function RecordingStatusCard({ kind }: { kind: RecordingKind }): React.JSX.Element {
-  const texts = useRecordingStatusTexts()
+  const texts = useRecordingStatusTexts(kind)
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-stack-md py-12 text-center">
-        {kind === 'live' ? (
-          <RadioIcon aria-hidden="true" className="size-10" />
-        ) : (
-          <MicIcon aria-hidden="true" className="size-10" />
-        )}
+        <KindIcon kind={kind} className="size-10" />
         <div aria-live="polite" className="flex flex-col items-center gap-2">
           <CardTitle asChild>
             <h2>{texts.title}</h2>
@@ -209,19 +225,27 @@ export function DeviceSelect({
 export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.Element {
   const { t } = useTranslation()
   const { capabilities } = useTranscriptionWorkspace()
-  const { state, takes, start, stop, uploadTakes, live } = useRecording()
+  const { state, takes, start, stop, uploadTakes, live, meeting } = useRecording()
   const id = useId()
   const status = state.status
   const running = status === 'recording'
   const pending = status === 'requesting' || status === 'stopping'
-  const unavailable = kind === 'live' && live.mode === null
+  // A meeting starts only where tab audio can be shared, and after everyone agreed.
+  const unavailable =
+    kind === 'live'
+      ? live.mode === null
+      : kind === 'meeting'
+        ? meeting.support !== 'supported' || !meeting.consented
+        : false
   const batch = capabilities?.batch ?? false
   const label = running
     ? t('transcription.recording.stopRecording')
     : status === 'requesting'
       ? state.step === 'connecting'
         ? t('transcription.recording.connecting')
-        : t('transcription.recording.grantMicrophone')
+        : state.step === 'display'
+          ? t('transcription.recording.meeting.selectTab')
+          : t('transcription.recording.grantMicrophone')
       : status === 'stopping'
         ? t('transcription.recording.recordingStopping')
         : t('transcription.recording.startRecording')
@@ -276,7 +300,7 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
 }
 
 /**
- * The recorded takes of both tabs (T-57): one player each with waveform, time and duration, a
+ * The recorded takes of all tabs (T-57): one player each with waveform, time and duration, a
  * download, and a delete that asks once more. They stay until uploaded or deleted.
  */
 export function TakeList(): React.JSX.Element | null {
@@ -313,6 +337,8 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   const deleteLabel = t('transcription.recording.deleteRecordingName', { name })
   const confirmLabel = t('transcription.recording.confirmDeleteRecording', { name })
   const cancelLabel = t('transcription.recording.cancelDeleteRecording', { name })
+  // Meetings run long: Opus is small, decoded it is not.
+  const decode = !take.meetingId && (take.duration ?? 0) <= DECODE_MAX_SECONDS
 
   const download = (): void => {
     const url = URL.createObjectURL(take.file)
@@ -336,7 +362,17 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
 
   return (
     <li className="flex flex-wrap items-center gap-stack-sm">
-      <WaveformPlayer source={take.file} name={name} className="min-w-64 flex-1" />
+      <div className="flex min-w-64 flex-1 flex-col gap-1">
+        <WaveformPlayer
+          source={take.file}
+          name={name}
+          decode={decode}
+          knownDuration={take.duration}
+        />
+        {take.meetingId ? (
+          <p className="m-0">{t('transcription.recording.meeting.waveformSkipped')}</p>
+        ) : null}
+      </div>
       <div className="flex items-center gap-1">
         <IconButton label={downloadLabel} onClick={download}>
           <DownloadIcon {...ICON} />
@@ -419,10 +455,15 @@ export function RecordView(): React.JSX.Element {
 }
 
 /** The side column of the `record` view: the status and the microphone, as in kiChat. */
-export function RecordingSettings(): React.JSX.Element {
+export function RecordingSettings({
+  kind = 'record'
+}: {
+  /** The view's tab, for its status at rest. */
+  kind?: RecordingKind
+}): React.JSX.Element {
   const { t } = useTranslation()
   const id = useId()
-  const texts = useRecordingStatusTexts()
+  const texts = useRecordingStatusTexts(kind)
   return (
     <>
       <PanelSection title={t('transcription.common.statusLabel')}>

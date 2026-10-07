@@ -28,11 +28,16 @@ export const TRANSCRIPTION_MIME_TYPES = [
   'audio/wav',
   'audio/m4a',
   'audio/ogg',
+  'audio/webm',
   'video/mp4'
 ] as const
 
-/** …or its extension, case-insensitive, is one of these. MP4 is taken although the hint omits it. */
-export const TRANSCRIPTION_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'ogg'] as const
+/**
+ * …or its extension, case-insensitive, is one of these. MP4 is taken although the hint omits it.
+ * WebM goes beyond kiChat: meeting recordings are uploaded as Opus/WebM, since a WAV of a long
+ * meeting would not fit the limit.
+ */
+export const TRANSCRIPTION_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'webm'] as const
 
 /**
  * The file chooser's `accept`: the same extensions and MIME types, so the chooser offers only

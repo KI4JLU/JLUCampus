@@ -1,22 +1,29 @@
 /**
- * The recording lifecycle shared by regular recording and live transcription (T-56, T-60), after
- * kiChat's `liveRecordingStatus`: `requesting` while the microphone is asked for (and, live, the
- * connection is set up), `recording`, `stopping` while the last audio is collected and converted,
- * then `ready` with takes, `idle` without, or `error`. `error` is recoverable: recording can start
- * again from it, as from `idle` and `ready`.
+ * The recording lifecycle shared by regular recording, live transcription and meetings (T-56,
+ * T-60), after kiChat's `liveRecordingStatus`: `requesting` while the microphone (for a meeting
+ * first the meeting's tab) is asked for (and, live, the connection is set up), `recording`,
+ * `stopping` while the last audio is collected and converted, then `ready` with takes, `idle`
+ * without, or `error`. `error` is recoverable: recording can start again from it, as from `idle`
+ * and `ready`.
  */
 
 export type RecordingStatus = 'idle' | 'requesting' | 'recording' | 'stopping' | 'ready' | 'error'
 
-/** Regular recording, or live transcription that records the same microphone alongside. */
-export type RecordingKind = 'record' | 'live'
+/**
+ * Regular recording, live transcription that records the same microphone alongside, or a meeting:
+ * the microphone and another tab's audio, mixed.
+ */
+export type RecordingKind = 'record' | 'live' | 'meeting'
+
+/** What `requesting` waits for: the meeting's tab, the microphone, or the live connection. */
+export type RecordingStep = 'display' | 'microphone' | 'connecting'
 
 export interface RecordingState {
   status: RecordingStatus
   /** What runs, or ran last. */
   kind: RecordingKind | null
-  /** While `requesting`: asking for the microphone, or connecting the live session. */
-  step: 'microphone' | 'connecting' | null
+  /** While `requesting`: what is asked for or set up. */
+  step: RecordingStep | null
   /** When the running recording started, in milliseconds since the epoch. */
   startedAt: number | null
   /** What went wrong, shown until the next start. */
@@ -26,6 +33,7 @@ export interface RecordingState {
 export type RecordingAction =
   | { type: 'request'; kind: RecordingKind }
   | { type: 'connect' }
+  | { type: 'microphone' }
   | { type: 'started'; at: number }
   | { type: 'stop' }
   | { type: 'stopped'; takes: number }
@@ -57,12 +65,15 @@ export function recordingReducer(state: RecordingState, action: RecordingAction)
       return {
         status: 'requesting',
         kind: action.kind,
-        step: 'microphone',
+        // The tab comes first: Chrome only offers it within the click (see `meeting-capture.ts`).
+        step: action.kind === 'meeting' ? 'display' : 'microphone',
         startedAt: null,
         error: null
       }
     case 'connect':
       return state.status === 'requesting' ? { ...state, step: 'connecting' } : state
+    case 'microphone':
+      return state.status === 'requesting' ? { ...state, step: 'microphone' } : state
     case 'started':
       return state.status === 'requesting'
         ? { ...state, status: 'recording', step: null, startedAt: action.at }

@@ -30,6 +30,12 @@ describe('recordingReducer', () => {
     expect(state).toMatchObject({ status: 'requesting', kind: 'live', step: 'connecting' })
   })
 
+  it('asks a meeting for its tab, then for the microphone', () => {
+    const display = run([{ type: 'request', kind: 'meeting' }])
+    expect(display).toMatchObject({ status: 'requesting', kind: 'meeting', step: 'display' })
+    expect(recordingReducer(display, { type: 'microphone' }).step).toBe('microphone')
+  })
+
   it('turns a refused microphone into a recoverable error', () => {
     const failed = run([
       { type: 'request', kind: 'record' },

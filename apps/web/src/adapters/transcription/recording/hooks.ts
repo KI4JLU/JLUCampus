@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useRecording } from './context'
+import type { RecordingKind } from './state'
 import { formatFileSize } from './wav'
 
 /** Seconds since `startedAt`, ticking while it is set (T-56). */
@@ -22,37 +23,49 @@ export interface StatusTexts {
 
 /**
  * What the status says, in kiChat's order (`updateLiveRecordingUI`): the running step first, then
- * an error, then the takes ready to upload, then whether the microphone is ready.
+ * an error, then the takes ready to upload, then whether the microphone is ready. `view` is the
+ * tab showing it; at rest the meeting tab says what comes next there.
  */
-export function useRecordingStatusTexts(): StatusTexts {
+export function useRecordingStatusTexts(view: RecordingKind = 'record'): StatusTexts {
   const { t } = useTranslation()
   const { state, takes, microphones } = useRecording()
-  const live = state.kind === 'live'
   switch (state.status) {
     case 'recording':
-      return live
+      return state.kind === 'meeting'
         ? {
-            title: t('transcription.recording.liveRunning'),
-            text: t('transcription.recording.liveRunningHint'),
+            title: t('transcription.recording.meeting.running'),
+            text: t('transcription.recording.meeting.runningHint'),
             error: false
           }
-        : {
-            title: t('transcription.recording.recordingRunning'),
-            text: t('transcription.recording.recordingRunningHint'),
-            error: false
-          }
+        : state.kind === 'live'
+          ? {
+              title: t('transcription.recording.liveRunning'),
+              text: t('transcription.recording.liveRunningHint'),
+              error: false
+            }
+          : {
+              title: t('transcription.recording.recordingRunning'),
+              text: t('transcription.recording.recordingRunningHint'),
+              error: false
+            }
     case 'requesting':
-      return state.step === 'connecting'
+      return state.step === 'display'
         ? {
-            title: t('transcription.recording.connecting'),
-            text: t('transcription.recording.connectingHint'),
+            title: t('transcription.recording.meeting.selectTab'),
+            text: t('transcription.recording.meeting.selectTabHint'),
             error: false
           }
-        : {
-            title: t('transcription.recording.microphonePermission'),
-            text: t('transcription.recording.microphonePermissionHint'),
-            error: false
-          }
+        : state.step === 'connecting'
+          ? {
+              title: t('transcription.recording.connecting'),
+              text: t('transcription.recording.connectingHint'),
+              error: false
+            }
+          : {
+              title: t('transcription.recording.microphonePermission'),
+              text: t('transcription.recording.microphonePermissionHint'),
+              error: false
+            }
     case 'stopping':
       return {
         title: t('transcription.recording.recordingStopping'),
@@ -75,6 +88,12 @@ export function useRecordingStatusTexts(): StatusTexts {
             takes.length === 1
               ? `${first.file.name} (${formatFileSize(first.file.size)})`
               : t('transcription.recording.recordingsReadyToUpload', { count: takes.length }),
+          error: false
+        }
+      if (view === 'meeting')
+        return {
+          title: t('transcription.recording.meeting.idle'),
+          text: t('transcription.recording.meeting.idleHint'),
           error: false
         }
       return microphones.granted

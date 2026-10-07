@@ -1,4 +1,4 @@
-/** A MediaRecorder on a microphone stream, collecting its chunks in memory. */
+/** A MediaRecorder on a microphone (or meeting) stream, collecting its chunks in memory. */
 export interface LocalRecorder {
   /** Waits for the last chunk and returns the recording in the browser's own format. */
   stop: () => Promise<Blob>
@@ -9,15 +9,28 @@ export interface LocalRecorder {
 /** Chunks every second, so a recording that ends unexpectedly still has its audio. */
 const TIMESLICE_MS = 1000
 
+export interface LocalRecorderOptions {
+  /** The browser's own format when left out. */
+  mimeType?: string
+  audioBitsPerSecond?: number
+  /** Every chunk as it arrives, e.g. to back a meeting up in the browser's storage. */
+  onChunk?: (chunk: Blob) => void
+}
+
 /**
- * Records `stream` locally (T-56, T-57). Regular recording and live transcription share it: live
- * transcription records the stream it sends, so a stopped session also yields a take.
+ * Records `stream` locally (T-56, T-57). Regular recording, live transcription and meetings share
+ * it: live transcription records the stream it sends, so a stopped session also yields a take.
  */
-export function startLocalRecorder(stream: MediaStream): LocalRecorder {
-  const recorder = new MediaRecorder(stream)
+export function startLocalRecorder(
+  stream: MediaStream,
+  { mimeType, audioBitsPerSecond, onChunk }: LocalRecorderOptions = {}
+): LocalRecorder {
+  const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond })
   const chunks: Blob[] = []
   recorder.addEventListener('dataavailable', (event) => {
-    if (event.data.size > 0) chunks.push(event.data)
+    if (event.data.size === 0) return
+    chunks.push(event.data)
+    onChunk?.(event.data)
   })
   recorder.start(TIMESLICE_MS)
 

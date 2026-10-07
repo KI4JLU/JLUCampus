@@ -1,12 +1,39 @@
 import { createContext, useContext } from 'react'
 import type { TranscriptionRealtimeConfig, TranscriptionRealtimeMode } from '@justcampus/shared'
+import type { MeetingSupport } from './meeting-capture'
+import type { StoredMeeting } from './meeting-store'
 import type { RecordingKind, RecordingState } from './state'
 import type { Microphones } from './use-microphones'
 
-/** One recorded take: a real WAV file, kept in memory only (T-57). */
+/**
+ * One recorded take, kept in memory (T-57): a real WAV file, or a meeting's WebM file, which is
+ * also backed up in the browser's storage until it is uploaded or deleted.
+ */
 export interface RecordedTake {
   id: string
   file: File
+  /** Seconds, from the recording's running time; recorded WebM names no duration of its own. */
+  duration?: number
+  /** The meeting's backup in the browser (`meeting-store.ts`). */
+  meetingId?: string
+}
+
+/** The meeting tab: tab audio and microphone, mixed into one take. */
+export interface MeetingRecording {
+  support: MeetingSupport
+  /** Everyone in the meeting agreed; asked again for every recording. */
+  consented: boolean
+  setConsented: (consented: boolean) => void
+  /** The backup in the browser failed for the running or last meeting; the take is complete. */
+  backupFailed: boolean
+  /** Recordings a crash, reload or leaving the page left in the backup. */
+  leftovers: readonly StoredMeeting[]
+  /** Adds a leftover to the takes. */
+  restore: (id: string) => Promise<void>
+  /** Deletes a leftover from the backup. */
+  discard: (id: string) => Promise<void>
+  /** Why the last restore or discard failed. */
+  leftoverError: string | null
 }
 
 /** How the live transcript is shown (T-61). None of it changes the text. */
@@ -39,7 +66,7 @@ export interface Recording {
   state: RecordingState
   microphones: Microphones
   takes: readonly RecordedTake[]
-  /** Starts regular recording or live transcription; ignored while busy. */
+  /** Starts regular recording, live transcription or a meeting; ignored while busy. */
   start: (kind: RecordingKind) => Promise<void>
   /** Stops what runs; repeated calls join the first. */
   stop: () => Promise<void>
@@ -47,6 +74,7 @@ export interface Recording {
   /** Hands every take to the upload queue as one group and clears the list (T-58). */
   uploadTakes: () => void
   live: LiveTranscription
+  meeting: MeetingRecording
 }
 
 /** Provided by `RecordingProvider`. */

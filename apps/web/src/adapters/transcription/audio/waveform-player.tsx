@@ -64,6 +64,13 @@ export interface WaveformPlayerProps {
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
   /**
+   * `false` never decodes the audio here, e.g. a long meeting recording: Opus is small in bytes,
+   * but an hour of it decodes to about a gigabyte. It plays without a waveform then.
+   */
+  decode?: boolean
+  /** Seconds, for audio that names no duration of its own (recorded WebM) and is not decoded. */
+  knownDuration?: number
+  /**
    * The analysed job of this audio: above the decode limit the waveform the analysis computed is
    * drawn instead (T-12).
    */
@@ -108,6 +115,8 @@ export function WaveformPlayer({
   source,
   name,
   size,
+  decode = true,
+  knownDuration: givenDuration,
   jobId = null,
   jobRevision,
   segments,
@@ -134,6 +143,7 @@ export function WaveformPlayer({
   const seeking = useRef(false)
   const byteSize = size ?? (source instanceof Blob ? source.size : undefined)
   const tooLarge = byteSize !== undefined && byteSize > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+  const local = decode && !tooLarge
   // A waveform decoded for an earlier source no longer counts.
   const waveform = decoded?.source === source ? decoded.waveform : null
 
@@ -156,8 +166,8 @@ export function WaveformPlayer({
   useEffect(() => {
     if (!source) return
     const controller = new AbortController()
-    // Too large to decode here: the waveform the analysis computed, once there is one.
-    const decoding = tooLarge
+    // Not decoded here: the waveform the analysis computed, once there is one.
+    const decoding = !local
       ? jobId
         ? jobWaveform(jobId)
         : null
@@ -170,9 +180,9 @@ export function WaveformPlayer({
     })
     return () => controller.abort()
     // `jobRevision` only asks again; `jobWaveform` keeps what it found.
-  }, [jobId, jobRevision, source, tooLarge])
+  }, [jobId, jobRevision, local, source])
 
-  const knownDuration = duration || waveform?.duration || 0
+  const knownDuration = duration || waveform?.duration || givenDuration || 0
   useEffect(() => {
     if (knownDuration > 0) onDuration?.(knownDuration)
   }, [knownDuration, onDuration])

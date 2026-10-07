@@ -13,9 +13,16 @@ import { WorkspaceContext } from './use-workspace'
 
 /**
  * What the work area shows (T-01): the entry choice, the upload queue, regular recording, live
- * transcription, or a saved transcript.
+ * transcription, a meeting recording, or a saved transcript.
  */
-export const TRANSCRIPTION_VIEWS = ['choice', 'upload', 'record', 'live', 'result'] as const
+export const TRANSCRIPTION_VIEWS = [
+  'choice',
+  'upload',
+  'record',
+  'live',
+  'meeting',
+  'result'
+] as const
 export type TranscriptionView = (typeof TRANSCRIPTION_VIEWS)[number]
 
 /** The tabs of a saved transcript (T-22). */

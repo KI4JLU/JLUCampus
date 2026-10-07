@@ -56,13 +56,17 @@ export function encodeWav(source: PcmSource): ArrayBuffer {
 
 /**
  * The name kiChat gives a take, `<username>-YYYYMMDD-HHMMSS.wav`, in local time of the moment the
- * recording started.
+ * recording started. Meeting takes stay WebM and carry `.webm` instead.
  */
-export function recordingFilename(username: string, startedAt: Date): string {
+export function recordingFilename(
+  username: string,
+  startedAt: Date,
+  extension: 'wav' | 'webm' = 'wav'
+): string {
   const pad = (value: number): string => String(value).padStart(2, '0')
   const date = `${startedAt.getFullYear()}${pad(startedAt.getMonth() + 1)}${pad(startedAt.getDate())}`
   const time = `${pad(startedAt.getHours())}${pad(startedAt.getMinutes())}${pad(startedAt.getSeconds())}`
-  return `${username}-${date}-${time}.wav`
+  return `${username}-${date}-${time}.${extension}`
 }
 
 /**

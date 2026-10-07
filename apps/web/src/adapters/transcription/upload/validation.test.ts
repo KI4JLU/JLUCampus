@@ -16,12 +16,16 @@ describe('partitionFiles (T-04)', () => {
       fake('no-extension', 'audio/ogg', 1),
       fake('clip.mp4', '', 1),
       fake('notes.txt', 'text/plain', 22),
-      fake('voice.webm', 'audio/webm', 1)
+      fake('meeting.webm', 'audio/webm', 1)
     ])
-    expect(accepted.map((file) => file.name)).toEqual(['talk.MP3', 'no-extension', 'clip.mp4'])
+    expect(accepted.map((file) => file.name)).toEqual([
+      'talk.MP3',
+      'no-extension',
+      'clip.mp4',
+      'meeting.webm'
+    ])
     expect(rejected.map(({ file, reason }) => [file.name, reason])).toEqual([
-      ['notes.txt', 'unsupported'],
-      ['voice.webm', 'unsupported']
+      ['notes.txt', 'unsupported']
     ])
   })
 

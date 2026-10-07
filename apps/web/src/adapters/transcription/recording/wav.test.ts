@@ -81,6 +81,12 @@ describe('recordingFilename', () => {
       'user-20270131-235959.wav'
     )
   })
+
+  it('names a meeting take .webm, never .wav', () => {
+    expect(recordingFilename('max.spaeth', new Date(2026, 9, 4, 9, 5, 7), 'webm')).toBe(
+      'max.spaeth-20261004-090507.webm'
+    )
+  })
 })
 
 describe('recordingUsername', () => {
