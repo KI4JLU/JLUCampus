@@ -1,4 +1,4 @@
-import type { DragEvent } from 'react'
+import { useSyncExternalStore, type DragEvent } from 'react'
 import { FilePlusIcon, FileTextIcon, FolderIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, Card, CardContent, Input } from '@ki4jlu/design-system'
@@ -41,7 +41,9 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const { queue, dialogs } = useUpload()
   const { openTranscript } = useTranscriptionWorkspace()
-  const locked = groupLocked(state, group)
+  // While its transcript is being saved, the group and its files can be neither removed nor moved.
+  const saving = useSyncExternalStore(queue.subscribe, () => queue.isSaving(group.id))
+  const locked = groupLocked(state, group) || saving
 
   const commitName = async (): Promise<void> => {
     if (!(await queue.commitGroupName(group.id))) {
@@ -124,6 +126,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
                 type="button"
                 variant="ghost"
                 size="icon"
+                disabled={saving}
                 aria-label={t('transcription.upload.deleteGroupNamed', { name: group.name })}
                 title={t('transcription.upload.deleteTranscriptGroup')}
                 onClick={() => void removeGroup()}
@@ -147,7 +150,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={state.processing}
+                disabled={state.processing || saving}
                 onClick={() => void queue.saveGroup(group.id)}
               >
                 {t('transcription.common.retry')}
@@ -164,6 +167,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
                 position={{ groupIndex: index, fileIndex }}
                 groups={state.groups}
                 locked={locked}
+                saving={saving}
                 processing={state.processing}
                 onOpenMapping={props.onOpenMapping}
                 onDragStart={props.onDragStart}

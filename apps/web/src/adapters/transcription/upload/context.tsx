@@ -186,10 +186,16 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     [alertGroupFull, checkFiles, maxFiles, queue]
   )
 
-  /** Moves a file; one refused because the target group is full gets the catalog's alert. */
+  /**
+   * Moves a file; one refused because the target group is full gets the catalog's alert, not one
+   * refused because a start runs or a group is being saved.
+   */
   const moveFile = useCallback(
     (from: FilePosition, toGroupIndex: number, toFileIndex: number | null = null): void => {
-      if (queue.moveFile(from, toGroupIndex, toFileIndex) || queue.getSnapshot().processing) return
+      if (queue.moveFile(from, toGroupIndex, toFileIndex)) return
+      const { groups, processing } = queue.getSnapshot()
+      const involved = [groups[from.groupIndex], groups[toGroupIndex]]
+      if (processing || involved.some((group) => group && queue.isSaving(group.id))) return
       void alertGroupFull()
     },
     [alertGroupFull, queue]

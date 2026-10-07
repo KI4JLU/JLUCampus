@@ -37,10 +37,12 @@ export interface FileRowProps {
   /** The whole queue, for the move menu. */
   groups: readonly QueueGroup[]
   /**
-   * No moving: a start runs or the group is saved (T-07, T-11). Removing stays possible until the
-   * group is saved, during a start too (kiChat cancels the job then).
+   * No moving: a start runs or the group is saved or being saved (T-07, T-11). Removing stays
+   * possible until the group is saved, during a start too (kiChat cancels the job then).
    */
   locked: boolean
+  /** The group's transcript is being saved: no removing, as the transcript needs the audio. */
+  saving: boolean
   processing: boolean
   onOpenMapping: (fileId: string) => void
   onDragStart: (position: FilePosition) => void
@@ -57,7 +59,7 @@ export interface FileRowProps {
  * did without (one automatic voice, no AI correction).
  */
 export function FileRow(props: FileRowProps): React.JSX.Element {
-  const { file, position, groups, locked, processing } = props
+  const { file, position, groups, locked, saving, processing } = props
   const { t, i18n } = useTranslation()
   const { queue, dialogs, start } = useUpload()
   const { capabilities } = useTranscriptionWorkspace()
@@ -178,6 +180,7 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
               type="button"
               variant="ghost"
               size="icon"
+              disabled={saving}
               aria-label={t('transcription.upload.removeFileNamed', { name: file.name })}
               title={t('transcription.upload.removeFile')}
               onClick={() => void remove()}

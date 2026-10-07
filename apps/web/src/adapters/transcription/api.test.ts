@@ -215,6 +215,36 @@ describe('pollGeneratedTitle', () => {
     expect(get).toHaveBeenCalledTimes(5)
   })
 
+  it('drops the late answer of a poll a newer save replaced', async () => {
+    vi.useFakeTimers()
+    const client = cached()
+    let answer: (latest: TranscriptionTranscript) => void = () => undefined
+    const stale = vi.fn(
+      () =>
+        new Promise<TranscriptionTranscript>((resolve) => {
+          answer = resolve
+        })
+    )
+    pollGeneratedTitle(client, saved, { get: stale })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(stale).toHaveBeenCalledTimes(1)
+    // Saved again while the first poll's request is under way; the new poll finds the AI title.
+    const onTitle = vi.fn()
+    pollGeneratedTitle(client, saved, { get: vi.fn(async () => done), onTitle })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(listed(client)).toMatchObject({ title: done.title, subtitle: 'Ein Test' })
+    expect(onTitle).toHaveBeenCalledTimes(1)
+    // The replaced poll's answer comes last, still with the saved title.
+    answer(saved)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(listed(client)).toMatchObject({ title: done.title, subtitle: 'Ein Test' })
+    expect(client.getQueryData(transcriptionKeys.transcript(saved.id))).toMatchObject({
+      title: done.title,
+      subtitle: 'Ein Test'
+    })
+    expect(stale).toHaveBeenCalledTimes(1)
+  })
+
   it('leaves a copy edited meanwhile alone, and stops when the transcript is gone', async () => {
     vi.useFakeTimers()
     const edited = { ...saved, title: 'Mein Titel', revision: 2 }

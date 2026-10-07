@@ -679,6 +679,9 @@ export function pollGeneratedTitle(
     let done = attempts >= TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS
     try {
       const latest = await get(saved.id)
+      // Replaced by a newer save's poll while asking: this late answer may predate what that one
+      // stored, and generated details do not change the revision that would tell.
+      if (titlePolls.get(saved.id) !== timer) return
       if (storeGeneratedDetails(client, latest) && latest.title !== title) {
         title = latest.title
         options.onTitle?.(latest)

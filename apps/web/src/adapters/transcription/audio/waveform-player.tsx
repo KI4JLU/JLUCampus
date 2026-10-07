@@ -20,6 +20,7 @@ import {
 import { cn } from '@/lib/utils'
 import { drawWaveform, segmentTitle, type WaveformColors } from './draw'
 import { playExclusively } from './exclusive'
+import { sourceLength, type MediaLength } from './length'
 import {
   blobWaveform,
   formatMegabytes,
@@ -100,7 +101,10 @@ export interface WaveformPlayerProps {
   compact?: boolean
   onTimeUpdate?: (seconds: number) => void
   onPlayingChange?: (playing: boolean) => void
-  /** The duration once known, from the media or the decoded waveform. */
+  /**
+   * The duration once known, from the media or the decoded waveform, and only after the media of
+   * the current source reported its metadata, so a seek waiting for it lands on that source.
+   */
   onDuration?: (seconds: number) => void
   className?: string
   ref?: Ref<WaveformPlayerHandle>
@@ -148,9 +152,10 @@ export function WaveformPlayer({
     source: Blob | string
     waveform: DecodedWaveform | null
   } | null>(null)
-  const [duration, setDuration] = useState(0)
-  /** The media reports no length of its own (`Infinity`), as recordings may. */
-  const [unknownLength, setUnknownLength] = useState(false)
+  /** What the media reported for the source it loaded; an earlier source's no longer counts. */
+  const [media, setMedia] = useState<MediaLength | null>(null)
+  /** The source the audio element was last given, which its metadata belongs to. */
+  const loading = useRef<Blob | string | null>(null)
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const rangeEnd = useRef<number | null>(null)
@@ -170,6 +175,7 @@ export function WaveformPlayer({
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
+    loading.current = source
     if (!source) {
       audio.removeAttribute('src')
       audio.load()
@@ -201,8 +207,7 @@ export function WaveformPlayer({
     // `jobRevision` only asks again; `jobWaveform` keeps what it found.
   }, [jobId, jobRevision, source, tooLarge, external])
 
-  const knownDuration =
-    duration || waveform?.duration || (unknownLength ? (timeline?.sourceDuration ?? 0) : 0)
+  const knownDuration = sourceLength(source, media, waveform?.duration, timeline?.sourceDuration)
   useEffect(() => {
     if (knownDuration > 0) onDuration?.(knownDuration)
   }, [knownDuration, onDuration])
@@ -456,17 +461,12 @@ export function WaveformPlayer({
         ref={audioRef}
         preload="metadata"
         hidden
-        onEmptied={() => {
-          setDuration(0)
-          setUnknownLength(false)
-          setTime(0)
-        }}
+        onEmptied={() => setTime(0)}
         onLoadedMetadata={(event) => {
           // Recordings may report Infinity; the decoded waveform's duration covers them, or the
-          // time line's length of this file.
-          const value = event.currentTarget.duration
-          if (Number.isFinite(value)) setDuration(value)
-          else setUnknownLength(true)
+          // time line's length of this file (`sourceLength`).
+          const loaded = loading.current
+          if (loaded) setMedia({ source: loaded, duration: event.currentTarget.duration })
         }}
         onTimeUpdate={(event) => {
           setTime(event.currentTarget.currentTime)

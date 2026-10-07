@@ -200,10 +200,18 @@ export class UploadQueue {
   private readonly reanalyzing = new Set<string>()
   /** Files whose job is being deleted; their group is not saved meanwhile. */
   private readonly removing = new Set<string>()
+  /**
+   * Groups whose transcript is being saved, with the save's outcome. Neither they nor their files
+   * are removed or moved meanwhile: deleting a job deletes its audio, a saved one's too.
+   */
+  private readonly saving = new Map<string, Promise<string | null>>()
   private lifetime = new AbortController()
-  /** Whether the active jobs are being listed; a listing cut short by `dispose` ends it. */
-  private restoring = false
-  /** The listing the last report of the upload view started; settled once its jobs are back. */
+  /**
+   * The restore under way; leaving the upload view or `dispose` aborts it, so nothing it listed
+   * comes back after that.
+   */
+  private restore: AbortController | null = null
+  /** The restore the last report of the upload view started; settled once its jobs are back. */
   private restoration: Promise<void> = Promise.resolve()
   /** The page's view as last reported by `showView`. */
   private view: string | null = null
@@ -236,6 +244,10 @@ export class UploadQueue {
   private set(next: QueueState): void {
     if (next === this.state) return
     this.state = next
+    this.notify()
+  }
+
+  private notify(): void {
     for (const listener of this.listeners) listener()
   }
 
@@ -259,14 +271,13 @@ export class UploadQueue {
     return this.state.groups.find((group) => group.id === groupId) ?? null
   }
 
-  /** Resolves once `ready` holds, or once the queue is disposed. */
-  private waitFor(ready: () => boolean): Promise<void> {
+  /** Resolves once `ready` holds, or once `signal` aborts (by default: the queue is disposed). */
+  private waitFor(ready: () => boolean, signal = this.lifetime.signal): Promise<void> {
     return new Promise((resolve) => {
-      if (ready() || this.lifetime.signal.aborted) {
+      if (ready() || signal.aborted) {
         resolve()
         return
       }
-      const signal = this.lifetime.signal
       const done = (): void => {
         unsubscribe()
         signal.removeEventListener('abort', done)
@@ -293,7 +304,7 @@ export class UploadQueue {
    */
   dispose(): void {
     this.lifetime.abort()
-    this.restoring = false
+    this.cancelRestore()
     for (const controller of this.flows.values()) controller.abort()
     this.flows.clear()
     for (const timer of this.creeps.values()) clearInterval(timer)
@@ -350,14 +361,15 @@ export class UploadQueue {
 
   /**
    * Adds checked files to a group (`null`: where dropped files go) and uploads them. Files already
-   * in that group are skipped before the limit counts (T-05). Nothing is added while a start runs.
-   * Returns the rows added.
+   * in that group are skipped before the limit counts (T-05). Nothing is added while a start runs,
+   * nor to a group being saved. Returns the rows added.
    */
   addFiles(files: readonly File[], groupIndex: number | null = null): QueueFile[] {
     if (this.state.processing || files.length === 0) return []
     let groups = this.state.groups
     const index = groupIndex ?? dropTargetIndex(groups)
-    if (groups[index]?.saved) return []
+    const target = groups[index]
+    if (target && (target.saved || this.saving.has(target.id))) return []
     const room = this.room(groups[index]?.files.length ?? 0)
     const result = addToGroup(groups, index, files.map(queueFileFrom), room)
     groups = renumberGroups(result.groups)
@@ -666,32 +678,41 @@ export class UploadQueue {
   /**
    * kiChat's `loadActiveJobs`, run each time the upload view opens: the user's unsaved jobs come
    * back, each as a group of its own named after its file, without a local file. Jobs the queue
-   * already has are skipped; a listing already under way is not started twice.
+   * already has are skipped; a restore already under way is not started twice. One aborted by
+   * leaving the upload view or by `dispose` restores nothing; the next visit lists again.
    */
   async restoreActiveJobs(): Promise<void> {
-    if (this.restoring || this.disposed) return
-    this.restoring = true
-    const lifetime = this.lifetime
-    let jobs: TranscriptionJob[]
+    if (this.restore || this.disposed) return
+    const restore = new AbortController()
+    this.restore = restore
+    const { signal } = restore
     try {
-      jobs = await this.options.api.listJobs(lifetime.signal)
-    } catch {
-      // Like kiChat, a failed listing only means nothing is restored; the next visit tries again.
-      return
+      let jobs: TranscriptionJob[]
+      try {
+        jobs = await this.options.api.listJobs(signal)
+      } catch {
+        // Like kiChat, a failed listing only means nothing is restored; the next visit tries again.
+        return
+      }
+      if (signal.aborted) return
+      // A row whose job is being created may be listed before it knows its job id: once it does,
+      // the check below skips that job.
+      await this.waitFor(() => !allFiles(this.state.groups).some(creatingJob), signal)
+      for (const job of jobs) {
+        if (signal.aborted) return
+        if (job.transcriptId !== null || job.status === 'cancelled') continue
+        if (findFileByJob(this.state.groups, job.id)) continue
+        this.restoreJob(job)
+      }
     } finally {
-      if (lifetime === this.lifetime) this.restoring = false
+      if (this.restore === restore) this.restore = null
     }
-    // Disposed meanwhile: the upload view lists again when it shows after the next `attach`.
-    if (lifetime.signal.aborted) return
-    // A row whose job is being created may be listed before it knows its job id: once it does,
-    // the check below skips that job.
-    await this.waitFor(() => !allFiles(this.state.groups).some(creatingJob))
-    for (const job of jobs) {
-      if (this.disposed) return
-      if (job.transcriptId !== null || job.status === 'cancelled') continue
-      if (findFileByJob(this.state.groups, job.id)) continue
-      this.restoreJob(job)
-    }
+  }
+
+  /** Ends the restore under way, if any. */
+  private cancelRestore(): void {
+    this.restore?.abort()
+    this.restore = null
   }
 
   private restoreJob(job: TranscriptionJob): void {
@@ -1050,11 +1071,14 @@ export class UploadQueue {
    * failed save keeps the results for another try with the same idempotency key. Saved by a start,
    * the rows keep their status ('Transcription abgeschlossen' or 'Bereit (aus Cache)'),
    * as kiChat's `saveProcessedFile` only adds the group's links; otherwise they read 'Fertig'.
+   * A save of a group already being saved answers with that one.
    */
   async saveGroup(
     groupId: string,
     { afterStart = false }: { afterStart?: boolean } = {}
   ): Promise<string | null> {
+    const running = this.saving.get(groupId)
+    if (running) return running
     const group = this.group(groupId)
     if (!group || group.saved) return group?.saved?.id ?? null
     // A file on its way out is not saved with its group.
@@ -1078,6 +1102,27 @@ export class UploadQueue {
       files,
       chosenColors
     })
+    // From the request until the group is saved or not, including the adoption after a `409`,
+    // its files and the group stay (see `removeFile`).
+    const saving = this.persistGroup(groupId, input, afterStart).finally(() => {
+      this.saving.delete(groupId)
+      this.notify()
+    })
+    this.saving.set(groupId, saving)
+    this.notify()
+    return saving
+  }
+
+  /** Whether a group's transcript is being saved; its files are neither removed nor moved then. */
+  isSaving(groupId: string): boolean {
+    return this.saving.has(groupId)
+  }
+
+  private async persistGroup(
+    groupId: string,
+    input: TranscriptionTranscriptCreate,
+    afterStart: boolean
+  ): Promise<string | null> {
     let transcript: TranscriptionTranscript
     try {
       transcript = await this.options.api.createTranscript(input)
@@ -1228,12 +1273,14 @@ export class UploadQueue {
   }
 
   /**
-   * kiChat's `moveFile`: nothing moves while a start runs, into or out of a saved group, or into a
-   * group that holds as many files as allowed. Resolves whether it moved.
+   * kiChat's `moveFile`: nothing moves while a start runs, into or out of a saved group or one
+   * being saved, or into a group that holds as many files as allowed. Resolves whether it moved.
    */
   moveFile(from: FilePosition, toGroupIndex: number, toFileIndex: number | null = null): boolean {
     if (this.state.processing) return false
+    const source = this.state.groups[from.groupIndex]
     const target = this.state.groups[toGroupIndex]
+    if ([source, target].some((group) => group && this.saving.has(group.id))) return false
     if (from.groupIndex !== toGroupIndex && this.room(target?.files.length ?? 0) === 0) {
       return false
     }
@@ -1254,11 +1301,17 @@ export class UploadQueue {
    * Removes a file: its job is deleted on the server first, and only that success removes the row
    * (T-08). During a start too, which cancels the job (kiChat): its group then is not saved, and
    * the next start reuses the results of the files that stay. Resolves `false` when the deletion
-   * failed.
+   * failed. While its group is being saved (a confirmation may end after the save began) the
+   * removal waits for the save; a saved group keeps the file.
    */
   async removeFile(fileId: string): Promise<boolean> {
     const position = findFile(this.state.groups, fileId)
     if (!position || position.group.saved) return true
+    const saving = this.saving.get(position.group.id)
+    if (saving) {
+      await saving.catch(() => null)
+      return this.removeFile(fileId)
+    }
     const jobId = position.file.jobId
     if (jobId) {
       // The upload stops first, so it stores nothing after the deletion (T-08).
@@ -1276,11 +1329,16 @@ export class UploadQueue {
   /**
    * kiChat's `removeGroup`: deletes the jobs of all its files, then the group, during a start too.
    * Files whose job could not be deleted stay, and so does the group then; resolves `false` in
-   * that case.
+   * that case. Like `removeFile`, it waits for a save of the group under way.
    */
   async removeGroup(groupId: string): Promise<boolean> {
     const group = this.group(groupId)
     if (!group || group.saved) return true
+    const saving = this.saving.get(groupId)
+    if (saving) {
+      await saving.catch(() => null)
+      return this.removeGroup(groupId)
+    }
     for (const file of group.files) if (file.jobId) this.abortUpload(file.id)
     for (const file of group.files) this.removing.add(file.id)
     const outcomes = await Promise.all(
@@ -1350,13 +1408,16 @@ export class UploadQueue {
   showView(view: string): void {
     const previous = this.view
     this.view = view
+    // What a restore lists after the upload view was left does not come back.
+    if (view !== 'upload') this.cancelRestore()
     if (view === 'choice' && previous !== null && previous !== 'choice') this.resetSelection()
-    if (view === 'upload' && !this.restoring) this.restoration = this.restoreActiveJobs()
+    if (view === 'upload' && !this.restore) this.restoration = this.restoreActiveJobs()
   }
 
   /**
-   * Settles when the jobs listed for the upload view are back in the queue, so recorded takes
-   * join the first group after them, as kiChat adds them 300 ms after `loadActiveJobs` (T-58).
+   * Settles when the jobs listed for the upload view are back in the queue, or when that restore
+   * was aborted, so recorded takes join the first group after them, as kiChat adds them 300 ms
+   * after `loadActiveJobs` (T-58).
    */
   whenRestored(): Promise<void> {
     return this.restoration

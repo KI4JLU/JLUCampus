@@ -757,6 +757,95 @@ describe('UploadQueue: removing during an upload (T-08)', () => {
   })
 })
 
+describe('UploadQueue: removing while a group is saved (T-08, T-14)', () => {
+  /** Two analysed files whose transcriptions completed, ready for a start to save them. */
+  async function completedGroup(api: FakeApi, script: FakeServer['script']): Promise<UploadQueue> {
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    script('job-2', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api)
+    queue.addFiles([wav('a.wav'), wav('b.wav')])
+    await until(() => rows(queue).every((file) => file.phase === 'ready'))
+    script('job-1', { status: 'completed', result: result('A', 5) })
+    script('job-2', { status: 'completed', result: result('B', 4) })
+    return queue
+  }
+
+  it('deletes no job while the save’s answer is pending, and the group ends saved', async () => {
+    const { api, script } = server()
+    const queue = await completedGroup(api, script)
+    let answer: () => void = () => undefined
+    api.createTranscript.mockImplementationOnce(
+      (input) => new Promise((resolve) => (answer = () => resolve(transcript(input))))
+    )
+    const started = queue.start()
+    await until(() => api.createTranscript.mock.calls.length === 1)
+    const groupId = queue.getSnapshot().groups[0]!.id
+    expect(queue.isSaving(groupId)).toBe(true)
+    queue.addGroup()
+    expect(queue.moveFile({ groupIndex: 0, fileIndex: 0 }, 1)).toBe(false)
+
+    // Confirmed after the save began: the removal waits for it.
+    const removedFile = queue.removeFile(row(queue, 'a.wav').id)
+    const removedGroup = queue.removeGroup(groupId)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(api.deleteJob).not.toHaveBeenCalled()
+
+    answer()
+    expect(await started).toEqual({ status: 'done', savedIds: ['transcript-1'], failed: false })
+    expect(await removedFile).toBe(true)
+    expect(await removedGroup).toBe(true)
+    expect(api.deleteJob).not.toHaveBeenCalled()
+    expect(api.createTranscript).toHaveBeenCalledOnce()
+    expect(queue.isSaving(groupId)).toBe(false)
+    expect(queue.getSnapshot().groups[0]).toMatchObject({ saved: { id: 'transcript-1' } })
+    expect(rows(queue).map((file) => file.name)).toEqual(['a.wav', 'b.wav'])
+    queue.dispose()
+  })
+
+  it('deletes no job while a refused save adopts another page’s transcript', async () => {
+    const { api, script } = server()
+    const queue = await completedGroup(api, script)
+    script('job-1', { status: 'completed', result: result('A', 5), transcriptId: 'other-1' })
+    script('job-2', { status: 'completed', result: result('B', 4), transcriptId: 'other-1' })
+    api.createTranscript.mockRejectedValue(new ApiRequestError(409, null))
+    let adopt: () => void = () => undefined
+    const other = transcript({ title: 'a.wav' } as TranscriptionTranscriptCreate, 'other-1')
+    api.getTranscript.mockImplementation(
+      () => new Promise((resolve) => (adopt = () => resolve(other)))
+    )
+    const started = queue.start()
+    await until(() => api.getTranscript.mock.calls.length === 1)
+    const removed = queue.removeFile(row(queue, 'b.wav').id)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(api.deleteJob).not.toHaveBeenCalled()
+
+    adopt()
+    expect(await started).toMatchObject({ savedIds: ['other-1'], failed: false })
+    expect(await removed).toBe(true)
+    expect(api.deleteJob).not.toHaveBeenCalled()
+    expect(queue.getSnapshot().groups[0]).toMatchObject({ saved: { id: 'other-1' } })
+    queue.dispose()
+  })
+
+  it('removes the file as confirmed once the save failed', async () => {
+    const { api, script } = server()
+    const queue = await completedGroup(api, script)
+    let fail: () => void = () => undefined
+    api.createTranscript.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = () => reject(new Error('offline'))))
+    )
+    const started = queue.start()
+    await until(() => api.createTranscript.mock.calls.length === 1)
+    const removed = queue.removeFile(row(queue, 'a.wav').id)
+    fail()
+    expect(await started).toMatchObject({ savedIds: [], failed: true })
+    expect(await removed).toBe(true)
+    expect(api.deleteJob).toHaveBeenCalledWith('job-1')
+    expect(rows(queue).map((file) => file.name)).toEqual(['b.wav'])
+    queue.dispose()
+  })
+})
+
 describe('UploadQueue: the mapping dialog’s voices (T-18, T-21)', () => {
   it('offers the dialog for a restored analysed job without voices', async () => {
     const { api } = server()
@@ -877,6 +966,67 @@ describe('UploadQueue: restoring when the upload view opens (T-15)', () => {
     created()
     await restoring
     expect(rows(queue).map((file) => file.name)).toEqual(['a.wav'])
+    queue.dispose()
+  })
+
+  it('restores nothing listed after the page went back to the choice', async () => {
+    const { api, script } = server()
+    script('job-a', { status: 'completed', result: result('A', 5) })
+    let answer: (jobs: TranscriptionJob[]) => void = () => undefined
+    api.listJobs.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+    const queue = makeQueue(api)
+    queue.attach()
+    queue.showView('choice')
+    queue.showView('upload')
+    const restored = queue.whenRestored()
+    queue.showView('choice')
+    answer([job('job-a', { status: 'transcribing', speakers: SPEAKERS })])
+    await restored
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(rows(queue)).toEqual([])
+    expect(api.getJob).not.toHaveBeenCalled()
+    expect(api.createTranscript).not.toHaveBeenCalled()
+
+    // The next visit lists again and resumes the job there.
+    api.listJobs.mockResolvedValue([job('job-a', { status: 'transcribing', speakers: SPEAKERS })])
+    queue.showView('upload')
+    await until(() => Boolean(queue.getSnapshot().groups[0]?.saved))
+    expect(api.listJobs).toHaveBeenCalledTimes(2)
+    queue.dispose()
+  })
+
+  it('restores nothing after a dispose and re-attach while it waited for a job being created', async () => {
+    const { api, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    let created: () => void = () => undefined
+    const create = api.createJob.getMockImplementation()!
+    api.createJob.mockImplementationOnce(
+      (input) => new Promise((resolve) => (created = () => resolve(create(input))))
+    )
+    api.listJobs.mockResolvedValueOnce([
+      job('job-1', { status: 'uploading' }),
+      job('job-x', { status: 'analyzed', speakers: SPEAKERS })
+    ])
+    const queue = makeQueue(api)
+    queue.attach()
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'uploading')
+    queue.showView('upload')
+    const restored = queue.whenRestored()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    // As React's StrictMode remounts: the old restore must not take the new lifetime for its own.
+    queue.dispose()
+    queue.attach()
+    await restored
+    expect(rows(queue).map((file) => file.name)).toEqual(['a.wav'])
+
+    // The remount reports the view again; that listing finds nothing new.
+    queue.showView('upload')
+    created()
+    await queue.whenRestored()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(rows(queue).map((file) => file.name)).toEqual(['a.wav'])
+    expect(api.listJobs).toHaveBeenCalledTimes(2)
     queue.dispose()
   })
 })
