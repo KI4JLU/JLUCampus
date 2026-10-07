@@ -520,14 +520,20 @@ export class UploadQueue {
    * The job as the event stream reports it, one state at a time, until the flow is aborted
    * (`Aborted`) or the job is lost (`JobLost`). It is fetched once after each (re)connect of the
    * stream, and once right away when the stream is up already, as events may have been missed
-   * meanwhile; a `completed` job is fetched for its result, which events leave out. A fetch answers
-   * for the states reported before it; one the stream reported on the job while it ran may be older
-   * than those reports and is dropped, as they follow. A failed fetch is tried again on the next
-   * (re)connect, or after `syncRetryMs` at the latest, so a passing failure does not leave the file
-   * waiting; after `MAX_SYNC_ERRORS` failures in a row, or once the job is gone, it is lost.
+   * meanwhile; a `completed` job is fetched for its result, which events leave out. States reported
+   * before a fetch wait for it: a successful answer replaces them, unless the stream reported on
+   * the job while it ran, as the answer may then predate those reports. A fetch that failed, or
+   * that the stream overtook, leaves the reports to tell the state. A failed fetch the stream did
+   * not overtake is tried again on the next (re)connect, or after `syncRetryMs` at the latest, so a
+   * passing failure does not leave the file waiting; after `MAX_SYNC_ERRORS` such failures in a row
+   * the job is lost once the states reported before are through, and at once when it is gone.
    */
   private async *jobStates(jobId: string, signal: AbortSignal): AsyncGenerator<TranscriptionJob> {
-    type Item = { kind: 'job'; job: TranscriptionJob } | { kind: 'sync' } | { kind: 'gone' }
+    type Item =
+      | { kind: 'job'; job: TranscriptionJob }
+      | { kind: 'sync' }
+      | { kind: 'gone' }
+      | { kind: 'lost'; reason: unknown }
     const inbox: Item[] = []
     let wake: (() => void) | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
@@ -536,6 +542,12 @@ export class UploadQueue {
     const push = (item: Item): void => {
       inbox.push(item)
       wake?.()
+    }
+    /** Drops the syncs among the first `count` items: a fetch answered them. */
+    const dropSyncs = (count: number): void => {
+      for (let index = count - 1; index >= 0; index--) {
+        if (inbox[index]!.kind === 'sync') inbox.splice(index, 1)
+      }
     }
     const onAbort = (): void => wake?.()
     signal.addEventListener('abort', onAbort, { once: true })
@@ -557,7 +569,7 @@ export class UploadQueue {
     try {
       for (;;) {
         if (signal.aborted) throw new Aborted()
-        const item = inbox.shift()
+        const item = inbox[0]
         if (!item) {
           await new Promise<void>((resolve) => {
             wake = resolve
@@ -566,34 +578,50 @@ export class UploadQueue {
           continue
         }
         if (item.kind === 'gone') throw new JobLost(null)
+        if (item.kind === 'lost') throw new JobLost(item.reason)
         if (item.kind === 'job') {
+          inbox.shift()
           yield item.job
           continue
-        }
-        // One fetch answers every sync asked for and every state reported so far.
-        for (let index = inbox.length - 1; index >= 0; index--) {
-          if (inbox[index]!.kind !== 'gone') inbox.splice(index, 1)
         }
         if (retryTimer) clearTimeout(retryTimer)
         retryTimer = null
         const reportsBefore = reports
+        // This sync and what was queued before the fetch; pushes only append meanwhile.
+        const before = inbox.length
         let job: TranscriptionJob
         try {
           job = await this.options.api.getJob(jobId, signal)
-          errors = 0
         } catch (error) {
           if (signal.aborted) throw new Aborted()
-          if (isGone(error) || ++errors >= MAX_SYNC_ERRORS) throw new JobLost(error)
+          dropSyncs(before)
+          // Reported on meanwhile: the reports tell the state (a `completed` one as a sync, so its
+          // result is still fetched); the failure does not count.
+          if (reports !== reportsBefore) continue
+          if (isGone(error)) throw new JobLost(error)
+          if (++errors >= MAX_SYNC_ERRORS) {
+            // The states reported before still go through first; nothing is fetched any more.
+            const states = inbox.filter((queued) => queued.kind !== 'sync')
+            inbox.splice(0, inbox.length, ...states, { kind: 'lost', reason: error })
+            continue
+          }
           retryTimer = setTimeout(
             () => push({ kind: 'sync' }),
             this.options.syncRetryMs ?? TRANSCRIPTION_EVENTS_RETRY_MS
           )
           continue
         }
+        errors = 0
         if (signal.aborted) throw new Aborted()
-        // Reported on meanwhile: the answer may predate those reports, which are in the inbox (a
-        // `completed` one as a sync, so its result is still fetched).
-        if (reports !== reportsBefore) continue
+        if (reports !== reportsBefore) {
+          // The answer may predate the reports, which go through in order instead.
+          dropSyncs(before)
+          continue
+        }
+        // The answer replaces every sync and state queued before the fetch.
+        for (let index = before - 1; index >= 0; index--) {
+          if (inbox[index]!.kind !== 'gone') inbox.splice(index, 1)
+        }
         yield job
       }
     } finally {

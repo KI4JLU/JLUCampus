@@ -357,6 +357,74 @@ describe('UploadQueue: following jobs by their events (T-10, T-11)', () => {
     expect(events.subscribers).toBe(0)
   })
 
+  it('keeps a state reported before a fetch that then fails, and goes on with it', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzing' })
+    let answer: (state: TranscriptionJob) => void = () => undefined
+    api.getJob.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        })
+    )
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => api.getJob.mock.calls.length === 1)
+    // The stream reconnects and reports the analysis done while the first fetch is under way.
+    api.getJob.mockRejectedValue(new Error('offline'))
+    events.setOpen(true)
+    events.emit({ type: 'job', data: job('job-1', { status: 'analyzed', speakers: SPEAKERS }) })
+    answer(job('job-1', { status: 'analyzing' }))
+    await until(() => row(queue, 'a.wav').phase !== 'analyzing')
+    expect(row(queue, 'a.wav')).toMatchObject({ phase: 'ready', status: 'readyForTranscription' })
+    expect(events.subscribers).toBe(0)
+  })
+
+  it('takes a state reported during a failed fetch before counting the failure', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzing' })
+    let fail: (error: Error) => void = () => undefined
+    api.getJob.mockImplementation(() =>
+      api.getJob.mock.calls.length < 5
+        ? Promise.reject(new Error('offline'))
+        : new Promise((_, reject) => {
+            fail = reject
+          })
+    )
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    // Four failures in a row; the fifth fetch is under way when the analysis is reported done.
+    await until(() => api.getJob.mock.calls.length === 5)
+    events.emit({ type: 'job', data: job('job-1', { status: 'analyzed', speakers: SPEAKERS }) })
+    fail(new Error('offline'))
+    await until(() => row(queue, 'a.wav').phase !== 'analyzing')
+    expect(row(queue, 'a.wav')).toMatchObject({ phase: 'ready', status: 'readyForTranscription' })
+    expect(api.getJob).toHaveBeenCalledTimes(5)
+    expect(events.subscribers).toBe(0)
+  })
+
+  it('fetches the result of a job reported completed during a failed fetch', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav').phase === 'ready')
+    script('job-1', { status: 'transcribing' })
+    let fail: (error: Error) => void = () => undefined
+    api.getJob.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = reject
+        })
+    )
+    const started = queue.start()
+    await until(() => events.subscribers === 1)
+    script('job-1', { status: 'completed', result: result('A', 5) })
+    fail(new Error('offline'))
+    expect(await started).toMatchObject({ failed: false })
+    expect(row(queue, 'a.wav').result?.text).toBe('A')
+  })
+
   it('catches up after the stream reconnects', async () => {
     const { api, events, script } = server()
     script('job-1', { status: 'analyzing' })
@@ -745,6 +813,42 @@ describe('UploadQueue: while a start runs (T-11)', () => {
     expect(await queue.removeFile(row(queue, 'a.wav').id)).toBe(false)
     expect(await started).toMatchObject({ savedIds: [], failed: true })
     expect(row(queue, 'a.wav')).toMatchObject({ phase: 'failed', tone: 'error' })
+    expect(events.subscribers).toBe(0)
+    queue.dispose()
+  })
+
+  it('fails a restored file whose fetches gave out while its deletion failed', async () => {
+    const { api, events, script } = server()
+    script('job-r', { status: 'transcribing' })
+    api.listJobs.mockResolvedValue([job('job-r', { status: 'transcribing', speakers: SPEAKERS })])
+    const queue = makeQueue(api, events)
+    queue.attach()
+    queue.showView('upload')
+    await until(() => rows(queue).length === 1 && events.subscribers === 1)
+    // The start waits for the restored transcription.
+    const started = queue.start()
+    let refuse: () => void = () => undefined
+    api.deleteJob.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          refuse = () => reject(new ApiRequestError(500, null))
+        })
+    )
+    const removed = queue.removeFile(rows(queue)[0]!.id)
+    api.getJob.mockClear()
+    api.getJob.mockRejectedValue(new Error('offline'))
+    events.setOpen(true)
+    await until(() => api.getJob.mock.calls.length === 5)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    // The flow waits for the deletion before it fails the row.
+    expect(rows(queue)[0]).toMatchObject({ phase: 'transcribing' })
+    refuse()
+    expect(await removed).toBe(false)
+    expect(await started).toMatchObject({ savedIds: [], failed: true })
+    expect(rows(queue)[0]).toMatchObject({
+      phase: 'failed',
+      error: { key: 'transcriptionError', message: 'offline' }
+    })
     expect(events.subscribers).toBe(0)
     queue.dispose()
   })
