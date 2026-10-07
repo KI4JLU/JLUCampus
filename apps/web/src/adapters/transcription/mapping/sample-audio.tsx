@@ -5,7 +5,7 @@ import type { QueueFile } from '../upload/queue'
 
 /**
  * The audio the mapping dialog plays its samples from: the local file, or for a restored job a
- * signed URL fetched anew when it expires within five minutes (T-21). All samples are windows of
+ * URL fetched anew when it expires within five minutes (T-21). All samples are windows of
  * the same file, as in kiChat.
  */
 export function useSampleSource(file: QueueFile): {

@@ -57,7 +57,7 @@ export interface WaveformPlayerHandle {
 }
 
 export interface WaveformPlayerProps {
-  /** A local file or recording, or a signed URL; `null` shows an empty player. */
+  /** A local file or recording, or a job's audio URL; `null` shows an empty player. */
   source: Blob | string | null
   /** Shown above the waveform and names the seek bar. */
   name?: string
@@ -101,7 +101,7 @@ function cssColor(element: Element, name: string): string {
  * The audio player the transcription page uses everywhere, after kiChat's `WaveformAudioPlayer`
  * and its global player: play/pause, a waveform that is the seek bar (pointer and keyboard), the
  * time, an optional speaker timeline and a highlighted region. Local files play from an object
- * URL; remote audio from a signed URL. Above 100 MB nothing is decoded here: the waveform the
+ * URL; remote audio from the job's audio URL. Above 100 MB nothing is decoded here: the waveform the
  * analysis computed is drawn (`jobId`), and the audio plays either way.
  */
 export function WaveformPlayer({

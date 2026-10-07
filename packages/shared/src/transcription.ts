@@ -1,8 +1,8 @@
 /**
  * The transcription module (`transcription` in `SINGLETON_COMPONENT_TYPES`), ported from kiChat's
  * transcription service (see `docs/TRANSCRIPTION-REQUIREMENTS.md`, items T-01 to T-63). The server
- * runs the whole pipeline itself: browsers upload audio straight to S3-compatible storage with
- * signed URLs, the server normalises and chunks it with ffmpeg, analyses the voices with an HTTP
+ * runs the whole pipeline itself: browsers upload audio through the server into S3-compatible
+ * storage, the server normalises and chunks it with ffmpeg, analyses the voices with an HTTP
  * diarisation endpoint, transcribes with an OpenAI-compatible `/audio/transcriptions` endpoint and
  * corrects, summarises and reassigns speakers with an OpenAI-compatible chat endpoint. Live
  * transcription streams the microphone over a WebSocket to the server, which relays it to the
@@ -99,7 +99,10 @@ export const TRANSCRIPTION_RESTORED_POLL_MS = 3000
 export const TRANSCRIPTION_SUBTITLE_POLL_ATTEMPTS = 5
 export const TRANSCRIPTION_SUBTITLE_POLL_MS = 2000
 
-/** Lifetime of a signed upload URL, and of signed playback and sample URLs. */
+/**
+ * How long a job takes uploads after it was created, and how long playback and sample URLs are
+ * handed out for before the browser asks for them again.
+ */
 export const TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS = 3600
 export const TRANSCRIPTION_MEDIA_URL_TTL_SECONDS = 7200
 /** A media URL that expires within this is fetched anew before use (T-21). */
@@ -451,7 +454,7 @@ export type TranscriptionJobError = z.infer<typeof transcriptionJobErrorSchema>
 export const transcriptionJobCreateSchema = z
   .object({
     filename: z.string().trim().min(1).max(TRANSCRIPTION_FILENAME_MAX),
-    /** Bytes the browser will upload; the signed URL accepts exactly these. */
+    /** Bytes the browser will upload; the upload accepts exactly these. */
     size: z.number().int().positive(),
     /** The browser's type, often empty for recordings and some files. */
     mimeType: z.string().trim().max(255).default(''),
@@ -469,7 +472,10 @@ export const transcriptionJobCreateSchema = z
   )
 export type TranscriptionJobCreate = z.input<typeof transcriptionJobCreateSchema>
 
-/** Where and how the browser uploads the bytes: one signed `PUT`, with exactly these headers. */
+/**
+ * Where and how the browser uploads the bytes: one `PUT` of the whole file to
+ * `TRANSCRIPTION_API.jobUpload` with the session cookie and exactly these headers.
+ */
 export const transcriptionUploadTargetSchema = z.object({
   url: z.url(),
   method: z.literal('PUT'),
@@ -558,7 +564,10 @@ export type TranscriptionJobCreated = z.infer<typeof transcriptionJobCreatedSche
 export const transcriptionJobListSchema = z.object({ jobs: z.array(transcriptionJobSchema) })
 export type TranscriptionJobList = z.infer<typeof transcriptionJobListSchema>
 
-/** A fresh signed URL for playback; it expires and must not be stored. */
+/**
+ * Where the browser plays a job's audio or a voice sample (`TRANSCRIPTION_API.jobAudioFile`,
+ * `jobSampleFile`), with the session cookie; ask again once it expires, do not store it.
+ */
 export const transcriptionMediaUrlSchema = z.object({
   url: z.url(),
   expiresAt: z.iso.datetime()
@@ -1593,9 +1602,7 @@ export const transcriptionConnectionFindingSchema = z.discriminatedUnion('kind',
     reason: z.enum(TRANSCRIPTION_REALTIME_UNAVAILABLE_REASONS),
     model: z.string()
   }),
-  z.object({ kind: z.literal('signedRoundTrip'), bucket: z.string() }),
   z.object({ kind: z.literal('serverRoundTrip'), bucket: z.string() }),
-  z.object({ kind: z.literal('signedUrlsUnreachable') }),
   z.object({
     kind: z.literal('invalidAnswer'),
     expected: z.enum(TRANSCRIPTION_CONNECTION_ANSWERS)
@@ -1648,13 +1655,24 @@ export const TRANSCRIPTION_API = {
   jobAnalyze: (id: string) => `${MODULE}/jobs/${id}/analyze`,
   /** POST `transcriptionDispatchSchema` → `transcriptionJobSchema`; a second dispatch `409 conflict`. */
   jobDispatch: (id: string) => `${MODULE}/jobs/${id}/dispatch`,
+  /**
+   * PUT the file's bytes, `Content-Length` exactly the size announced → 204. The server streams
+   * them into storage. Only while the job is `uploading` (`409 conflict` after), a size that does
+   * not match answers `400 validation`.
+   */
+  jobUpload: (id: string) => `${MODULE}/jobs/${id}/upload`,
   /** GET: `transcriptionMediaUrlSchema` for the uploaded audio. */
   jobAudio: (id: string) => `${MODULE}/jobs/${id}/audio`,
+  /** GET: the uploaded audio's bytes; honours `Range` (206) so players can seek. */
+  jobAudioFile: (id: string) => `${MODULE}/jobs/${id}/audio/file`,
   /** GET: `transcriptionJobPeaksSchema` once analysed; `404` before or without a waveform. */
   jobPeaks: (id: string) => `${MODULE}/jobs/${id}/peaks`,
   /** GET: `transcriptionMediaUrlSchema` for one analysed voice sample. */
   jobSample: (id: string, sampleId: string) =>
     `${MODULE}/jobs/${id}/samples/${encodeURIComponent(sampleId)}`,
+  /** GET: one voice sample's bytes (`audio/wav`); honours `Range` like `jobAudioFile`. */
+  jobSampleFile: (id: string, sampleId: string) =>
+    `${MODULE}/jobs/${id}/samples/${encodeURIComponent(sampleId)}/file`,
   /**
    * GET: `transcriptionTranscriptListSchema`. POST: `transcriptionTranscriptCreateSchema` → 201
    * `transcriptionTranscriptSchema` (200 when the idempotency key was used before).

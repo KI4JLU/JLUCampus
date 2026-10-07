@@ -314,9 +314,7 @@
           "gatewayRefused": "Das Gateway lehnt eine Live-Sitzung mit {{model}} ab.",
           "gatewayUnreachable": "Der Server erreicht das Gateway nicht."
         },
-        "signedRoundTrip": "Eine Testdatei wurde über signierte URLs in Bucket {{bucket}} hochgeladen, zurückgelesen und gelöscht",
         "serverRoundTrip": "Eine Testdatei wurde vom Server in Bucket {{bucket}} geschrieben, zurückgelesen und gelöscht",
-        "signedUrlsUnreachable": "Dieser Server erreicht die Adresse der signierten URLs nicht; Browser erreichen sie vielleicht trotzdem",
         "invalidAnswer": {
           "transcription": "Die Antwort war keine Transkription.",
           "diarization": "Die Antwort enthielt keine Sprecherabschnitte.",

@@ -329,7 +329,7 @@ const chatAnswerSchema = z.object({
     .min(1)
 })
 
-/** Signed upload and download of a small object, read back, deleted and gone (T-03, T-04). */
+/** A small object written, read back, deleted and gone, as the job routes use storage (T-03, T-04). */
 async function checkStorage(
   checks: Finding[],
   storage: TestStorage,
@@ -339,31 +339,13 @@ async function checkStorage(
   const key = `transcription/${componentId}/connection-tests/${randomUUID()}.txt`
   const content = `JLU Campus storage test ${randomUUID()}`
   const bytes = new TextEncoder().encode(content)
-  const contentType = 'text/plain'
-  let signed = true
   try {
-    const upload = await storage.presignUpload(key, {
-      contentType,
+    await storage.put(key, bytes, {
+      contentType: 'text/plain',
       contentLength: bytes.byteLength,
-      expiresIn: 60
+      signal
     })
-    try {
-      await answer(upload.url, { method: 'PUT', headers: upload.headers, body: bytes }, signal)
-    } catch (error) {
-      // Signed URLs point at the public endpoint, which this server may not reach itself.
-      if (!(error instanceof UpstreamError) || error.status !== null) throw error
-      signed = false
-      checks.push({ kind: 'signedUrlsUnreachable' })
-      await storage.put(key, bytes, { contentType, contentLength: bytes.byteLength, signal })
-    }
-    let stored: string
-    if (signed) {
-      const download = await storage.presignDownload(key, { expiresIn: 60 })
-      stored = await (await answer(download.url, { method: 'GET' }, signal)).text()
-    } else {
-      stored = await text(await storage.get(key, signal))
-    }
-    if (stored !== content) {
+    if ((await text(await storage.get(key, signal))) !== content) {
       throw new CheckFailed({ kind: 'invalidAnswer', expected: 'storedContent' }, null)
     }
   } finally {
@@ -372,10 +354,7 @@ async function checkStorage(
   if (await storage.head(key, signal)) {
     throw new CheckFailed(null, null, `The test object ${key} could not be deleted`)
   }
-  checks.push({
-    kind: signed ? 'signedRoundTrip' : 'serverRoundTrip',
-    bucket: storage.bucket
-  })
+  checks.push({ kind: 'serverRoundTrip', bucket: storage.bucket })
 }
 
 async function text(stream: Readable): Promise<string> {
@@ -385,10 +364,7 @@ async function text(stream: Readable): Promise<string> {
 }
 
 /** What the storage test uses of the storage. */
-export type TestStorage = Pick<
-  TranscriptionStorage,
-  'bucket' | 'presignUpload' | 'presignDownload' | 'put' | 'get' | 'delete' | 'head'
->
+export type TestStorage = Pick<TranscriptionStorage, 'bucket' | 'put' | 'get' | 'delete' | 'head'>
 
 export interface ConnectionContext {
   runtime: Pick<TranscriptionRuntime, 'config' | 'secrets'> &

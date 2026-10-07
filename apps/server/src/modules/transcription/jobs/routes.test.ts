@@ -20,8 +20,8 @@ const state = vi.hoisted(() => ({
   rows: new Map<string, JobRow>(),
   wakes: 0,
   storage: {
-    presignUpload: vi.fn(),
-    presignDownload: vi.fn(),
+    put: vi.fn(),
+    read: vi.fn(),
     head: vi.fn(),
     get: vi.fn(),
     deletePrefix: vi.fn()
@@ -210,22 +210,25 @@ const analyzedSpeakers = [
 beforeEach(() => {
   state.rows.clear()
   state.wakes = 0
-  state.storage.presignUpload.mockReset().mockImplementation(async (_key, options) => ({
-    url: 'http://storage.test/upload?signature=x',
-    method: 'PUT',
-    headers: { 'Content-Type': options.contentType },
-    expiresAt: '2026-10-04T09:00:00.000Z'
-  }))
-  state.storage.presignDownload.mockReset().mockImplementation(async (key: string) => ({
-    url: `http://storage.test/${key}?signature=x`,
-    expiresAt: '2026-10-04T10:00:00.000Z'
-  }))
+  state.storage.put.mockReset().mockImplementation(async (_key, body: Readable) => {
+    for await (const chunk of body) void chunk
+  })
+  state.storage.read.mockReset().mockImplementation(async (_key, options: { range?: string }) =>
+    options.range
+      ? {
+          body: Readable.from([Buffer.from('RI')]),
+          length: 2,
+          contentType: null,
+          range: 'bytes 0-1/4'
+        }
+      : { body: Readable.from([Buffer.from('RIFF')]), length: 4, contentType: null, range: null }
+  )
   state.storage.head.mockReset().mockResolvedValue({ size: 495_752, contentType: 'audio/wav' })
   state.storage.deletePrefix.mockReset().mockResolvedValue(3)
 })
 
 describe('upload session', () => {
-  it('creates the job and a signed PUT for exactly its size and type', async () => {
+  it('creates the job and names the API route its bytes go to', async () => {
     const { response, body } = await createJob()
     expect(response.status).toBe(201)
     expect(body).toMatchObject({
@@ -238,13 +241,48 @@ describe('upload session', () => {
         speakers: [],
         result: null
       },
-      upload: { method: 'PUT', headers: { 'Content-Type': 'audio/wav' } }
+      upload: {
+        url: `http://localhost:3000${TRANSCRIPTION_API.jobUpload(body.job.id)}`,
+        method: 'PUT',
+        headers: { 'Content-Type': 'audio/wav' }
+      }
     })
-    expect(state.storage.presignUpload).toHaveBeenCalledWith(
-      `transcription/${componentId}/jobs/${body.job.id}/source`,
-      { contentType: 'audio/wav', contentLength: 495_752 }
-    )
     expect(JSON.stringify(body.job)).not.toContain('transcription/')
+  })
+
+  it('streams the uploaded bytes into storage, once and at the announced size', async () => {
+    const { body } = await createJob('alice', { ...upload, size: 4 })
+    const id = body.job.id
+    const put = (bytes: string, userId = 'alice'): Promise<Response> =>
+      Promise.resolve(
+        app(userId).request(local(TRANSCRIPTION_API.jobUpload(id)), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'audio/wav', 'Content-Length': String(bytes.length) },
+          body: bytes
+        })
+      )
+    expect((await put('RIF')).status).toBe(400)
+    expect((await put('RIFF', 'bob')).status).toBe(404)
+    expect(state.storage.put).not.toHaveBeenCalled()
+    expect((await put('RIFF')).status).toBe(204)
+    expect(state.storage.put).toHaveBeenCalledWith(
+      `transcription/${componentId}/jobs/${id}/source`,
+      expect.any(Readable),
+      expect.objectContaining({ contentType: 'audio/wav', contentLength: 4 })
+    )
+    setRow(id, { status: 'analyzingQueued' })
+    expect((await put('RIFF')).status).toBe(409)
+  })
+
+  it('refuses uploads once their time is over', async () => {
+    const { body } = await createJob('alice', { ...upload, size: 4 })
+    setRow(body.job.id, { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) })
+    const late = await app('alice').request(local(TRANSCRIPTION_API.jobUpload(body.job.id)), {
+      method: 'PUT',
+      headers: { 'Content-Length': '4' },
+      body: 'RIFF'
+    })
+    expect(late.status).toBe(409)
   })
 
   it('validates name, type and size as kiChat (T-04)', async () => {
@@ -570,7 +608,7 @@ describe('status, list and media', () => {
     expect((await app('alice').request(local(TRANSCRIPTION_API.job(expired)))).status).toBe(404)
   })
 
-  it('signs fresh audio and sample URLs', async () => {
+  it('hands out audio and sample URLs on the API', async () => {
     const { body } = await createJob()
     const id = body.job.id
     const early = await app('alice').request(local(TRANSCRIPTION_API.jobAudio(id)))
@@ -578,25 +616,66 @@ describe('status, list and media', () => {
     setRow(id, { status: 'analyzed', speakers: analyzedSpeakers })
     const audio = await app('alice').request(local(TRANSCRIPTION_API.jobAudio(id)))
     await expect(audio.json()).resolves.toEqual({
-      url: `http://storage.test/transcription/${componentId}/jobs/${id}/source?signature=x`,
-      expiresAt: '2026-10-04T10:00:00.000Z'
+      url: `http://localhost:3000${TRANSCRIPTION_API.jobAudioFile(id)}`,
+      expiresAt: expect.any(String)
     })
-    expect(state.storage.presignDownload).toHaveBeenLastCalledWith(
-      `transcription/${componentId}/jobs/${id}/source`,
-      { contentType: 'audio/wav', filename: 'campus-test.wav' }
-    )
     const sample = await app('alice').request(
       local(TRANSCRIPTION_API.jobSample(id, 'SPEAKER_00-1'))
     )
-    expect(sample.status).toBe(200)
-    expect(state.storage.presignDownload).toHaveBeenLastCalledWith(
-      `transcription/${componentId}/jobs/${id}/samples/SPEAKER_00-1.wav`,
-      expect.objectContaining({ contentType: 'audio/wav' })
-    )
+    await expect(sample.json()).resolves.toMatchObject({
+      url: `http://localhost:3000${TRANSCRIPTION_API.jobSampleFile(id, 'SPEAKER_00-1')}`
+    })
     const unknown = await app('alice').request(
       local(TRANSCRIPTION_API.jobSample(id, 'SPEAKER_09-1'))
     )
     expect(unknown.status).toBe(404)
+  })
+
+  it('streams the audio, ranges included, and samples from storage', async () => {
+    const { body } = await createJob()
+    const id = body.job.id
+    expect((await app('alice').request(local(TRANSCRIPTION_API.jobAudioFile(id)))).status).toBe(404)
+    setRow(id, { status: 'analyzed', speakers: analyzedSpeakers })
+    const whole = await app('alice').request(local(TRANSCRIPTION_API.jobAudioFile(id)))
+    expect(whole.status).toBe(200)
+    expect(whole.headers.get('Content-Type')).toBe('audio/wav')
+    expect(whole.headers.get('Content-Length')).toBe('4')
+    expect(whole.headers.get('Accept-Ranges')).toBe('bytes')
+    expect(whole.headers.get('Content-Disposition')).toContain('campus-test.wav')
+    await expect(whole.text()).resolves.toBe('RIFF')
+    expect(state.storage.read).toHaveBeenLastCalledWith(
+      `transcription/${componentId}/jobs/${id}/source`,
+      expect.objectContaining({ range: undefined })
+    )
+
+    const part = await app('alice').request(local(TRANSCRIPTION_API.jobAudioFile(id)), {
+      headers: { Range: 'bytes=0-1' }
+    })
+    expect(part.status).toBe(206)
+    expect(part.headers.get('Content-Range')).toBe('bytes 0-1/4')
+    await expect(part.text()).resolves.toBe('RI')
+    expect(state.storage.read).toHaveBeenLastCalledWith(
+      `transcription/${componentId}/jobs/${id}/source`,
+      expect.objectContaining({ range: 'bytes=0-1' })
+    )
+
+    state.storage.read.mockRejectedValueOnce(
+      Object.assign(new Error('range'), { name: 'InvalidRange' })
+    )
+    const beyond = await app('alice').request(local(TRANSCRIPTION_API.jobAudioFile(id)), {
+      headers: { Range: 'bytes=9-' }
+    })
+    expect(beyond.status).toBe(416)
+
+    const sample = await app('alice').request(
+      local(TRANSCRIPTION_API.jobSampleFile(id, 'SPEAKER_00-1'))
+    )
+    expect(sample.status).toBe(200)
+    expect(state.storage.read).toHaveBeenLastCalledWith(
+      `transcription/${componentId}/jobs/${id}/samples/SPEAKER_00-1.wav`,
+      expect.anything()
+    )
+    expect((await app('bob').request(local(TRANSCRIPTION_API.jobAudioFile(id)))).status).toBe(404)
   })
 })
 

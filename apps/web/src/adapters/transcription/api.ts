@@ -112,7 +112,7 @@ export async function listJobs(signal?: AbortSignal): Promise<TranscriptionJob[]
   ).jobs
 }
 
-/** A new job and the signed URL its bytes go to (T-10). */
+/** A new job and where its bytes go (T-10). */
 export async function createJob(input: TranscriptionJobCreate): Promise<TranscriptionJobCreated> {
   return transcriptionJobCreatedSchema.parse(
     await apiFetch<unknown>(TRANSCRIPTION_API.jobs, { ...post, json: input })
@@ -150,7 +150,7 @@ export async function dispatchJob(
   )
 }
 
-/** A fresh signed URL of the job's audio (T-24). */
+/** A fresh URL of the job's audio (T-24). */
 export async function getJobAudioUrl(
   id: string,
   signal?: AbortSignal
@@ -178,7 +178,7 @@ export async function getJobPeaks(
   }
 }
 
-/** A fresh signed URL of one analysed voice sample (T-17, T-21). */
+/** A fresh URL of one analysed voice sample (T-17, T-21). */
 export async function getJobSampleUrl(
   id: string,
   sampleId: string,
@@ -376,40 +376,43 @@ export async function testAdminConnection(
 }
 
 // ---------------------------------------------------------------------------
-// Signed uploads
+// Uploads
 // ---------------------------------------------------------------------------
 
 /**
- * Why a signed upload failed, as kiChat tells them apart (T-16): storage answered with an error
+ * Why an upload failed, as kiChat tells them apart (T-16): the server answered with an error
  * status, the network failed, or the upload was cancelled.
  */
-export class SignedUploadError extends Error {
+export class UploadError extends Error {
   constructor(
     readonly kind: 'status' | 'network' | 'aborted',
     readonly status: number | null = null
   ) {
     super(kind === 'status' ? `Upload failed with status ${status}` : `Upload ${kind}`)
-    this.name = 'SignedUploadError'
+    this.name = 'UploadError'
   }
 }
 
 /**
- * Uploads `body` straight to storage with the job's signed `PUT`, reporting progress from 0 to 1.
- * `XMLHttpRequest` because `fetch` reports no upload progress. Recordings and uploads both use it.
+ * Uploads `body` with the job's `PUT` to the API, which streams it into storage, reporting progress
+ * from 0 to 1. `XMLHttpRequest` because `fetch` reports no upload progress. The session cookie
+ * goes along also when the API is on another origin (desktop app, development). Recordings and
+ * uploads both use it.
  */
-export function uploadToSignedUrl(
+export function uploadToTarget(
   target: TranscriptionUploadTarget,
   body: Blob,
   options: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {}
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
-      reject(new SignedUploadError('aborted'))
+      reject(new UploadError('aborted'))
       return
     }
     const request = new XMLHttpRequest()
     const abort = (): void => request.abort()
     request.open(target.method, target.url)
+    request.withCredentials = true
     for (const [name, value] of Object.entries(target.headers))
       request.setRequestHeader(name, value)
     request.upload.onprogress = (event) => {
@@ -421,22 +424,22 @@ export function uploadToSignedUrl(
       if (request.status >= 200 && request.status < 300) {
         options.onProgress?.(1)
         resolve()
-      } else reject(new SignedUploadError('status', request.status))
+      } else reject(new UploadError('status', request.status))
     }
     request.onerror = () => {
       options.signal?.removeEventListener('abort', abort)
-      reject(new SignedUploadError('network'))
+      reject(new UploadError('network'))
     }
     request.onabort = () => {
       options.signal?.removeEventListener('abort', abort)
-      reject(new SignedUploadError('aborted'))
+      reject(new UploadError('aborted'))
     }
     options.signal?.addEventListener('abort', abort, { once: true })
     request.send(body)
   })
 }
 
-/** Whether a signed URL expires within `TRANSCRIPTION_MEDIA_URL_REFRESH_SECONDS` (T-21). */
+/** Whether a media URL expires within `TRANSCRIPTION_MEDIA_URL_REFRESH_SECONDS` (T-21). */
 export function mediaUrlExpiresSoon(
   media: TranscriptionMediaUrl,
   now: number = Date.now()
@@ -444,7 +447,7 @@ export function mediaUrlExpiresSoon(
   return Date.parse(media.expiresAt) - now <= TRANSCRIPTION_MEDIA_URL_REFRESH_SECONDS * 1000
 }
 
-/** How long a signed URL may be used before it is fetched anew, in milliseconds. */
+/** How long a media URL may be used before it is fetched anew, in milliseconds. */
 function mediaStaleTime(media: TranscriptionMediaUrl | undefined): number {
   if (!media) return 0
   return Math.max(
@@ -500,7 +503,7 @@ export function useTranscriptionJob(
 }
 
 /**
- * A signed audio URL of a job (T-24). It goes stale shortly before it expires, so the next mount
+ * The audio URL of a job (T-24). It goes stale shortly before it expires, so the next mount
  * or `refetch` gets a fresh one; it is not swapped on its own, which would interrupt playback.
  */
 export function useJobAudioUrl(jobId: string | null): UseQueryResult<TranscriptionMediaUrl> {
@@ -513,7 +516,7 @@ export function useJobAudioUrl(jobId: string | null): UseQueryResult<Transcripti
   })
 }
 
-/** A signed URL of one voice sample, stale shortly before it expires (T-21). */
+/** The URL of one voice sample, stale shortly before it expires (T-21). */
 export function useJobSampleUrl(
   jobId: string | null,
   sampleId: string | null

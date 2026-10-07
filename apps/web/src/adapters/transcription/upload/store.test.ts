@@ -7,7 +7,7 @@ import type {
   TranscriptionTranscriptCreate
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
-import { SignedUploadError } from '../api'
+import { UploadError } from '../api'
 import { allFiles, findFile, serverWaveform, type QueueFile } from './queue'
 import { UploadQueue, type SignedUpload, type UploadApi } from './store'
 
@@ -272,7 +272,7 @@ describe('UploadQueue: upload and analysis (T-10, T-16, T-17)', () => {
     const queue = makeQueue(
       api,
       vi.fn(async () => {
-        throw new SignedUploadError('status', 403)
+        throw new UploadError('status', 403)
       })
     )
     queue.addFiles([wav('a.wav')])
@@ -639,9 +639,7 @@ describe('UploadQueue: removing during an upload (T-08)', () => {
     const upload: SignedUpload = (_target, _body, options) =>
       new Promise((_resolve, reject) => {
         uploadSignal = options.signal
-        options.signal?.addEventListener('abort', () =>
-          reject(new SignedUploadError('aborted', null))
-        )
+        options.signal?.addEventListener('abort', () => reject(new UploadError('aborted', null)))
       })
     const queue = makeQueue(api, upload)
     let abortedAtDelete: boolean | undefined

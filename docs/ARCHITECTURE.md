@@ -32,8 +32,7 @@ quotes, no semicolons, width 100), TypeScript strict. Node ≥ 22 at runtime.
 - MinIO (S3-compatible storage of the transcription module) with its API on
   `127.0.0.1:9100` and console on `http://localhost:9101` (`justcampus` /
   `justcampus-dev-secret`); `minio-init` creates the bucket `justcampus-transcription`
-  and exits. MinIO allows the web origins (`http://localhost:5173`, `http://localhost:3000`,
-  `app://-`) by CORS. The images are `pgsty/minio` and `pgsty/mc`, builds of MinIO's
+  and exits. Only the server talks to it. The images are `pgsty/minio` and `pgsty/mc`, builds of MinIO's
   source, since MinIO publishes none any more.
 - Keycloak 26 on `http://localhost:8080` (admin console: `admin` / `admin`),
   importing `infra/keycloak/justcampus-realm.json`: realm `justcampus`,
@@ -316,9 +315,10 @@ below `/api/admin/modules/transcription`. Each area has its own router (`jobs/`,
 secrets and storage make available (`config.ts`). Routes not built yet answer
 `501 not_implemented`.
 
-The server runs the whole pipeline. Browsers upload each file straight to object storage
-with a signed `PUT` for exactly its size and type (`storage.ts`, `@aws-sdk/client-s3`);
-the server checks the stored bytes, then a worker normalises and chunks the audio with
+The server runs the whole pipeline. Browsers never reach the object storage: each file goes
+in one `PUT` of exactly its announced size to the API (`TRANSCRIPTION_API.jobUpload`, session
+cookie), which streams it on into the bucket (`storage.ts`, `@aws-sdk/client-s3`), so the
+storage may sit on a network only the server reaches. The server checks the stored bytes, then a worker normalises and chunks the audio with
 `ffmpeg` (`TRANSCRIPTION_FFMPEG`, `TRANSCRIPTION_FFPROBE`, installed in the Docker image),
 analyses the voices with a Speaches diarisation server, transcribes through an
 OpenAI-compatible `POST /audio/transcriptions` (`verbose_json` with word times) and corrects
@@ -343,8 +343,10 @@ the first speech worker), `diarizationApiKey` its key (empty: the speech key). A
 cannot be reached or refuses the key leaves the file one automatic voice; the job then carries
 `error: {code: 'diarization_failed'}` as a notice on an `analyzed` or `completed` job, and a
 failed LLM correction `correction_failed`, which the upload queue shows on the file's row.
-Playback and samples use fresh signed `GET` URLs from
-authenticated routes; signed URLs are never stored. The analysis also stores the waveform
+Playback and samples stream through the API as well (`jobAudioFile`, `jobSampleFile`, with the
+session cookie); a `Range` goes on to storage and comes back as `206`, so players can seek.
+The routes that hand out their URLs (`jobAudio`, `jobSample`) give them an expiry after which
+the browser asks again. The analysis also stores the waveform
 (20 peaks per second) right after normalising, before diarisation, for files too large for
 the browser to decode; the upload queue asks for it once the analysis ended, failed or not.
 All of a job's objects lie below `transcription/<component>/jobs/<job>/`. Deleting a job
@@ -354,7 +356,7 @@ orphaned jobs the same way, but first claims each with one conditional `UPDATE` 
 (`SELECT … FOR UPDATE`), analysis, dispatch and worker writes only touch jobs neither deleted
 nor expired, so a job is either saved or given a new expiry before the claim, and then not
 claimed, or claimed, and then no longer saved or revived. A saved transcript's audio stays
-until the transcript is deleted or its retention expires. A signed upload's URL is checked
+until the transcript is deleted or its retention expires. An upload's job is checked
 only when its `PUT` starts, so a slow transfer may still store audio after that. The orphan
 sweep (`jobs/orphans.ts`) therefore lists the storage itself: every minute one page of up to
 1000 keys below `transcription/`, continuing after the last key, and deletes job objects
@@ -365,9 +367,8 @@ The number of files per transcript is limited only by the admin's optional setti
 generous anti-abuse bound in the contract), checked when the group is saved. Upstream calls (`http.ts`) refuse redirects,
 time out and follow the caller's abort; failures answer `502 module_unavailable`.
 
-Storage is configured by `TRANSCRIPTION_S3_*`: the endpoint the server uses, the public
-endpoint signed URLs point at (browsers must reach it; it needs its own host name, since a
-path prefix breaks the signatures), region, bucket, keys and path-style addressing. Without
+Storage is configured by `TRANSCRIPTION_S3_*`: the endpoint the server uses, region, bucket,
+keys and path-style addressing. Without
 a bucket the module offers no uploads. Saved transcripts stay until the user deletes them,
 unless the admin sets `transcriptRetentionHours`; unsaved, failed and cancelled jobs and
 their audio go after `unsavedJobRetentionHours` (24). Admin secrets: `apiKey` (speech),
@@ -544,7 +545,7 @@ The web adapter (`apps/web/src/adapters/transcription/`) keeps one folder per ar
 between the entry choice, upload, recording, live transcription and a saved transcript,
 and fills the `PageSidePanel` with the view's settings and the history; `workspace.tsx`
 holds the state the areas share (`useTranscriptionWorkspace`), `api.ts` a typed function
-and TanStack Query hook per endpoint plus the signed upload with progress, `audio/` the
+and TanStack Query hook per endpoint plus the upload with progress, `audio/` the
 waveform player. Texts live in `i18n/{de,en}/<area>.json`, merged into the app's resources
 under `transcription`; kiChat's catalogue is kept verbatim. Widgets: `quick` and `recent`.
 The shell renders a page in another tree below and above `lg` and drops it behind the narrow

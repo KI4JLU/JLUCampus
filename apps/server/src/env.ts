@@ -60,11 +60,10 @@ const envSchema = z
     PYTHON_SANDBOX_DOCKER: z.string().min(1).default('docker'),
     PYTHON_SANDBOX_IMAGE: z.string().min(1).default('justcampus-python-sandbox:latest'),
     PYTHON_SANDBOX_RUNTIME: z.string().min(1).optional(),
-    // The transcription module's object storage (S3-compatible, MinIO in docker compose). The
-    // server reaches it at the endpoint; browsers upload and play through signed URLs on the public
-    // endpoint, which defaults to the same. Without a bucket the module offers no uploads.
+    // The transcription module's object storage (S3-compatible, MinIO in docker compose). Only
+    // the server reaches it; browsers upload and play through the API, which streams the bytes.
+    // Without a bucket the module offers no uploads.
     TRANSCRIPTION_S3_ENDPOINT: z.url().optional(),
-    TRANSCRIPTION_S3_PUBLIC_ENDPOINT: z.url().optional(),
     TRANSCRIPTION_S3_REGION: z.string().min(1).default('us-east-1'),
     TRANSCRIPTION_S3_BUCKET: z.string().min(1).optional(),
     TRANSCRIPTION_S3_ACCESS_KEY: z.string().min(1).optional(),

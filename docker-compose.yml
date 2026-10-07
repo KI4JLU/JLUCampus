@@ -34,14 +34,12 @@ services:
 
   # S3-compatible storage for transcription audio: API on 9100, console on 9101 (justcampus /
   # justcampus-dev-secret). MinIO no longer publishes images; pgsty/minio builds the same source.
-  # Browsers upload and play through signed URLs, so the web origins need CORS.
   minio:
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     command: ['server', '/data', '--console-address', ':9001']
     environment:
       MINIO_ROOT_USER: justcampus
       MINIO_ROOT_PASSWORD: justcampus-dev-secret
-      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:5173,http://localhost:3000,app://-
     ports:
       - '127.0.0.1:9100:9000'
       - '127.0.0.1:9101:9001'

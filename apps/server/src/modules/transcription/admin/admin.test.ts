@@ -526,94 +526,44 @@ describe('connection tests', () => {
   })
 
   describe('storage', () => {
-    /** A bucket in memory; signed URLs answer through the stubbed `fetch`. */
-    function memoryStorage(): TestStorage & { objects: Map<string, string> } {
+    /** A bucket in memory; `tamper` makes reads answer other content. */
+    function memoryStorage(tamper = false): TestStorage & { objects: Map<string, string> } {
       const objects = new Map<string, string>()
       return {
         objects,
         bucket: 'test-bucket',
-        presignUpload: async (key) => ({
-          url: `https://storage.example/put/${encodeURIComponent(key)}`,
-          method: 'PUT',
-          headers: { 'Content-Type': 'text/plain' },
-          expiresAt: new Date().toISOString()
-        }),
-        presignDownload: async (key) => ({
-          url: `https://storage.example/get/${encodeURIComponent(key)}`,
-          expiresAt: new Date().toISOString()
-        }),
         put: async (key, body) =>
           void objects.set(key, new TextDecoder().decode(body as Uint8Array)),
-        get: async (key) => Readable.from([Buffer.from(objects.get(key) ?? '')]),
+        get: async (key) =>
+          Readable.from([Buffer.from(tamper ? 'other' : (objects.get(key) ?? ''))]),
         delete: async (key) => void objects.delete(key),
         head: async (key) => (objects.has(key) ? { size: 1, contentType: 'text/plain' } : null)
       }
-    }
-    function signedFetch(
-      storage: { objects: Map<string, string> },
-      tamper = false
-    ): ReturnType<typeof vi.fn> {
-      return vi.fn(async (url: string | URL, init?: RequestInit) => {
-        const [, action, key] = /\/(put|get)\/(.+)$/.exec(String(url))!
-        const decoded = decodeURIComponent(key!)
-        if (action === 'put') {
-          storage.objects.set(decoded, new TextDecoder().decode(init!.body as Uint8Array))
-          return new Response(null, { status: 200 })
-        }
-        return new Response(tamper ? 'other' : (storage.objects.get(decoded) ?? ''), {
-          status: 200
-        })
-      })
     }
     const storageContext = (storage: TestStorage): ConnectionContext => ({
       runtime: { ...runtime(), componentId: 'c1' } as never,
       storage
     })
 
-    it('puts, reads back and deletes a test object through signed URLs', async () => {
+    it('puts, reads back and deletes a test object as the server', async () => {
       const storage = memoryStorage()
-      const fetchMock = signedFetch(storage)
-      vi.stubGlobal('fetch', fetchMock)
+      const put = vi.spyOn(storage, 'put')
       const result = await testConnection({ target: 'storage' }, storageContext(storage))
       expect(result).toMatchObject({
         ok: true,
-        finding: { kind: 'signedRoundTrip', bucket: 'test-bucket' }
+        finding: { kind: 'serverRoundTrip', bucket: 'test-bucket' }
       })
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(['PUT', 'GET'])
-      expect(String(fetchMock.mock.calls[0]![0])).toContain('transcription%2Fc1%2Fconnection-tests')
+      expect(String(put.mock.calls[0]![0])).toContain('transcription/c1/connection-tests/')
       expect(storage.objects.size).toBe(0)
     })
 
-    it('says when the server cannot reach the signed URLs, and catches wrong content', async () => {
-      const storage = memoryStorage()
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => {
-          throw new TypeError('fetch failed')
-        })
-      )
-      expect(await testConnection({ target: 'storage' }, storageContext(storage))).toMatchObject({
-        ok: true,
-        checks: [
-          { kind: 'signedUrlsUnreachable' },
-          { kind: 'serverRoundTrip', bucket: 'test-bucket' }
-        ]
-      })
-      vi.stubGlobal('fetch', signedFetch(storage, true))
+    it('catches content that does not come back as written', async () => {
+      const storage = memoryStorage(true)
       expect(await testConnection({ target: 'storage' }, storageContext(storage))).toMatchObject({
         ok: false,
         finding: { kind: 'invalidAnswer', expected: 'storedContent' }
       })
       expect(storage.objects.size).toBe(0)
-      // A refused signature is a failure, not an unreachable endpoint.
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => new Response('SignatureDoesNotMatch', { status: 403 }))
-      )
-      expect(await testConnection({ target: 'storage' }, storageContext(storage))).toMatchObject({
-        ok: false,
-        status: 403
-      })
     })
   })
 

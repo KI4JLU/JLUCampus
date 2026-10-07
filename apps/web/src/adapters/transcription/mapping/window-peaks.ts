@@ -108,11 +108,11 @@ async function limitedBytes(response: Response): Promise<ArrayBuffer | null> {
 }
 
 const blobPeaks = new WeakMap<Blob, Promise<TimePeaks | null>>()
-/** By job: its signed URLs change, its audio does not. */
+/** By job: its audio URLs change, its audio does not. */
 const urlPeaks = new Map<string, Promise<TimePeaks | null>>()
 
 /**
- * Where the editor's audio comes from: the local file, or the job's signed URL. The job, once
+ * Where the editor's audio comes from: the local file, or the job's audio URL. The job, once
  * analysed, has the server's waveform.
  */
 export type PeaksSource =
@@ -123,7 +123,7 @@ function decodedUrl(jobId: string, url: string | null): Promise<TimePeaks | null
   const cached = urlPeaks.get(jobId)
   if (cached) return cached
   if (!url) return Promise.resolve(null)
-  const peaks = fetch(url)
+  const peaks = fetch(url, { credentials: 'include' })
     .then(limitedBytes)
     .then((bytes) => (bytes ? decode(bytes) : null))
     .catch(() => null)

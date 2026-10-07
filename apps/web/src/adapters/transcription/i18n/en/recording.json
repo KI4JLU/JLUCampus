@@ -314,9 +314,7 @@
           "gatewayRefused": "The gateway refuses a live session with {{model}}.",
           "gatewayUnreachable": "The server cannot reach the gateway."
         },
-        "signedRoundTrip": "A test file was uploaded, read back and deleted through signed URLs in bucket {{bucket}}",
         "serverRoundTrip": "A test file was written, read back and deleted by the server in bucket {{bucket}}",
-        "signedUrlsUnreachable": "This server cannot reach the address of the signed URLs; browsers may still reach it",
         "invalidAnswer": {
           "transcription": "The answer was no transcription.",
           "diarization": "The answer held no speaker turns.",

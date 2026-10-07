@@ -80,7 +80,7 @@ export function blobWaveform(blob: Blob): Promise<DecodedWaveform | null> {
 }
 
 /**
- * The waveform of remote audio, e.g. a signed URL; `null` when it is larger than the limit (by its
+ * The waveform of remote audio, e.g. a job's audio URL; `null` when it is larger than the limit (by its
  * `Content-Length` or while reading), unreachable or not decodable.
  */
 export async function urlWaveform(
@@ -89,7 +89,8 @@ export async function urlWaveform(
 ): Promise<DecodedWaveform | null> {
   let response: Response
   try {
-    response = await fetch(url, { signal })
+    // The API may be on another origin (desktop app, development); its audio needs the session.
+    response = await fetch(url, { signal, credentials: 'include' })
   } catch {
     return null
   }

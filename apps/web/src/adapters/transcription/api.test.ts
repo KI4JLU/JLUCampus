@@ -3,8 +3,8 @@ import {
   fetchAdminModels,
   liveSocketUrl,
   mediaUrlExpiresSoon,
-  SignedUploadError,
-  uploadToSignedUrl
+  UploadError,
+  uploadToTarget
 } from './api'
 
 /** A stand-in for `XMLHttpRequest` that finishes as `outcome` says when sent. */
@@ -51,11 +51,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('uploadToSignedUrl', () => {
+describe('uploadToTarget', () => {
   it('sends the signed headers and reports progress to the end', async () => {
     const seen = stubXhr({ status: 200 })
     const progress: number[] = []
-    await uploadToSignedUrl(target, new Blob(['x']), {
+    await uploadToTarget(target, new Blob(['x']), {
       onProgress: (value) => progress.push(value)
     })
     expect(seen.headers).toEqual({ 'Content-Type': 'audio/wav' })
@@ -64,19 +64,19 @@ describe('uploadToSignedUrl', () => {
 
   it('tells a storage status, a network failure and an abort apart (T-16)', async () => {
     stubXhr({ status: 403 })
-    await expect(uploadToSignedUrl(target, new Blob(['x']))).rejects.toMatchObject({
+    await expect(uploadToTarget(target, new Blob(['x']))).rejects.toMatchObject({
       kind: 'status',
       status: 403
     })
     stubXhr({ error: true })
-    await expect(uploadToSignedUrl(target, new Blob(['x']))).rejects.toMatchObject({
+    await expect(uploadToTarget(target, new Blob(['x']))).rejects.toMatchObject({
       kind: 'network'
     })
     const controller = new AbortController()
     controller.abort()
     await expect(
-      uploadToSignedUrl(target, new Blob(['x']), { signal: controller.signal })
-    ).rejects.toBeInstanceOf(SignedUploadError)
+      uploadToTarget(target, new Blob(['x']), { signal: controller.signal })
+    ).rejects.toBeInstanceOf(UploadError)
   })
 })
 

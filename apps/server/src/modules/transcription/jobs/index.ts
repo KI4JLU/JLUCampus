@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 
 import {
+  TRANSCRIPTION_API,
+  TRANSCRIPTION_MEDIA_URL_TTL_SECONDS,
   TRANSCRIPTION_PROCESSING_STATUSES,
+  TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS,
   transcriptionAnalyzeSchema,
   transcriptionDispatchSchema,
   transcriptionJobCreatedSchema,
@@ -9,12 +14,14 @@ import {
   transcriptionJobListSchema,
   transcriptionJobPeaksSchema,
   transcriptionMediaUrlSchema,
-  type TranscriptionJobStatus
+  type TranscriptionJobStatus,
+  type TranscriptionMediaUrl
 } from '@justcampus/shared'
 import { Hono, type Context } from 'hono'
 import { z } from 'zod'
 
 import { ApiError, parseBody, validationIssues } from '../../../api.js'
+import { env } from '../../../env.js'
 import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { capabilitiesOf, llmModel, type TranscriptionRuntime } from '../config.js'
@@ -43,10 +50,10 @@ import { cleanFilename, dispatchIssues, uploadContentType } from './validate.js'
 import { CLAIM_LEASE_MS, wakeJobWorker } from './worker.js'
 
 /**
- * Batch jobs, one per uploaded file (`TRANSCRIPTION_API.jobs` and below): the upload session with
- * its signed `PUT`, the speaker analysis, dispatch, status, the user's active jobs, signed audio
- * and sample URLs, and cancelling plus deleting a job with its audio. Another user's job answers
- * `404 not_found` like a missing one.
+ * Batch jobs, one per uploaded file (`TRANSCRIPTION_API.jobs` and below): the upload session and
+ * its `PUT`, the speaker analysis, dispatch, status, the user's active jobs, audio and samples to
+ * play, and cancelling plus deleting a job with its audio. Browsers never reach the storage: the
+ * bytes go through these routes. Another user's job answers `404 not_found` like a missing one.
  */
 export const jobsRouter = new Hono<AppEnvironment>()
 
@@ -114,6 +121,87 @@ async function optionalBody<T>(context: JobContext, schema: z.ZodType<T>): Promi
   return parsed.data
 }
 
+/** An absolute URL of one of the module's routes, as the browser reaches the API. */
+function apiUrl(path: string): string {
+  return new URL(path, env.BETTER_AUTH_URL).toString()
+}
+
+function expiresIn(seconds: number, now = new Date()): string {
+  return new Date(now.getTime() + seconds * 1000).toISOString()
+}
+
+/** Where the browser plays a route's bytes; it asks again before `expiresAt`. */
+function mediaUrl(path: string): TranscriptionMediaUrl {
+  return { url: apiUrl(path), expiresAt: expiresIn(TRANSCRIPTION_MEDIA_URL_TTL_SECONDS) }
+}
+
+/** A filename as an inline `Content-Disposition`, ASCII fallback plus UTF-8. */
+function inlineDisposition(filename: string): string {
+  const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+}
+
+/** Storage refused the `Range` asked for. */
+function unsatisfiableRange(error: unknown): boolean {
+  const named = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null
+  return named?.name === 'InvalidRange' || named?.$metadata?.httpStatusCode === 416
+}
+
+/**
+ * Streams a stored object to the browser. A `Range` goes on to storage and comes back as `206`,
+ * so audio players can seek without loading the whole file.
+ */
+async function sendObject(
+  context: JobContext,
+  key: string,
+  options: { contentType: string; filename: string }
+): Promise<Response> {
+  const storage = requireStorage()
+  const range = context.req.header('range')
+  const object = await upstream('The audio could not be read', async () => {
+    try {
+      return await storage.read(key, { range, signal: context.req.raw.signal })
+    } catch (error) {
+      if (missingObject(error)) return null
+      if (range && unsatisfiableRange(error)) return 'unsatisfiable' as const
+      throw error
+    }
+  })
+  if (object === null) throw new ApiError(404, 'not_found', 'The audio is gone')
+  if (object === 'unsatisfiable') return context.body(null, 416)
+  const headers = new Headers({
+    'Content-Type': options.contentType,
+    'Content-Length': String(object.length),
+    'Content-Disposition': inlineDisposition(options.filename),
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, no-store'
+  })
+  if (object.range) headers.set('Content-Range', object.range)
+  return new Response(Readable.toWeb(object.body) as ReadableStream<Uint8Array>, {
+    status: object.range ? 206 : 200,
+    headers
+  })
+}
+
+/** The job's audio once uploaded. */
+async function uploadedJob(context: JobContext): Promise<JobRow> {
+  const job = await ownJob(context)
+  if (job.status === 'uploading')
+    throw new ApiError(404, 'not_found', 'The audio is not uploaded yet')
+  return job
+}
+
+/** The analysed voice sample named in the path. */
+async function sampleOf(context: JobContext): Promise<{ job: JobRow; sampleId: string }> {
+  const job = await ownJob(context)
+  const sampleId = context.req.param('sampleId')
+  const sample = job.speakers
+    .flatMap((speaker) => speaker.samples)
+    .find((candidate) => candidate.id === sampleId)
+  if (!sample) throw new ApiError(404, 'not_found', 'Sample not found')
+  return { job, sampleId: sample.id }
+}
+
 function isProcessing(status: TranscriptionJobStatus): boolean {
   return (TRANSCRIPTION_PROCESSING_STATUSES as readonly string[]).includes(status)
 }
@@ -125,12 +213,12 @@ jobsRouter.get('/jobs', async (context) => {
   )
 })
 
-/** The upload session (T-03, T-04, T-10): checks the file, creates the job, signs one `PUT`. */
+/** The upload session (T-03, T-04, T-10): checks the file, creates the job, names its `PUT`. */
 jobsRouter.post('/jobs', async (context) => {
   const runtime = runtimeOf(context)
   const { componentId, config } = runtime
   const userId = userOf(context)
-  const storage = requireBatch(runtime)
+  requireBatch(runtime)
   const input = await parseBody(context, transcriptionJobCreateSchema)
   const filename = cleanFilename(input.filename)
   if (!filename) validation(['filename'], 'Invalid filename')
@@ -145,9 +233,6 @@ jobsRouter.post('/jobs', async (context) => {
   const id = randomUUID()
   const contentType = uploadContentType(filename, input.mimeType)
   const objectKey = objectKeys.source(componentId, id)
-  const upload = await upstream('The upload could not be prepared', () =>
-    storage.presignUpload(objectKey, { contentType, contentLength: input.size })
-  )
   const correction = llmModel(config, 'correction') !== null
   const row = await insertJob({
     id,
@@ -167,10 +252,42 @@ jobsRouter.post('/jobs', async (context) => {
     },
     expiresAt: jobExpiry(config.unsavedJobRetentionHours)
   })
+  const upload = {
+    url: apiUrl(TRANSCRIPTION_API.jobUpload(id)),
+    method: 'PUT',
+    headers: { 'Content-Type': contentType },
+    expiresAt: expiresIn(TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS, row.createdAt)
+  }
   return context.json(
     transcriptionJobCreatedSchema.parse({ job: publicJob(row, false), upload }),
     201
   )
+})
+
+/**
+ * The file's bytes (T-10), streamed on into storage. `Content-Length` must be the size the session
+ * announced, so a cut-off upload fails here rather than in the analysis. Once per job, and only
+ * within `TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS` of the session.
+ */
+jobsRouter.put('/jobs/:id/upload', async (context) => {
+  const storage = requireStorage()
+  const job = await ownJob(context)
+  if (job.status !== 'uploading') throw new ApiError(409, 'conflict', 'The job is uploaded already')
+  if (Date.now() - job.createdAt.getTime() > TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS * 1000) {
+    throw new ApiError(409, 'conflict', 'The upload time is over')
+  }
+  const length = Number(context.req.header('content-length'))
+  if (length !== Number(job.size)) validation([], `Expected exactly ${job.size} bytes`)
+  const body = context.req.raw.body
+  if (!body) validation([], 'Expected the file as the request body')
+  await upstream('The upload could not be stored', () =>
+    storage.put(job.objectKey, Readable.fromWeb(body as NodeReadableStream<Uint8Array>), {
+      contentType: job.mimeType,
+      contentLength: length,
+      signal: context.req.raw.signal
+    })
+  )
+  return context.body(null, 204)
 })
 
 /** Status, progress, voices and, once completed, the result (polled every two seconds). */
@@ -182,7 +299,7 @@ jobsRouter.get('/jobs/:id', async (context) => {
  * Cancels the job and deletes everything it stored (T-08). Another user's job, an unknown id and
  * one already gone answer `404` like every other job route; the browser counts that as deleted.
  * If storage cannot delete (also only some objects), the answer is `502` and the job stays
- * hidden; the next DELETE or the sweep finishes the work. Audio a signed upload still stores
+ * hidden; the next DELETE or the sweep finishes the work. Audio an upload still running stores
  * after this is found by the orphan sweep (`sweepOrphanObjects`), which needs no row.
  */
 jobsRouter.delete('/jobs/:id', async (context) => {
@@ -348,16 +465,19 @@ jobsRouter.post('/jobs/:id/dispatch', async (context) => {
   return context.json(publicJob(dispatched, true))
 })
 
-/** A fresh signed URL of the uploaded audio (T-12, T-24); also for saved transcripts' jobs. */
+/** Where to play the uploaded audio (T-12, T-24); also for saved transcripts' jobs. */
 jobsRouter.get('/jobs/:id/audio', async (context) => {
-  const storage = requireStorage()
-  const job = await ownJob(context)
-  if (job.status === 'uploading')
-    throw new ApiError(404, 'not_found', 'The audio is not uploaded yet')
-  const media = await upstream('The audio link could not be signed', () =>
-    storage.presignDownload(job.objectKey, { contentType: job.mimeType, filename: job.filename })
+  requireStorage()
+  const job = await uploadedJob(context)
+  return context.json(
+    transcriptionMediaUrlSchema.parse(mediaUrl(TRANSCRIPTION_API.jobAudioFile(job.id)))
   )
-  return context.json(transcriptionMediaUrlSchema.parse(media))
+})
+
+/** The uploaded audio's bytes. */
+jobsRouter.get('/jobs/:id/audio/file', async (context) => {
+  const job = await uploadedJob(context)
+  return sendObject(context, job.objectKey, { contentType: job.mimeType, filename: job.filename })
 })
 
 /**
@@ -391,20 +511,20 @@ function parseJson(text: string): unknown {
   }
 }
 
-/** A fresh signed URL of one analysed voice sample (T-17, T-21). */
+/** Where to play one analysed voice sample (T-17, T-21). */
 jobsRouter.get('/jobs/:id/samples/:sampleId', async (context) => {
-  const storage = requireStorage()
-  const job = await ownJob(context)
-  const sampleId = context.req.param('sampleId')
-  const sample = job.speakers
-    .flatMap((speaker) => speaker.samples)
-    .find((candidate) => candidate.id === sampleId)
-  if (!sample) throw new ApiError(404, 'not_found', 'Sample not found')
-  const media = await upstream('The sample link could not be signed', () =>
-    storage.presignDownload(objectKeys.sample(job.componentId, job.id, sample.id), {
-      contentType: 'audio/wav',
-      filename: `${sample.id}.wav`
-    })
+  requireStorage()
+  const { job, sampleId } = await sampleOf(context)
+  return context.json(
+    transcriptionMediaUrlSchema.parse(mediaUrl(TRANSCRIPTION_API.jobSampleFile(job.id, sampleId)))
   )
-  return context.json(transcriptionMediaUrlSchema.parse(media))
+})
+
+/** One voice sample's bytes. */
+jobsRouter.get('/jobs/:id/samples/:sampleId/file', async (context) => {
+  const { job, sampleId } = await sampleOf(context)
+  return sendObject(context, objectKeys.sample(job.componentId, job.id, sampleId), {
+    contentType: 'audio/wav',
+    filename: `${sampleId}.wav`
+  })
 })

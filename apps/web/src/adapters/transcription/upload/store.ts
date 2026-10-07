@@ -16,7 +16,7 @@ import {
   type TranscriptionUploadTarget
 } from '@justcampus/shared'
 import { ApiRequestError } from '@/lib/api'
-import { SignedUploadError } from '../api'
+import { UploadError } from '../api'
 import {
   voiceDispatch,
   voicesFromSpeakers,
@@ -146,13 +146,13 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /** The server's own words for a failure, when it gave any. */
 function messageOf(error: unknown): string | null {
   if (error instanceof ApiRequestError) return error.body?.error.message ?? null
-  if (error instanceof Error && !(error instanceof SignedUploadError)) return error.message
+  if (error instanceof Error && !(error instanceof UploadError)) return error.message
   return null
 }
 
 /** A storage failure as kiChat names it (T-16). */
 function uploadError(error: unknown): FileError {
-  if (error instanceof SignedUploadError) {
+  if (error instanceof UploadError) {
     if (error.kind === 'status') return { key: 's3UploadFailed', status: error.status }
     if (error.kind === 'aborted') return { key: 'uploadAborted' }
   }

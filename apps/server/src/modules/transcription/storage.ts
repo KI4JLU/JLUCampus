@@ -10,13 +10,6 @@ import {
   S3Client,
   S3ServiceException
 } from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import {
-  TRANSCRIPTION_MEDIA_URL_TTL_SECONDS,
-  TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS,
-  type TranscriptionMediaUrl,
-  type TranscriptionUploadTarget
-} from '@justcampus/shared'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
@@ -28,8 +21,6 @@ import { env } from '../../env.js'
 export interface StorageSettings {
   /** The endpoint the server talks to, e.g. `http://minio:9000` inside compose. */
   endpoint: string
-  /** The endpoint signed URLs point at, which browsers must reach, e.g. `https://storage.example`. */
-  publicEndpoint: string
   region: string
   bucket: string
   accessKeyId: string
@@ -47,7 +38,6 @@ export function storageSettingsFromEnv(): StorageSettings | null {
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) return null
   return {
     endpoint,
-    publicEndpoint: env.TRANSCRIPTION_S3_PUBLIC_ENDPOINT ?? endpoint,
     region: env.TRANSCRIPTION_S3_REGION,
     bucket,
     accessKeyId,
@@ -68,94 +58,40 @@ export interface StoredObject {
   contentType: string | null
 }
 
-function client(settings: StorageSettings, endpoint: string): S3Client {
+/** The bytes of an object, or of the range asked for (`TranscriptionStorage.read`). */
+export interface ObjectRead {
+  body: Readable
+  /** Bytes in `body`. */
+  length: number
+  contentType: string | null
+  /** `bytes <first>-<last>/<size>` when storage answered a range, else `null`. */
+  range: string | null
+}
+
+function client(settings: StorageSettings): S3Client {
   return new S3Client({
-    endpoint,
+    endpoint: settings.endpoint,
     region: settings.region,
     forcePathStyle: settings.forcePathStyle,
     credentials: { accessKeyId: settings.accessKeyId, secretAccessKey: settings.secretAccessKey },
-    // Newer SDKs add CRC32 checksums to every upload; a browser's signed PUT cannot send one,
-    // and MinIO versions differ in what they accept. Only where an operation requires it.
+    // Newer SDKs add CRC32 checksums to every upload, which a streamed body of known length
+    // cannot carry up front, and MinIO versions differ in what they accept. Only where required.
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED'
   })
 }
 
-function expiry(seconds: number, now: Date): string {
-  return new Date(now.getTime() + seconds * 1000).toISOString()
-}
-
-/** A filename as an inline `Content-Disposition`, ASCII fallback plus UTF-8. */
-function inlineDisposition(filename: string): string {
-  const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, '_')
-  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`
-}
-
 /**
- * The module's object storage. The server reads and writes through `endpoint`; URLs for browsers
- * are signed for `publicEndpoint`, so both may differ (compose network vs. public host). Signed
- * URLs are bearer tokens: hand them out fresh from authenticated routes and never store them.
+ * The module's object storage. Only the server talks to it: browsers upload and play through the
+ * job routes, which stream the bytes (`jobsRouter`), so the storage needs no public address.
  */
 export class TranscriptionStorage {
   readonly bucket: string
   private readonly internal: S3Client
-  private readonly signer: S3Client
 
   constructor(readonly settings: StorageSettings) {
     this.bucket = settings.bucket
-    this.internal = client(settings, settings.endpoint)
-    this.signer =
-      settings.publicEndpoint === settings.endpoint
-        ? this.internal
-        : client(settings, settings.publicEndpoint)
-  }
-
-  /**
-   * A signed `PUT` for exactly `contentLength` bytes of `contentType`. The browser must send the
-   * returned headers; it cannot change the size, since `Content-Length` is signed.
-   */
-  async presignUpload(
-    key: string,
-    options: { contentType: string; contentLength: number; expiresIn?: number; now?: Date }
-  ): Promise<TranscriptionUploadTarget> {
-    const expiresIn = options.expiresIn ?? TRANSCRIPTION_UPLOAD_URL_TTL_SECONDS
-    const url = await getSignedUrl(
-      this.signer,
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        ContentType: options.contentType,
-        ContentLength: options.contentLength
-      }),
-      { expiresIn, signableHeaders: new Set(['content-type', 'content-length']) }
-    )
-    return {
-      url,
-      method: 'PUT',
-      headers: { 'Content-Type': options.contentType },
-      expiresAt: expiry(expiresIn, options.now ?? new Date())
-    }
-  }
-
-  /** A signed `GET` for playback; `filename` names the file should the browser save it. */
-  async presignDownload(
-    key: string,
-    options: { expiresIn?: number; contentType?: string; filename?: string; now?: Date } = {}
-  ): Promise<TranscriptionMediaUrl> {
-    const expiresIn = options.expiresIn ?? TRANSCRIPTION_MEDIA_URL_TTL_SECONDS
-    const url = await getSignedUrl(
-      this.signer,
-      new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        ResponseContentType: options.contentType,
-        ResponseContentDisposition: options.filename
-          ? inlineDisposition(options.filename)
-          : undefined
-      }),
-      { expiresIn }
-    )
-    return { url, expiresAt: expiry(expiresIn, options.now ?? new Date()) }
+    this.internal = client(settings)
   }
 
   /** Size and type of an object, or `null` when it does not exist. */
@@ -199,6 +135,27 @@ export class TranscriptionStorage {
     )
     if (!(object.Body instanceof Readable)) throw new Error(`Object ${key} has no body`)
     return object.Body
+  }
+
+  /**
+   * The object's bytes, or those of `range` (an HTTP `Range` value, as a browser seeking in audio
+   * sends it). The body must be consumed or destroyed.
+   */
+  async read(
+    key: string,
+    options: { range?: string; signal?: AbortSignal } = {}
+  ): Promise<ObjectRead> {
+    const object = await this.internal.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key, Range: options.range }),
+      { abortSignal: options.signal }
+    )
+    if (!(object.Body instanceof Readable)) throw new Error(`Object ${key} has no body`)
+    return {
+      body: object.Body,
+      length: object.ContentLength ?? 0,
+      contentType: object.ContentType ?? null,
+      range: object.ContentRange ?? null
+    }
   }
 
   /** Copies an object into a local file, e.g. for ffmpeg, without holding it in memory. */

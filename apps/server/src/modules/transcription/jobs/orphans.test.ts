@@ -51,7 +51,6 @@ function fakeS3(objects: Record<string, Date | null>, refuse: string[] = []): Fa
   const bucket = new Map(Object.entries(objects))
   const storage = new TranscriptionStorage({
     endpoint: 'http://minio:9000',
-    publicEndpoint: 'http://minio:9000',
     region: 'us-east-1',
     bucket: 'b',
     accessKeyId: 'access',

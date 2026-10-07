@@ -32,19 +32,18 @@ services:
     env_file: .env.production
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-justcampus}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-justcampus}
-      # The app reaches MinIO inside the compose network; browsers use the public endpoint.
+      # Only the app reaches MinIO, inside the compose network; browsers go through the app.
       TRANSCRIPTION_S3_ENDPOINT: http://minio:9000
       TRANSCRIPTION_S3_BUCKET: ${TRANSCRIPTION_S3_BUCKET:-justcampus-transcription}
       TRANSCRIPTION_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-justcampus}
       TRANSCRIPTION_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     # Put a TLS-terminating reverse proxy in front; it should reach this port, WebSocket upgrades
-    # for /api included (live transcription), with a read timeout above a minute.
+    # for /api included (live transcription), with a read timeout above a minute and request
+    # bodies up to the transcription file limit (500 MB by default).
     ports:
       - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000'
 
-  # Object storage for transcription audio. Browsers upload to and play from it with signed URLs,
-  # so the reverse proxy must publish this port on its own host name
-  # (TRANSCRIPTION_S3_PUBLIC_ENDPOINT); a path prefix would break the signatures.
+  # Object storage for transcription audio; only the app talks to it.
   minio:
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     restart: unless-stopped
@@ -52,11 +51,8 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-justcampus}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
-      MINIO_API_CORS_ALLOW_ORIGIN: ${CORS_ORIGINS:?set CORS_ORIGINS}
     volumes:
       - minio-data:/data
-    ports:
-      - '${MINIO_BIND:-127.0.0.1}:${MINIO_PORT:-9000}:9000'
 
   # Creates the bucket, then exits; the app starts after it.
   minio-init:

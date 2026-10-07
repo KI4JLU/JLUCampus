@@ -53,7 +53,7 @@ interface PendingAction {
 /**
  * The result's global player (T-24), after kiChat's `initGlobalAudioPlayer`: a waveform with the
  * speakers' time line, play and pause, seeking and the time over all source files of the
- * transcript. Each file's audio comes from a fresh signed URL of its job, fetched again before it
+ * transcript. Each file's audio comes from a fresh audio URL of its job, fetched again before it
  * expires and when playback fails. Playback keeps to the saved ranges (`playbackStep`): at a
  * file's saved end the next one plays on, also when its audio runs longer, and a block played in
  * Corrections stops at its end in whichever file that lies. Above 100 MB the waveform is not

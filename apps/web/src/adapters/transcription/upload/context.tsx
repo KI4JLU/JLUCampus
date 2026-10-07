@@ -26,7 +26,7 @@ import {
   listJobs,
   patchTranscript,
   transcriptionKeys,
-  uploadToSignedUrl
+  uploadToTarget
 } from '../api'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { UploadDialog } from './dialogs'
@@ -96,7 +96,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
         getTranscript,
         patchTranscript
       },
-      upload: uploadToSignedUrl,
+      upload: uploadToTarget,
       settings: workspace.uploadSettings,
       labels: labelsOf(t),
       measureDuration,

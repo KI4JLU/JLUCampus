@@ -115,10 +115,10 @@ image also gets `sha-<short>`.
 
 `docker-compose.prod.yml` runs that image with Postgres and MinIO (the
 transcription module's audio). Keycloak and the TLS-terminating reverse proxy
-run outside it; the proxy also publishes MinIO on its own host name
-(`TRANSCRIPTION_S3_PUBLIC_ENDPOINT`), since browsers upload to it directly. It
-must pass WebSocket upgrades for `/api` (live transcription), with a read
-timeout above a minute; for nginx:
+run outside it. Browsers never reach MinIO: audio uploads and playback stream
+through the API. The proxy must pass WebSocket upgrades for `/api` (live
+transcription), with a read timeout above a minute, and request bodies up to
+the transcription file limit (500 MB by default); for nginx:
 
 ```nginx
 map $http_upgrade $connection_upgrade { default upgrade; '' close; }
@@ -130,6 +130,8 @@ location /api/ {
   proxy_set_header Connection $connection_upgrade;
   proxy_set_header Host $host;
   proxy_read_timeout 300s;
+  client_max_body_size 600m;
+  proxy_request_buffering off;
 }
 ```
 

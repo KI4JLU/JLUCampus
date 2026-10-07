@@ -94,8 +94,8 @@ export async function listJobs(
 }
 
 /**
- * The user's jobs uploading, analysing or transcribing. An upload whose signed URL expired can no
- * longer arrive and does not count.
+ * The user's jobs uploading, analysing or transcribing. An upload past its time can no longer
+ * arrive and does not count.
  */
 export async function countActiveJobs(
   componentId: string,
