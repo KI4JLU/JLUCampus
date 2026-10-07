@@ -34,19 +34,23 @@ const FALLBACK_UPLOAD_SETTINGS: UploadSettings = {
 /** Hears that storage has a handed-over file's bytes; a failed upload says nothing. */
 export type UploadStored = (file: File) => void
 
-/** Files handed to the upload queue from elsewhere, e.g. recorded takes (T-58). */
-export interface PendingUpload {
-  id: string
-  files: File[]
-  /** Name of the group they form; `null`: the queue's next `Transcript n`. */
-  title: string | null
-  onStored?: UploadStored
-}
-
 export interface EnqueueOptions {
   title?: string | null
   /** Hears when each file is stored, e.g. to keep a recorded take's backup until then. */
   onStored?: UploadStored
+  /**
+   * Seconds of the files whose length is known already, e.g. a take's running time: recorded
+   * WebM names none of its own.
+   */
+  durations?: ReadonlyMap<File, number>
+}
+
+/** Files handed to the upload queue from elsewhere, e.g. recorded takes (T-58). */
+export interface PendingUpload extends EnqueueOptions {
+  id: string
+  files: File[]
+  /** Name of the group they form; `null`: the queue's next `Transcript n`. */
+  title: string | null
 }
 
 /**
@@ -162,11 +166,11 @@ export function TranscriptionWorkspaceProvider({
   }, [mayLeave, setHistorySearch, setResultTab, setTranscriptId, setView])
 
   const enqueueUpload = useCallback(
-    (files: File[], { title = null, onStored }: EnqueueOptions = {}) => {
+    (files: File[], { title = null, onStored, durations }: EnqueueOptions = {}) => {
       if (files.length === 0) return
       setPendingUploads((current) => [
         ...current,
-        { id: crypto.randomUUID(), files, title, onStored }
+        { id: crypto.randomUUID(), files, title, onStored, durations }
       ])
       setView('upload')
     },

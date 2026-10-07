@@ -221,7 +221,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
       for (const pending of takePendingUploads()) {
         const accepted = await checkFiles(pending.files)
         const { overflow } = fitIntoGroup([], accepted, maxFiles)
-        queue.addGroupOfFiles(accepted, pending.title, pending.onStored)
+        queue.addGroupOfFiles(accepted, pending)
         if (overflow) await alertGroupFull()
       }
     })()

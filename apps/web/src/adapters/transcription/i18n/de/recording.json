@@ -41,7 +41,7 @@
   "tabsLabel": "Aufnahmeart",
   "elapsed": "Laufzeit {{time}}",
   "takesTitle": "Aufnahmen",
-  "takesHint": "Die Aufnahmen bleiben nur in diesem Browserfenster, bis du sie hochlädst.",
+  "takesHint": "Die Aufnahmen werden in diesem Browser gesichert, bis du sie hochlädst oder löschst.",
   "downloadRecordingName": "Aufnahme {{name}} herunterladen",
   "deleteRecordingName": "Aufnahme {{name}} löschen",
   "confirmDeleteRecording": "Löschen von {{name}} bestätigen",
@@ -87,6 +87,7 @@
     "aborted": "Audio connection closed."
   },
   "formatUnsupported": "Dein Browser nimmt in einem Format auf, das der Upload nicht annimmt ({{type}}).",
+  "formatUnknown": "Dein Browser sagt nicht, in welchem Format er aufnimmt. Versuch es in einem anderen Browser.",
   "waveformSkipped": "Für Aufnahmen über 20 Minuten wird hier keine Wellenform berechnet.",
   "sources": {
     "add": "Quelle hinzufügen",

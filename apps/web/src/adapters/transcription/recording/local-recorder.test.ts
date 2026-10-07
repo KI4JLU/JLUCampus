@@ -3,13 +3,19 @@ import { startLocalRecorder } from './local-recorder'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  FakeRecorder.ownType = 'audio/ogg;codecs=opus'
 })
 
 /** The recorders made, newest last. */
 const made: FakeRecorder[] = []
 
-/** A MediaRecorder that, as the browser's, delivers its last chunk and `stop` after `stop()`. */
+/**
+ * A MediaRecorder that, as the browser's, names its type with the `start` event after `start()`,
+ * and delivers its last chunk and `stop` after `stop()`.
+ */
 class FakeRecorder extends EventTarget {
+  /** The browser's own choice where none was asked for, as Firefox's Ogg; `''` names none. */
+  static ownType = 'audio/ogg;codecs=opus'
   state: RecordingState = 'inactive'
   mimeType = ''
   constructor(
@@ -19,10 +25,12 @@ class FakeRecorder extends EventTarget {
     super()
     made.push(this)
   }
-  /** The browser's own choice where none was asked for, as Firefox's Ogg. */
   start(): void {
     this.state = 'recording'
-    this.mimeType = this.options.mimeType ?? 'audio/ogg;codecs=opus'
+    setTimeout(() => {
+      this.mimeType = this.options.mimeType ?? FakeRecorder.ownType
+      this.dispatchEvent(new Event('start'))
+    }, 0)
   }
   stop(): void {
     this.state = 'inactive'
@@ -31,9 +39,9 @@ class FakeRecorder extends EventTarget {
       this.dispatchEvent(new Event('stop'))
     }, 1)
   }
-  chunk(text: string): void {
+  chunk(text: string, type = ''): void {
     const event = new Event('dataavailable') as Event & { data: Blob }
-    event.data = new Blob([text])
+    event.data = new Blob([text], { type })
     this.dispatchEvent(event)
   }
 }
@@ -60,11 +68,31 @@ describe('startLocalRecorder', () => {
     expect(await blob.text()).toBe('firstlast')
   })
 
-  it('tells the format the recorder writes once it started', () => {
+  it('tells the format the recorder writes once it started', async () => {
     vi.stubGlobal('MediaRecorder', FakeRecorder)
     expect(
-      startLocalRecorder({} as MediaStream, { mimeType: 'audio/webm;codecs=opus' }).mimeType
+      await startLocalRecorder({} as MediaStream, { mimeType: 'audio/webm;codecs=opus' }).mimeType
     ).toBe('audio/webm;codecs=opus')
-    expect(startLocalRecorder({} as MediaStream).mimeType).toBe('audio/ogg;codecs=opus')
+    // Safari names its default MP4 only with the `start` event.
+    FakeRecorder.ownType = 'audio/mp4'
+    expect(await startLocalRecorder({} as MediaStream).mimeType).toBe('audio/mp4')
+  })
+
+  it("takes the first chunk's type when the recorder names none", async () => {
+    vi.stubGlobal('MediaRecorder', FakeRecorder)
+    FakeRecorder.ownType = ''
+    const local = startLocalRecorder({} as MediaStream)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    made.at(-1)!.chunk('first', 'audio/mp4')
+    expect(await local.mimeType).toBe('audio/mp4')
+    expect((await local.stop()).type).toBe('audio/mp4')
+  })
+
+  it('names no type when the recorder ended without one', async () => {
+    vi.stubGlobal('MediaRecorder', FakeRecorder)
+    FakeRecorder.ownType = ''
+    const local = startLocalRecorder({} as MediaStream)
+    made.at(-1)!.stop()
+    expect(await local.mimeType).toBe('')
   })
 })

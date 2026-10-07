@@ -1,7 +1,10 @@
 /** A MediaRecorder on a microphone or mixed stream, collecting its chunks in memory. */
 export interface LocalRecorder {
-  /** What the recorder writes, as it named it on starting; `''` if it named nothing. */
-  mimeType: string
+  /**
+   * What the recorder writes, once it says so: its type after its `start` event (Safari names its
+   * default MP4 only then), else its first chunk's type; `''` if it ended without naming one.
+   */
+  mimeType: Promise<string>
   /** Waits for the last chunk and returns the recording in the browser's own format. */
   stop: () => Promise<Blob>
   /**
@@ -33,15 +36,33 @@ export function startLocalRecorder(
   const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond })
   const chunks: Blob[] = []
   let discarded = false
+  let named: (type: string) => void = () => undefined
+  const type = new Promise<string>((resolve) => {
+    named = resolve
+  })
+  // An asked-for type is what the recorder writes: it refuses one it cannot.
+  recorder.addEventListener('start', () => {
+    const known = recorder.mimeType || mimeType
+    if (known) named(known)
+  })
   recorder.addEventListener('dataavailable', (event) => {
     if (event.data.size === 0) return
+    const known = recorder.mimeType || event.data.type
+    if (known) named(known)
     if (!discarded) chunks.push(event.data)
     onChunk?.(event.data)
   })
   // `stop` fires after the final `dataavailable`, also when the recorder ended with its stream;
   // its state is `inactive` before.
   const ended = new Promise<void>((resolve) => {
-    recorder.addEventListener('stop', () => resolve(), { once: true })
+    recorder.addEventListener(
+      'stop',
+      () => {
+        named(recorder.mimeType)
+        resolve()
+      },
+      { once: true }
+    )
   })
   recorder.start(TIMESLICE_MS)
 
@@ -58,9 +79,11 @@ export function startLocalRecorder(
   let stopping: Promise<Blob> | null = null
 
   return {
-    mimeType: recorder.mimeType || mimeType || '',
+    mimeType: type,
     stop: () => {
-      stopping ??= end().then(() => new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }))
+      stopping ??= end()
+        .then(() => type)
+        .then((written) => new Blob(chunks, { type: written }))
       return stopping
     },
     discard: () => {

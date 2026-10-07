@@ -23,7 +23,7 @@ import {
   type NumberedLabel,
   type VoiceDraft
 } from '../mapping/speakers'
-import type { UploadSettings, UploadStored } from '../workspace'
+import type { EnqueueOptions, UploadSettings, UploadStored } from '../workspace'
 import { transcriptCreate, type FileResult } from './merge'
 import { creepStep, CREEP_MS, PROGRESS, transcriptionDisplay, uploadProgress } from './progress'
 import {
@@ -346,13 +346,13 @@ export class UploadQueue {
 
   /**
    * Adds files as a group of their own, e.g. the recorded takes (T-58): into the first empty group
-   * or a new one, named `name` if given. `onStored` hears when storage has an added file's bytes,
-   * after a retry too; a file removed before then is never reported.
+   * or a new one, named `title` if given. `onStored` hears when storage has an added file's bytes,
+   * after a retry too; a file removed before then is never reported. `durations` are taken as
+   * measured.
    */
   addGroupOfFiles(
     files: readonly File[],
-    name: string | null,
-    onStored?: UploadStored
+    { title: name = null, onStored, durations }: EnqueueOptions = {}
   ): QueueFile[] {
     if (this.state.processing || files.length === 0) return []
     let groups = [...this.state.groups]
@@ -361,7 +361,14 @@ export class UploadQueue {
       index = groups.length
       groups.push(newGroup(index, name ?? defaultGroupName(index)))
     } else if (name) groups[index] = { ...groups[index]!, name }
-    const result = addToGroup(groups, index, files.map(queueFileFrom), this.room(0))
+    const rows = files.map((file) => {
+      const duration = durations?.get(file)
+      const row = queueFileFrom(file)
+      return duration !== undefined && Number.isFinite(duration) && duration > 0
+        ? { ...row, duration }
+        : row
+    })
+    const result = addToGroup(groups, index, rows, this.room(0))
     groups = renumberGroups(result.groups)
     this.set({ ...this.state, groups })
     for (const row of result.added) {
@@ -377,10 +384,10 @@ export class UploadQueue {
     return limit === null || limit === undefined ? Infinity : Math.max(0, limit - present)
   }
 
-  /** Measures a new row's length and starts its upload. */
+  /** Measures a new row's length, unless known, and starts its upload. */
   private track(row: QueueFile): void {
     const local = row.file
-    if (local) {
+    if (local && row.duration === null) {
       void this.options.measureDuration(local).then((duration) => {
         if (duration !== null) {
           this.patchFile(row.id, (file) => (file.duration === null ? { duration } : {}))

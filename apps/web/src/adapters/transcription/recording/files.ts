@@ -21,12 +21,11 @@ export interface RecordingFormat {
 
 /**
  * The file format of what a recorder of `mimeType` wrote; `null` for a format the upload does not
- * take. An empty type, which a recorder only reports before it started, counts as WebM.
+ * take, and for an empty type: the bytes are never guessed to be WebM.
  */
 export function recordingFormat(mimeType: string): RecordingFormat | null {
   const type = mimeType.trim().toLowerCase()
-  if (type === '' || /^(?:audio|video)\/webm\b/.test(type))
-    return { extension: 'webm', type: 'audio/webm' }
+  if (/^(?:audio|video)\/webm\b/.test(type)) return { extension: 'webm', type: 'audio/webm' }
   if (/^(?:audio|video)\/(?:mp4|x-m4a|aac)\b/.test(type))
     return { extension: 'm4a', type: 'audio/mp4' }
   if (/^(?:audio|video)\/ogg\b/.test(type)) return { extension: 'ogg', type: 'audio/ogg' }

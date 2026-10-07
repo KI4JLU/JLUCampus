@@ -41,7 +41,7 @@
   "tabsLabel": "Recording mode",
   "elapsed": "Elapsed {{time}}",
   "takesTitle": "Recordings",
-  "takesHint": "Recordings stay only in this browser window until you upload them.",
+  "takesHint": "Recordings are backed up in this browser until you upload or delete them.",
   "downloadRecordingName": "Download recording {{name}}",
   "deleteRecordingName": "Delete recording {{name}}",
   "confirmDeleteRecording": "Confirm deleting {{name}}",
@@ -87,6 +87,7 @@
     "aborted": "Audio connection closed."
   },
   "formatUnsupported": "Your browser records in a format the upload does not accept ({{type}}).",
+  "formatUnknown": "Your browser does not say which format it records in. Try another browser.",
   "waveformSkipped": "No waveform is computed here for recordings longer than 20 minutes.",
   "sources": {
     "add": "Add source",

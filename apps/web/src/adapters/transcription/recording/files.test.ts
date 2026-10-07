@@ -35,8 +35,8 @@ describe('recordingFormat', () => {
     })
   })
 
-  it('counts an unnamed type as WebM and refuses others', () => {
-    expect(recordingFormat('')).toEqual({ extension: 'webm', type: 'audio/webm' })
+  it('refuses an unnamed type and others the upload does not take', () => {
+    expect(recordingFormat('')).toBeNull()
     expect(recordingFormat('audio/x-matroska')).toBeNull()
     expect(recordingFormat('audio/wav')).toBeNull()
   })

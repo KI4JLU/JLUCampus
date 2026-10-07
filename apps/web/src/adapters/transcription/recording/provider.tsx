@@ -193,8 +193,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       backupLocks,
       scanned: scannedRef,
       pendingDisplay: pendingDisplayRef,
-      connecting: connectingRef,
-      swap: swapRef
+      starting: startingRef,
+      swap: swapRef,
+      mainDevice: mainDeviceRef
     }
   ] = useState(
     () =>
@@ -220,10 +221,15 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
           scanned: { current: false } as Box<boolean>,
           /** Gives up a tab, window or screen whose picker is still open. */
           pendingDisplay: { current: null } as Box<(() => void) | null>,
-          /** Gives up a live session that is still connecting, and its microphone. */
-          connecting: { current: null } as Box<(() => void) | null>,
-          /** Counts main microphone swaps; only the latest one is mixed in. */
-          swap: { current: 0 } as Box<number>
+          /**
+           * Gives up a take that is still starting, with what it holds outside `inputs`: the mixer,
+           * the live session and its microphone, the recorder.
+           */
+          starting: { current: null } as Box<(() => void) | null>,
+          /** Counts main microphone choices; only the latest one is mixed in. */
+          swap: { current: 0 } as Box<number>,
+          /** The device of the running take's main microphone; a failed swap selects it again. */
+          mainDevice: { current: DEFAULT_DEVICE_ID } as Box<string>
         }
         // Leaving the page drops what runs without finishing it and frees every source. The
         // take's backup stays and is offered again on the next visit.
@@ -231,8 +237,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
           boxes.mounted.current = false
           boxes.pendingDisplay.current?.()
           boxes.pendingDisplay.current = null
-          boxes.connecting.current?.()
-          boxes.connecting.current = null
+          boxes.starting.current?.()
+          boxes.starting.current = null
           const running = boxes.session.current
           boxes.session.current = null
           running?.realtime?.teardown()
@@ -369,6 +375,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       const running = sessionRef.current
       if (!running) return Promise.resolve()
       const duration = (Date.now() - running.startedAt) / 1000
+      // A main microphone still opening comes too late.
+      swapRef.current++
       dispatch({ type: 'stop' })
       stoppingRef.current = (async () => {
         let error = lost
@@ -430,6 +438,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       sessionRef,
       setTakes,
       stoppingRef,
+      swapRef,
       t,
       takesRef,
       unlockBackup
@@ -558,36 +567,48 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   )
 
   /**
-   * Records `stream` with its backup: named and typed after what the recorder writes. `release`
-   * undoes the start when the recorder cannot run.
+   * Records `stream` with its backup, named and typed after what the recorder writes, which it
+   * says only once started. `release` undoes the start when the recorder cannot run.
    */
   const startTake = useCallback(
-    (
+    async (
       session: Pick<RunningSession, 'kind' | 'realtime' | 'mixer' | 'stream'>,
       recorded: MediaStream,
       release: () => void
-    ): void => {
+    ): Promise<void> => {
       const id = crypto.randomUUID()
       const startedAt = Date.now()
       let journal: BackupJournal | null = null
+      // Chunks before the journal is there wait for it.
+      const early: Blob[] = []
       let recorder: LocalRecorder
       try {
         recorder = startLocalRecorder(recorded, {
           mimeType: recorderMimeType((type) => MediaRecorder.isTypeSupported(type)),
           audioBitsPerSecond: RECORDING_AUDIO_BITS_PER_SECOND,
-          // The first chunk comes a second after the start, when the journal is there.
-          onChunk: (chunk) => journal?.add(chunk)
+          onChunk: (chunk) => (journal ? journal.add(chunk) : early.push(chunk))
         })
       } catch (error) {
         release()
         fail(errorText(error) || t('transcription.recording.startRecordingFailed'))
         return
       }
-      const format = recordingFormat(recorder.mimeType)
+      startingRef.current = () => {
+        void recorder.discard()
+        release()
+      }
+      const type = await recorder.mimeType
+      // Leaving the page dropped the recording.
+      if (!mountedRef.current) return
+      const format = recordingFormat(type)
       if (!format) {
         void recorder.discard()
         release()
-        fail(t('transcription.recording.formatUnsupported', { type: recorder.mimeType }))
+        fail(
+          type
+            ? t('transcription.recording.formatUnsupported', { type })
+            : t('transcription.recording.formatUnknown')
+        )
         return
       }
       const filename = recordingFilename(
@@ -603,11 +624,12 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       // The recording goes on without its backup; the record tab says so.
       journal = createBackupJournal(
         lock.held.then(() => backupDirectory()),
-        { id, startedAt, filename, mimeType: recorder.mimeType || format.type },
+        { id, startedAt, filename, mimeType: type },
         () => {
           if (mountedRef.current) setBackupFailed(true)
         }
       )
+      for (const chunk of early.splice(0)) journal.add(chunk)
       sessionRef.current = {
         ...session,
         recorder,
@@ -617,8 +639,21 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         backup: { id, journal }
       }
       dispatch({ type: 'started', at: startedAt })
+      // A source that ended while the recorder started may have been the last.
+      if (session.mixer?.size === 0) void finish(null)
     },
-    [backupLocks, dispatch, fail, me, mountedRef, sessionRef, setBackupFailed, t]
+    [
+      backupLocks,
+      dispatch,
+      fail,
+      finish,
+      me,
+      mountedRef,
+      sessionRef,
+      setBackupFailed,
+      startingRef,
+      t
+    ]
   )
 
   /** Regular recording: the main microphone and the added sources, mixed. */
@@ -632,22 +667,26 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         fail(t('transcription.recording.errors.audioFailed'))
         return
       }
+      // Leaving the page closes the mixer; the opened sources go with `inputs`.
+      startingRef.current = () => mixer.close()
+      const deviceId = microphones.selected
       let main: MediaStream
       try {
-        main = await devices.getUserMedia({ audio: audioConstraint(microphones.selected) })
+        main = await devices.getUserMedia({ audio: audioConstraint(deviceId) })
       } catch (error) {
         mixer.close()
-        failMicrophone(error)
+        if (mountedRef.current) failMicrophone(error)
         return
       }
-      if (mountedRef.current) await openAddedMicrophones(devices)
       if (!mountedRef.current) {
         releaseStream(main)
-        mixer.close()
         return
       }
       microphones.markGranted()
+      mainDeviceRef.current = deviceId
       holdInput(MAIN_SOURCE_ID, 'microphone', main)
+      await openAddedMicrophones(devices)
+      if (!mountedRef.current) return
       const release = (): void => {
         mixer.close()
         releaseInputs({ keepDisplays: true })
@@ -660,23 +699,25 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         fail(t('transcription.recording.errors.audioFailed'))
         return
       }
-      // Leaving the page released the sources already.
-      if (!mountedRef.current) {
-        mixer.close()
-        return
-      }
-      startTake({ kind: 'record', realtime: null, mixer, stream: null }, mixer.stream, release)
+      if (!mountedRef.current) return
+      await startTake(
+        { kind: 'record', realtime: null, mixer, stream: null },
+        mixer.stream,
+        release
+      )
     },
     [
       fail,
       failMicrophone,
       holdInput,
       inputs,
+      mainDeviceRef,
       microphones,
       mountedRef,
       openAddedMicrophones,
       releaseInputs,
       startTake,
+      startingRef,
       t
     ]
   )
@@ -715,36 +756,27 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         },
         browserRealtime
       )
-      // Leaving the page while connecting tears the session down (`memory.onDispose`).
-      const abandon = (): void => {
+      const release = (): void => {
         realtime.teardown()
         releaseStream(stream)
       }
-      connectingRef.current = abandon
+      // Leaving the page while connecting tears the session down.
+      startingRef.current = release
       try {
         await realtime.start({ stream, mode: liveMode })
       } catch (error) {
         releaseStream(stream)
         if (mountedRef.current) fail(realtimeErrorText(error))
         return
-      } finally {
-        if (connectingRef.current === abandon) connectingRef.current = null
       }
-      if (!mountedRef.current) {
-        abandon()
-        return
-      }
-      startTake({ kind: 'live', realtime, mixer: null, stream }, stream, () => {
-        realtime.teardown()
-        releaseStream(stream)
-      })
+      if (!mountedRef.current) return
+      await startTake({ kind: 'live', realtime, mixer: null, stream }, stream, release)
       if (sessionRef.current?.realtime !== realtime) return
       // A microphone that disappears ends the take with what it recorded (T-55).
       for (const track of stream.getAudioTracks())
         track.addEventListener('ended', () => void latestRef.current.finish(null), { once: true })
     },
     [
-      connectingRef,
       dispatch,
       fail,
       failMicrophone,
@@ -756,6 +788,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       setServiceError,
       setText,
       startTake,
+      startingRef,
       t
     ]
   )
@@ -772,67 +805,97 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         fail(t('transcription.recording.microphoneAccessUnsupported'))
         return
       }
-      if (kind === 'record') await startRecord(devices)
-      else if (mode) await startLive(devices, mode)
-      else fail(t('transcription.recording.liveUnavailable'))
+      try {
+        if (kind === 'record') await startRecord(devices)
+        else if (mode) await startLive(devices, mode)
+        else fail(t('transcription.recording.liveUnavailable'))
+      } finally {
+        // Started, failed or given up: what runs belongs to the session now.
+        startingRef.current = null
+      }
     },
-    [busyRef, dispatch, fail, mode, setSourceError, startLive, startRecord, t]
+    [busyRef, dispatch, fail, mode, setSourceError, startLive, startRecord, startingRef, t]
   )
 
-  /** Chooses the main microphone; a running regular recording swaps it in its mix. */
+  /** Makes `stream` of `deviceId` the main microphone of the running mix, in place. */
+  const replaceMain = useCallback(
+    (mixer: AudioMixer, deviceId: string, stream: MediaStream) => {
+      const old = inputs.get(MAIN_SOURCE_ID)
+      holdInput(MAIN_SOURCE_ID, 'microphone', stream)
+      // The recorder goes on with the mix.
+      mixer.add(MAIN_SOURCE_ID, stream)
+      mainDeviceRef.current = deviceId
+      if (old && old.stream !== stream) releaseStream(old.stream)
+    },
+    [holdInput, inputs, mainDeviceRef]
+  )
+
+  /**
+   * Chooses the main microphone; a running regular recording swaps it in its mix. An added
+   * microphone that is chosen keeps its open stream; another device opens first, and the take
+   * goes on with the microphone it had until then.
+   */
   const selectMicrophone = useCallback(
     (deviceId: string) => {
-      const previous = microphones.selected
-      if (deviceId === previous) return
+      if (deviceId === microphones.selected) return
+      // Each choice outdates the swaps still opening.
+      const swap = ++swapRef.current
       microphones.select(deviceId)
       setSourceError(null)
+      const running = sessionRef.current
+      const mixer = stateCell.value.status === 'recording' ? running?.mixer : null
       // An added microphone that becomes the main one is no added source any more.
-      for (const source of sourcesCell.value.list) {
-        if (source.kind !== 'microphone' || source.deviceId !== deviceId) continue
-        releaseStream(inputs.get(source.id)?.stream ?? null)
-        inputs.delete(source.id)
-        sessionRef.current?.mixer?.remove(source.id)
+      const added = sourcesCell.value.list.find(
+        (source) => source.kind === 'microphone' && source.deviceId === deviceId
+      )
+      const promoted = added ? inputs.get(added.id) : undefined
+      if (added) {
+        inputs.delete(added.id)
+        mixer?.remove(added.id)
       }
       dispatchSources({ type: 'mainSelected', deviceId })
+      if (!running || !mixer) {
+        releaseStream(promoted?.stream ?? null)
+        return
+      }
+      if (promoted) {
+        replaceMain(mixer, deviceId, promoted.stream)
+        return
+      }
 
-      const running = sessionRef.current
       const devices = typeof navigator === 'undefined' ? undefined : navigator.mediaDevices
-      if (!running?.mixer || stateCell.value.status !== 'recording' || !devices) return
-      const mixer = running.mixer
-      const swap = ++swapRef.current
+      if (!devices) return
+      // A later choice, the take's end or leaving the page came first.
+      const outdated = (): boolean =>
+        swap !== swapRef.current || sessionRef.current !== running || !mountedRef.current
       devices.getUserMedia({ audio: audioConstraint(deviceId) }).then(
         (stream) => {
-          // A later choice, the take's end or leaving the page came first.
-          if (swap !== swapRef.current || sessionRef.current !== running || !mountedRef.current) {
-            releaseStream(stream)
-            return
-          }
-          const old = inputs.get(MAIN_SOURCE_ID)
-          holdInput(MAIN_SOURCE_ID, 'microphone', stream)
-          // In place: the recorder goes on with the mix.
-          mixer.add(MAIN_SOURCE_ID, stream)
-          releaseStream(old?.stream ?? null)
+          if (outdated()) releaseStream(stream)
+          else replaceMain(mixer, deviceId, stream)
         },
         (error: unknown) => {
-          if (swap !== swapRef.current || !mountedRef.current) return
-          // The take goes on with the microphone it had.
-          microphones.select(previous)
+          if (outdated()) return
+          microphones.select(mainDeviceRef.current)
           setSourceError(
             t('transcription.recording.sources.microphoneFailed', {
               name: microphoneLabel(deviceId),
               message: errorText(error) || errorName(error)
             })
           )
+          // Nothing left to record: the take ends as if stopped.
+          if (mixer.size === 0) void finish(null)
         }
       )
     },
     [
       dispatchSources,
-      holdInput,
+      finish,
       inputs,
+      mainDeviceRef,
       microphoneLabel,
       microphones,
       mountedRef,
+      replaceMain,
       sessionRef,
       setSourceError,
       sourcesCell,
@@ -988,6 +1051,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     // failed upload or leaving the page meanwhile does not lose it. The files are held weakly.
     const backups = new WeakMap<File, string>()
     for (const take of taken) if (take.backupId) backups.set(take.file, take.backupId)
+    // Recorded WebM names no length of its own: the queue takes the running time.
+    const durations = new Map<File, number>()
+    for (const take of taken) if (take.duration) durations.set(take.file, take.duration)
     // One normal group, through the same queue, validation and analysis as picked files.
     enqueueUpload(
       taken.map((take) => take.file),
@@ -995,7 +1061,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         onStored: (file) => {
           const id = backups.get(file)
           if (id) void removeBackup(id)
-        }
+        },
+        durations
       }
     )
     setTakes([])
