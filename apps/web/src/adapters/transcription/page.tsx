@@ -14,6 +14,7 @@ import { RecordingProvider, RecordView } from './recording'
 import { ResultTools, ResultView } from './result'
 import { Notice } from './notice'
 import { UploadProvider, UploadSettings, UploadView } from './upload'
+import { useFileListHeader } from './upload/list-header'
 import { useTranscriptionWorkspace } from './use-workspace'
 import { TranscriptionWorkspaceProvider } from './workspace'
 
@@ -42,6 +43,9 @@ function TranscriptionLayout(): React.JSX.Element {
   const { component, capabilities, view, newTranscription } = useTranscriptionWorkspace()
   const capabilitiesQuery = useTranscriptionCapabilities()
   const notSetUp = capabilities && !capabilities.batch && capabilities.realtimeModes.length === 0
+  // With files queued, the upload view's list takes the page's title (no second header below).
+  const fileList = useFileListHeader()
+  const listHeader = view === 'upload' ? fileList : null
 
   return (
     // `relative`: absolutely placed screen-reader texts stay inside the scrolling area instead of
@@ -50,27 +54,34 @@ function TranscriptionLayout(): React.JSX.Element {
       <Container size="page" className="flex flex-col gap-stack-lg py-gutter md:py-margin-page">
         <PageHeader
           title={
-            <>
-              <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} />
-              <span className="truncate">{component.name}</span>
-            </>
+            listHeader ? (
+              <span className="truncate">{listHeader.title}</span>
+            ) : (
+              <>
+                <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} />
+                <span className="truncate">{component.name}</span>
+              </>
+            )
           }
           actions={
-            // kiChat's button is always there; at the choice it clears the history search.
-            <Button type="button" variant="outline" onClick={() => void newTranscription()}>
-              {/* As kiChat: on the way to a transcript the button leads back to the choice. */}
-              {view === 'result' || view === 'choice' ? (
-                <>
-                  <PlusIcon aria-hidden="true" className="size-4" />
-                  {t('transcription.common.startNew')}
-                </>
-              ) : (
-                <>
-                  <ArrowLeftIcon aria-hidden="true" className="size-4" />
-                  {t('transcription.common.back')}
-                </>
-              )}
-            </Button>
+            <>
+              {listHeader?.actions}
+              {/* kiChat's button is always there; at the choice it clears the history search. */}
+              <Button type="button" variant="outline" onClick={() => void newTranscription()}>
+                {/* As kiChat: on the way to a transcript the button leads back to the choice. */}
+                {view === 'result' || view === 'choice' ? (
+                  <>
+                    <PlusIcon aria-hidden="true" className="size-4" />
+                    {t('transcription.common.startNew')}
+                  </>
+                ) : (
+                  <>
+                    <ArrowLeftIcon aria-hidden="true" className="size-4" />
+                    {t('transcription.common.back')}
+                  </>
+                )}
+              </Button>
+            </>
           }
         />
         {capabilitiesQuery.isError ? (
