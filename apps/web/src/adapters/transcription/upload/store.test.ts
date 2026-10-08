@@ -655,6 +655,74 @@ describe('UploadQueue: removing (T-08)', () => {
   })
 })
 
+describe('UploadQueue: telling when handed-over files are stored (T-58)', () => {
+  it('reports stored once storage has the bytes, before the analysis starts', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: SPEAKERS })
+    const queue = makeQueue(api, events)
+    const onStored = vi.fn()
+    const take = wav('take.webm')
+    queue.addGroupOfFiles([take], { onStored })
+    await until(() => row(queue, 'take.webm').phase === 'ready')
+    expect(onStored.mock.calls).toEqual([[take]])
+    expect(onStored.mock.invocationCallOrder[0]).toBeLessThan(
+      api.analyzeJob.mock.invocationCallOrder[0]!
+    )
+    queue.dispose()
+  })
+
+  it('says nothing of a failed upload, and reports the retry that stores it', async () => {
+    const { api, events } = server()
+    const upload = vi.fn<SignedUpload>(async () => {
+      throw new UploadError('status', 500)
+    })
+    const queue = makeQueue(api, events, upload)
+    const onStored = vi.fn()
+    const take = wav('take.webm')
+    queue.addGroupOfFiles([take], { onStored })
+    await until(() => row(queue, 'take.webm').phase === 'analysisFailed')
+    expect(onStored).not.toHaveBeenCalled()
+
+    upload.mockResolvedValueOnce(undefined)
+    void queue.retry(row(queue, 'take.webm').id)
+    await until(() => onStored.mock.calls.length === 1)
+    expect(onStored).toHaveBeenCalledWith(take)
+    queue.dispose()
+  })
+
+  it('never reports a file removed during its upload', async () => {
+    const { api, events } = server()
+    let uploading = false
+    const upload: SignedUpload = (_target, _body, options) =>
+      new Promise((_resolve, reject) => {
+        uploading = true
+        options.signal?.addEventListener('abort', () => reject(new UploadError('aborted', null)))
+      })
+    const queue = makeQueue(api, events, upload)
+    const onStored = vi.fn()
+    queue.addGroupOfFiles([wav('a.webm')], { onStored })
+    await until(() => uploading)
+    expect(await queue.removeFile(row(queue, 'a.webm').id)).toBe(true)
+    await Promise.resolve()
+    expect(onStored).not.toHaveBeenCalled()
+    queue.dispose()
+  })
+})
+
+describe('UploadQueue: lengths of handed-over files (T-58)', () => {
+  it('takes a known length as measured and measures the others', async () => {
+    const { api, events } = server()
+    const queue = makeQueue(api, events)
+    const take = wav('take.webm')
+    const durations = new Map([[take, 23]])
+    queue.addGroupOfFiles([take, wav('other.webm')], { durations })
+    expect(row(queue, 'take.webm').duration).toBe(23)
+    await until(() => row(queue, 'other.webm').duration === 12)
+    expect(row(queue, 'take.webm').duration).toBe(23)
+    queue.dispose()
+  })
+})
+
 describe('UploadQueue: restoring active jobs (T-15)', () => {
   it('restores each job as its own group and saves finished transcriptions', async () => {
     const { api, events, script } = server()

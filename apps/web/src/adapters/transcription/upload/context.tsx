@@ -231,8 +231,8 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
         const index = handoverGroupIndex(groups, pending.target)
         const present = index === null ? [] : groups[index]!.files
         const { overflow } = fitIntoGroup(present, accepted, Math.max(0, maxFiles - present.length))
-        if (index === null) queue.addGroupOfFiles(accepted, pending.title)
-        else queue.addFiles(accepted, index)
+        if (index === null) queue.addGroupOfFiles(accepted, pending)
+        else queue.addFiles(accepted, index, pending)
         if (overflow) await alertGroupFull()
       }
     })()

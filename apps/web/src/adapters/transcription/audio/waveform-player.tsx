@@ -12,17 +12,14 @@ import {
 import { PauseIcon, PlayIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@ki4jlu/design-system'
-import {
-  TRANSCRIPTION_SPEAKER_COLORS,
-  TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES,
-  type TranscriptionSpeakerColorId
-} from '@justcampus/shared'
+import { TRANSCRIPTION_SPEAKER_COLORS, type TranscriptionSpeakerColorId } from '@justcampus/shared'
 import { cn } from '@/lib/utils'
 import { drawWaveform, segmentTitle, type WaveformColors } from './draw'
 import { playExclusively } from './exclusive'
 import { nextLoad, sourceLength, type MediaLength, type SourceLoad } from './length'
 import {
   blobWaveform,
+  decodesLocally,
   formatMegabytes,
   formatTime,
   jobWaveform,
@@ -78,10 +75,18 @@ export interface WaveformPlayerHandle {
 export interface WaveformPlayerProps {
   /** A local file or recording, or a job's audio URL; `null` shows an empty player. */
   source: Blob | string | null
-  /** Shown above the waveform and names the seek bar. */
+  /**
+   * Shown above the waveform and names the seek bar; for audio by URL its extension also tells
+   * whether it is decoded here (`decodesLocally`).
+   */
   name?: string
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
+  /**
+   * Seconds, for audio that names no duration of its own (recorded WebM); WebM is decoded here only
+   * with one (`decodesLocally`).
+   */
+  knownDuration?: number
   /**
    * The analysed job of this audio: above the decode limit the waveform the analysis computed is
    * drawn instead (T-12).
@@ -125,13 +130,15 @@ function cssColor(element: Element, name: string): string {
  * The audio player the transcription page uses everywhere, after kiChat's `WaveformAudioPlayer`
  * and its global player: play/pause, a waveform that is the seek bar (pointer and keyboard), the
  * time, an optional speaker timeline and a highlighted region. Local files play from an object
- * URL; remote audio from the job's audio URL. Above 100 MB nothing is decoded here: the waveform the
- * analysis computed is drawn (`jobId`), and the audio plays either way.
+ * URL; remote audio from the job's audio URL. Audio `decodesLocally` refuses (too large, or WebM
+ * of unknown or long duration) is not decoded here: the waveform the analysis computed is drawn
+ * (`jobId`), and the audio plays either way.
  */
 export function WaveformPlayer({
   source,
   name,
   size,
+  knownDuration: givenDuration,
   jobId = null,
   jobRevision,
   segments,
@@ -168,7 +175,11 @@ export function WaveformPlayer({
   const rangeEnd = useRef<number | null>(null)
   const seeking = useRef(false)
   const byteSize = size ?? (source instanceof Blob ? source.size : undefined)
-  const tooLarge = byteSize !== undefined && byteSize > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+  // Remote audio of unknown size is held to the limit while it loads (`urlWaveform`).
+  const local = decodesLocally(
+    { size: byteSize ?? 0, type: source instanceof Blob ? source.type : undefined, name },
+    givenDuration
+  )
   // A waveform decoded for an earlier source no longer counts.
   const waveform = decoded?.source === source ? decoded.waveform : null
   const external = timeline !== undefined
@@ -199,13 +210,13 @@ export function WaveformPlayer({
   useEffect(() => {
     if (!source || external) return
     const controller = new AbortController()
-    // Too large to decode here: the waveform the analysis computed, once there is one.
-    const decoding = tooLarge
+    // Not decoded here: the waveform the analysis computed, once there is one.
+    const decoding = !local
       ? jobId
         ? jobWaveform(jobId)
         : null
       : source instanceof Blob
-        ? blobWaveform(source)
+        ? blobWaveform(source, givenDuration)
         : urlWaveform(source, controller.signal)
     if (!decoding) return
     void decoding.then((result) => {
@@ -213,13 +224,13 @@ export function WaveformPlayer({
     })
     return () => controller.abort()
     // `jobRevision` only asks again; `jobWaveform` keeps what it found.
-  }, [jobId, jobRevision, source, tooLarge, external])
+  }, [givenDuration, jobId, jobRevision, local, source, external])
 
   const knownDuration = sourceLength(
     currentLoad,
     media,
     waveform?.duration,
-    timeline?.sourceDuration
+    timeline?.sourceDuration ?? givenDuration
   )
   useEffect(() => {
     if (knownDuration > 0) onDuration?.(knownDuration)
@@ -467,7 +478,7 @@ export function WaveformPlayer({
           <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" />
         </div>
       </div>
-      {tooLarge && !waveform && !compact ? (
+      {source && !local && !waveform && !compact ? (
         <span>{t('transcription.common.player.waveformUnavailable')}</span>
       ) : null}
       <audio

@@ -79,5 +79,6 @@ describe('upload helpers', () => {
       'application/octet-stream'
     )
     expect(uploadContentType('take.ogg', 'bad type\r\nX: y')).toBe('audio/ogg')
+    expect(uploadContentType('meeting.webm', '')).toBe('audio/webm')
   })
 })

@@ -23,7 +23,7 @@ import {
   type NumberedLabel,
   type VoiceDraft
 } from '../mapping/speakers'
-import type { UploadSettings } from '../workspace'
+import type { EnqueueOptions, UploadSettings, UploadStored } from '../workspace'
 import { transcriptCreate, type FileResult } from './merge'
 import { creepStep, CREEP_MS, PROGRESS, transcriptionDisplay, uploadProgress } from './progress'
 import {
@@ -184,6 +184,17 @@ function durationHint(duration: number | null): number | null {
  * group whose files all succeeded is joined and saved as one transcript (T-14). It is an external
  * store for `useSyncExternalStore`; the work runs on even while nothing renders it.
  */
+/** Rows for `files`, with the lengths in `durations` taken as measured. */
+function rowsOf(files: readonly File[], durations?: ReadonlyMap<File, number>): QueueFile[] {
+  return files.map((file) => {
+    const duration = durations?.get(file)
+    const row = queueFileFrom(file)
+    return duration !== undefined && Number.isFinite(duration) && duration > 0
+      ? { ...row, duration }
+      : row
+  })
+}
+
 export class UploadQueue {
   private state: QueueState = EMPTY_QUEUE
   private readonly listeners = new Set<() => void>()
@@ -193,6 +204,8 @@ export class UploadQueue {
   private readonly uploads = new Map<string, AbortController>()
   private readonly creeps = new Map<string, ReturnType<typeof setInterval>>()
   private readonly reanalyzing = new Set<string>()
+  /** Who hears that a file is stored, by file, until it is; see `addFiles`. */
+  private readonly storedListeners = new Map<string, UploadStored>()
   /**
    * Files whose job is being deleted, with whether that worked; their group is not saved meanwhile,
    * and a flow that loses the job then waits for the outcome (`keptAfterRemoval`).
@@ -360,27 +373,36 @@ export class UploadQueue {
   /**
    * Adds checked files to a group (`null`: where dropped files go) and uploads them. Files already
    * in that group are skipped before the limit counts (T-05). Nothing is added while a start runs,
-   * nor to a group being saved. Returns the rows added.
+   * nor to a group being saved. `onStored` hears when storage has an added file's bytes, after a
+   * retry too; a file removed before then is never reported. `durations` are taken as measured.
+   * Returns the rows added.
    */
-  addFiles(files: readonly File[], groupIndex: number | null = null): QueueFile[] {
+  addFiles(
+    files: readonly File[],
+    groupIndex: number | null = null,
+    { onStored, durations }: Pick<EnqueueOptions, 'onStored' | 'durations'> = {}
+  ): QueueFile[] {
     if (this.state.processing || files.length === 0) return []
     let groups = this.state.groups
     const index = groupIndex ?? dropTargetIndex(groups)
     const target = groups[index]
     if (target && (target.saved || this.saving.has(target.id))) return []
     const room = this.room(groups[index]?.files.length ?? 0)
-    const result = addToGroup(groups, index, files.map(queueFileFrom), room)
+    const result = addToGroup(groups, index, rowsOf(files, durations), room)
     groups = renumberGroups(result.groups)
     this.set({ ...this.state, groups })
-    for (const row of result.added) this.track(row)
+    this.trackAdded(result.added, onStored)
     return result.added
   }
 
   /**
    * Adds files as a group of their own, e.g. the recorded takes (T-58): into the first empty group
-   * or a new one, named `name` if given.
+   * or a new one, named `title` if given. `onStored` and `durations` as in `addFiles`.
    */
-  addGroupOfFiles(files: readonly File[], name: string | null): QueueFile[] {
+  addGroupOfFiles(
+    files: readonly File[],
+    { title: name = null, onStored, durations }: EnqueueOptions = {}
+  ): QueueFile[] {
     if (this.state.processing || files.length === 0) return []
     let groups = [...this.state.groups]
     let index = groups.findIndex((group) => group.saved === null && group.files.length === 0)
@@ -388,11 +410,19 @@ export class UploadQueue {
       index = groups.length
       groups.push(newGroup(index, name ?? defaultGroupName(index)))
     } else if (name) groups[index] = { ...groups[index]!, name }
-    const result = addToGroup(groups, index, files.map(queueFileFrom), this.room(0))
+    const result = addToGroup(groups, index, rowsOf(files, durations), this.room(0))
     groups = renumberGroups(result.groups)
     this.set({ ...this.state, groups })
-    for (const row of result.added) this.track(row)
+    this.trackAdded(result.added, onStored)
     return result.added
+  }
+
+  /** Tracks the rows just added; `onStored` hears when each is stored. */
+  private trackAdded(rows: readonly QueueFile[], onStored: UploadStored | undefined): void {
+    for (const row of rows) {
+      if (onStored) this.storedListeners.set(row.id, onStored)
+      this.track(row)
+    }
   }
 
   /** How many more files a group of `present` files takes (T-04: the admin's limit, if set). */
@@ -401,10 +431,10 @@ export class UploadQueue {
     return limit === null || limit === undefined ? Infinity : Math.max(0, limit - present)
   }
 
-  /** Measures a new row's length and starts its upload. */
+  /** Measures a new row's length, unless known, and starts its upload. */
   private track(row: QueueFile): void {
     const local = row.file
-    if (local) {
+    if (local && row.duration === null) {
       void this.options.measureDuration(local).then((duration) => {
         if (duration !== null) {
           this.patchFile(row.id, (file) => (file.duration === null ? { duration } : {}))
@@ -483,6 +513,10 @@ export class UploadQueue {
       } finally {
         this.uploads.delete(fileId)
       }
+      // Heard once; a row removed meanwhile was forgotten.
+      const onStored = this.storedListeners.get(fileId)
+      this.storedListeners.delete(fileId)
+      onStored?.(local)
       // Only now, with storage's answer, may the analysis start (kiChat).
       this.patchFile(fileId, {
         uploaded: true,
@@ -1479,6 +1513,7 @@ export class UploadQueue {
 
   /** Stops everything a file does. */
   private forget(fileId: string): void {
+    this.storedListeners.delete(fileId)
     this.flows.get(fileId)?.abort()
     this.flows.delete(fileId)
     this.abortUpload(fileId)
@@ -1535,6 +1570,7 @@ export class UploadQueue {
     this.flows.clear()
     for (const timer of this.creeps.values()) clearInterval(timer)
     this.creeps.clear()
+    this.storedListeners.clear()
     this.set({ ...this.state, groups: [] })
   }
 }

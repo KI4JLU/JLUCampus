@@ -35,7 +35,7 @@ describe('transcription texts', () => {
   it('keeps kiChat texts verbatim', () => {
     expect(de.get('common.choiceUploadTitle')).toBe('Datei hochladen')
     expect(en.get('upload.unsupportedFileAlert')).toBe(
-      'We support .mp3, .wav, .m4a and .ogg.\n\nMaximum 500MB per file.'
+      'We support .mp3, .wav, .m4a, .ogg and .webm.\n\nMaximum 500MB per file.'
     )
     expect(de.get('export.templateHint')).toBe('Wird nach deiner Vorlage „{{template}}“ erstellt.')
     expect(en.get('result.emptySpeakerHint')).toBe('[This speaker has no text yet!]')

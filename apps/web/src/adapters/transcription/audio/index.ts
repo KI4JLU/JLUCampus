@@ -10,6 +10,7 @@ export { segmentTitle } from './draw'
 export {
   blobWaveform,
   computePeaks,
+  decodesLocally,
   decodeWaveform,
   formatMegabytes,
   formatTime,

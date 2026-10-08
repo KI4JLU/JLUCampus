@@ -13,7 +13,8 @@ const EXTENSION_TYPES: Record<string, string> = {
   wav: 'audio/wav',
   m4a: 'audio/mp4',
   mp4: 'video/mp4',
-  ogg: 'audio/ogg'
+  ogg: 'audio/ogg',
+  webm: 'audio/webm'
 }
 
 /** The file's own name, without any path a browser or OS put in front. */

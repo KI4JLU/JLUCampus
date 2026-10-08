@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  areSourcesLocked,
   INITIAL_RECORDING_STATE,
   isRecordingBusy,
   recordingReducer,
@@ -74,5 +75,18 @@ describe('recordingReducer', () => {
         isRecordingBusy(status as RecordingState['status'])
       )
     ).toEqual([false, true, true, true, false, false])
+  })
+
+  it('locks the sources while a take starts or ends, and while live transcription runs', () => {
+    const recording = (kind: 'record' | 'live'): RecordingState =>
+      run([
+        { type: 'request', kind },
+        { type: 'started', at: 5 }
+      ])
+    expect(areSourcesLocked(INITIAL_RECORDING_STATE)).toBe(false)
+    expect(areSourcesLocked(run([{ type: 'request', kind: 'record' }]))).toBe(true)
+    expect(areSourcesLocked(recording('record'))).toBe(false)
+    expect(areSourcesLocked(recording('live'))).toBe(true)
+    expect(areSourcesLocked(recordingReducer(recording('record'), { type: 'stop' }))).toBe(true)
   })
 })

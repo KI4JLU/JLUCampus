@@ -7,6 +7,7 @@ import { getJobAudioUrl, getJobPeaks } from '../api'
 import {
   blobWaveform,
   computePeaks,
+  decodesLocally,
   formatMegabytes,
   formatTime,
   globalPeaks,
@@ -15,7 +16,8 @@ import {
   placeholderPeaks,
   serverTimePeaks,
   sourceWaveform,
-  urlWaveform
+  urlWaveform,
+  WEBM_DECODE_MAX_SECONDS
 } from './peaks'
 
 vi.mock('../api', () => ({ getJobPeaks: vi.fn(), getJobAudioUrl: vi.fn() }))
@@ -45,6 +47,31 @@ describe('the decode limit', () => {
   it('does not decode files over 100 MB', async () => {
     const huge = { size: TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1 } as Blob
     await expect(blobWaveform(huge)).resolves.toBeNull()
+  })
+
+  it('decodes WebM only of a known duration up to 20 minutes, however small', async () => {
+    // An hour of quiet meeting at a variable bitrate: under a megabyte, decoded 660 MB.
+    const meeting = { size: 800 * 1024, type: 'audio/webm;codecs=opus' } as Blob
+    expect(decodesLocally(meeting)).toBe(false)
+    expect(decodesLocally(meeting, 3600)).toBe(false)
+    await expect(blobWaveform(meeting, 3600)).resolves.toBeNull()
+    expect(decodesLocally(meeting, null)).toBe(false)
+    expect(decodesLocally(meeting, Infinity)).toBe(false)
+    expect(decodesLocally(meeting, Number.NaN)).toBe(false)
+    expect(decodesLocally(meeting, WEBM_DECODE_MAX_SECONDS)).toBe(true)
+    expect(decodesLocally(meeting, WEBM_DECODE_MAX_SECONDS + 1)).toBe(false)
+    // Audio by URL has no type: its name tells.
+    expect(decodesLocally({ size: 1024, name: 'max-20261007-101500.webm' })).toBe(false)
+    expect(decodesLocally({ size: 1024, name: 'max-20261007-101500.webm' }, 60)).toBe(true)
+  })
+
+  it('keeps the limit on the bytes of other formats', () => {
+    const limit = TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+    expect(decodesLocally({ size: limit, name: 'interview.wav' })).toBe(true)
+    expect(decodesLocally({ size: limit, type: 'audio/ogg' })).toBe(true)
+    expect(decodesLocally({ size: limit, type: 'audio/wav', name: 'a.webm' })).toBe(true)
+    expect(decodesLocally({ size: limit + 1 })).toBe(false)
+    expect(decodesLocally({ size: limit + 1, type: 'audio/webm' }, 60)).toBe(false)
   })
 
   it('does not download remote audio that declares more', async () => {
@@ -156,7 +183,9 @@ describe('sourceWaveform', () => {
       perSecond: 20,
       duration: 2
     } as TranscriptionJobPeaks)
-    const result = await sourceWaveform('big-job', TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1)
+    const result = await sourceWaveform('big-job', {
+      size: TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES + 1
+    })
     expect(getJobAudioUrl).not.toHaveBeenCalled()
     expect(result?.duration).toBe(2)
     expect(Math.max(...result!.peaks)).toBe(1)
@@ -165,8 +194,24 @@ describe('sourceWaveform', () => {
   it('asks again for a waveform it did not find', async () => {
     vi.mocked(getJobAudioUrl).mockRejectedValue(new Error('offline'))
     vi.mocked(getJobPeaks).mockResolvedValue(null)
-    expect(await sourceWaveform('missing-job', 10)).toBeNull()
-    expect(await sourceWaveform('missing-job', 10)).toBeNull()
+    expect(await sourceWaveform('missing-job', { size: 10 })).toBeNull()
+    expect(await sourceWaveform('missing-job', { size: 10 })).toBeNull()
     expect(getJobAudioUrl).toHaveBeenCalledTimes(2)
+  })
+
+  it("takes the analysis's waveform for a long recorded WebM, without fetching the audio", async () => {
+    vi.mocked(getJobAudioUrl).mockClear()
+    vi.mocked(getJobPeaks).mockResolvedValueOnce({
+      peaks: btoa(String.fromCharCode(0, 255)),
+      perSecond: 20,
+      duration: 2
+    } as TranscriptionJobPeaks)
+    const result = await sourceWaveform('long-take', {
+      size: 1024,
+      name: 'take.webm',
+      duration: WEBM_DECODE_MAX_SECONDS + 1
+    })
+    expect(getJobAudioUrl).not.toHaveBeenCalled()
+    expect(result?.duration).toBe(2)
   })
 })

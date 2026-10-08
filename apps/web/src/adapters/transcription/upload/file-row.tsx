@@ -128,6 +128,7 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
             <WaveformPlayer
               source={file.file}
               name={file.name}
+              knownDuration={file.duration ?? undefined}
               jobId={waveform?.jobId ?? null}
               jobRevision={waveform?.revision}
               onDuration={(seconds) => queue.setDuration(file.id, seconds)}
@@ -237,6 +238,7 @@ function RestoredPlayer({ file }: { file: QueueFile }): React.JSX.Element {
       source={audio.data?.url ?? null}
       name={file.name}
       size={file.size}
+      knownDuration={file.duration ?? undefined}
       jobId={waveform?.jobId ?? null}
       jobRevision={waveform?.revision}
     />

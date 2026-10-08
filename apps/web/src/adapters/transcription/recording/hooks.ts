@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useRecording } from './context'
-import { formatFileSize } from './wav'
+import { formatFileSize } from './files'
 
 /** Seconds since `startedAt`, ticking while it is set (T-56). */
 export function useElapsedSeconds(startedAt: number | null): number {
@@ -27,10 +27,9 @@ export interface StatusTexts {
 export function useRecordingStatusTexts(): StatusTexts {
   const { t } = useTranslation()
   const { state, takes, microphones } = useRecording()
-  const live = state.kind === 'live'
   switch (state.status) {
     case 'recording':
-      return live
+      return state.kind === 'live'
         ? {
             title: t('transcription.recording.liveRunning'),
             text: t('transcription.recording.liveRunningHint'),

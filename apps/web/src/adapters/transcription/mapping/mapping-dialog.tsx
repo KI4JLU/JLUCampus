@@ -27,10 +27,10 @@ import {
 } from '@ki4jlu/design-system'
 import {
   TRANSCRIPTION_SAMPLES_PER_SPEAKER_MAX,
-  TRANSCRIPTION_SPEAKER_NAME_MAX,
-  TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+  TRANSCRIPTION_SPEAKER_NAME_MAX
 } from '@justcampus/shared'
 import { useJobAudioUrl } from '../api'
+import { decodesLocally } from '../audio'
 import { Notice } from '../notice'
 import { findFile, type QueueFile } from '../upload/queue'
 import { useQueueState, useUpload } from '../upload/use-upload'
@@ -133,9 +133,16 @@ function MappingContent({
   const remote = useJobAudioUrl(file.file ? null : file.jobId)
   const loadedPeaks = useTimePeaks(
     file.file
-      ? { blob: file.file, jobId: file.jobId }
+      ? { blob: file.file, jobId: file.jobId, duration: file.duration }
       : file.jobId
-        ? { jobId: file.jobId, url: remote.data?.url ?? null }
+        ? {
+            jobId: file.jobId,
+            url: remote.data?.url ?? null,
+            size: file.size,
+            type: file.mimeType,
+            name: file.name,
+            duration: file.duration
+          }
         : null
   )
   const peaks = loadedPeaks ?? null
@@ -308,8 +315,10 @@ function MappingContent({
       {player.failed ? (
         <Notice tone="error" title={t('transcription.upload.mapping.audioUnavailable')} />
       ) : null}
-      {/* A large file without the server's waveform: the sample tracks draw placeholders (T-12). */}
-      {loadedPeaks === null && file.size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES ? (
+      {/* Audio not decoded here, without the server's waveform: the sample tracks draw placeholders
+      (T-12). */}
+      {loadedPeaks === null &&
+      !decodesLocally({ size: file.size, type: file.mimeType, name: file.name }, file.duration) ? (
         <Badge appearance="text">{t('transcription.common.player.waveformUnavailable')}</Badge>
       ) : null}
 

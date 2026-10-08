@@ -56,18 +56,19 @@ describe('TRANSCRIPTION_FILE_ACCEPT', () => {
       ...TRANSCRIPTION_MIME_TYPES
     ])
     expect(TRANSCRIPTION_FILE_ACCEPT).toBe(
-      '.mp3,.wav,.m4a,.mp4,.ogg,audio/mpeg,audio/mp3,audio/wav,audio/m4a,audio/ogg,video/mp4'
+      '.mp3,.wav,.m4a,.mp4,.ogg,.webm,audio/mpeg,audio/mp3,audio/wav,audio/m4a,audio/ogg,audio/webm,video/mp4'
     )
   })
 })
 
 describe('checkTranscriptionFile', () => {
-  it('takes the five extensions in any case, or a supported MIME type', () => {
-    for (const name of ['a.mp3', 'b.WAV', 'c.m4a', 'd.mp4', 'e.Ogg']) {
+  it('takes the six extensions in any case, or a supported MIME type', () => {
+    for (const name of ['a.mp3', 'b.WAV', 'c.m4a', 'd.mp4', 'e.Ogg', 'f.webm']) {
       expect(checkTranscriptionFile(file(name, 1))).toBe('ok')
     }
     expect(checkTranscriptionFile(file('recording', 1, 'audio/mpeg'))).toBe('ok')
     expect(checkTranscriptionFile(file('clip', 1, 'video/mp4'))).toBe('ok')
+    expect(checkTranscriptionFile(file('meeting', 1, 'audio/webm'))).toBe('ok')
   })
 
   it('refuses other files before their size', () => {

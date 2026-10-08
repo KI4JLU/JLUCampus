@@ -95,7 +95,7 @@ export function GlobalPlayer({
   useEffect(() => {
     let cancelled = false
     void Promise.all(
-      sources.map((file) => (file.jobId ? sourceWaveform(file.jobId, file.size) : null))
+      sources.map((file) => (file.jobId ? sourceWaveform(file.jobId, file) : null))
     ).then((results) => {
       if (!cancelled) setLoaded({ sources, waveforms: results })
     })
