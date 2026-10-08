@@ -78,6 +78,20 @@ describe('keepsTracks', () => {
         { offset: 30, duration: 30 }
       ])
     ).toBe(false)
+    // Back to back after a swap, with offsets that do not add up exactly as floats.
+    expect(
+      keepsTracks([
+        { offset: 1.001, duration: 30.001 },
+        { offset: 31.002, duration: 10 }
+      ])
+    ).toBe(false)
+    // One millisecond of overlap is overlap.
+    expect(
+      keepsTracks([
+        { offset: 1.001, duration: 30.002 },
+        { offset: 31.002, duration: 10 }
+      ])
+    ).toBe(true)
     // A tab shared for a while beside the microphone.
     expect(
       keepsTracks([

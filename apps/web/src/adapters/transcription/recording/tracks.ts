@@ -56,11 +56,18 @@ export function trackOffset(takeStartedAt: number, at: number): number {
  * or one microphone swapped for another, is what the mix holds already.
  */
 export function keepsTracks(tracks: readonly TrackSpan[]): boolean {
-  const sorted = [...tracks].sort((a, b) => a.offset - b.offset)
+  // In whole milliseconds: seconds as floats would let a swap's two tracks overlap by a rounding
+  // error (1.001 + 30.001 > 31.002).
+  const spans = tracks
+    .map((track) => {
+      const start = Math.round(track.offset * 1000)
+      return { start, end: start + Math.round(track.duration * 1000) }
+    })
+    .sort((a, b) => a.start - b.start)
   let end = -Infinity
-  for (const track of sorted) {
-    if (track.offset < end) return true
-    end = Math.max(end, track.offset + track.duration)
+  for (const span of spans) {
+    if (span.start < end) return true
+    end = Math.max(end, span.end)
   }
   return false
 }
