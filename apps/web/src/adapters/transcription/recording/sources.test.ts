@@ -3,6 +3,7 @@ import { DEFAULT_DEVICE_ID, type MicrophoneChoice } from './devices'
 import {
   addableMicrophones,
   canRemoveSource,
+  claimOpenedMicrophone,
   goneMicrophones,
   INITIAL_SOURCES,
   mainSuccessor,
@@ -132,6 +133,23 @@ describe('mainSuccessor', () => {
     expect(mainSuccessor([tab, headset])).toBe('headset')
     expect(mainSuccessor([tab])).toBeNull()
     expect(mainSuccessor([])).toBeNull()
+  })
+})
+
+describe('claimOpenedMicrophone', () => {
+  it('keeps a microphone that is still listed', () => {
+    expect(claimOpenedMicrophone(headset, [headset, tab], 'laptop', true)).toBe('keep')
+  })
+
+  it('makes it the main one when it took over a main microphone gone while it opened', () => {
+    // The main microphone went before this one was open: it left the list as the new main.
+    expect(claimOpenedMicrophone(headset, [tab], 'headset', false)).toBe('main')
+  })
+
+  it('lets it go when it was removed, or a main microphone is open already', () => {
+    expect(claimOpenedMicrophone(headset, [tab], 'laptop', true)).toBe('release')
+    expect(claimOpenedMicrophone(headset, [tab], null, false)).toBe('release')
+    expect(claimOpenedMicrophone(headset, [tab], 'headset', true)).toBe('release')
   })
 })
 

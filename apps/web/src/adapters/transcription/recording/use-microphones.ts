@@ -15,6 +15,8 @@ export interface Microphones {
    * regular recording takes only other sources.
    */
   selected: string | null
+  /** `selected` as of now, also before the next render: for what resolves while a take starts. */
+  latestSelected: () => string | null
   select: (deviceId: string | null) => void
   /** Whether the browser reports the microphone permission as granted. */
   granted: boolean
@@ -38,6 +40,12 @@ export function useMicrophones(): Microphones {
   )
   const [choices, setChoices] = useState<MicrophoneChoice[]>([])
   const [selected, setSelected] = useState<string | null>(DEFAULT_DEVICE_ID)
+  const selectedRef = useRef(selected)
+  const select = useCallback((deviceId: string | null) => {
+    selectedRef.current = deviceId
+    setSelected(deviceId)
+  }, [])
+  const latestSelected = useCallback(() => selectedRef.current, [])
   const [granted, setGranted] = useState(false)
   const mounted = useRef(true)
 
@@ -97,7 +105,7 @@ export function useMicrophones(): Microphones {
   }, [refresh])
 
   return useMemo(
-    () => ({ list, choices, selected, select: setSelected, granted, markGranted }),
-    [list, choices, selected, granted, markGranted]
+    () => ({ list, choices, selected, latestSelected, select, granted, markGranted }),
+    [list, choices, selected, latestSelected, select, granted, markGranted]
   )
 }

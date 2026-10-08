@@ -34,7 +34,7 @@ import { useTranscriptionWorkspace } from '../use-workspace'
 import { BackupFailedNotice, LeftoverNotices } from './backup-views'
 import { useRecording, type RecordedTake } from './context'
 import { useElapsedSeconds, useRecordingStatusTexts } from './hooks'
-import { AddSourceMenu, SourceList, SourceNotices } from './source-views'
+import { SourceControls, SourceNotices } from './source-views'
 import { isRecordingBusy, type RecordingKind } from './state'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
@@ -202,12 +202,7 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
             </Button>
           ) : null}
         </div>
-        <div className="flex min-w-56 flex-1 items-start gap-1 sm:max-w-sm">
-          <div className="min-w-0 flex-1">
-            <SourceList kind={kind} />
-          </div>
-          <AddSourceMenu kind={kind} />
-        </div>
+        <SourceControls kind={kind} />
         {!batch && takes.length > 0 ? (
           <p id={`${id}-upload-hint`} className="m-0 basis-full">
             {t('transcription.recording.uploadUnavailable')}

@@ -60,6 +60,7 @@ import { AudioMixer } from './mixer'
 import {
   addableMicrophones,
   canRemoveSource,
+  claimOpenedMicrophone,
   goneMicrophones,
   INITIAL_SOURCES,
   MAIN_SOURCE_ID,
@@ -113,6 +114,11 @@ interface RunningSession {
 interface Input {
   stream: MediaStream
   kind: SourceKind
+}
+
+/** The open sources' streams by id, as the mix takes them. */
+function inputStreams(inputs: ReadonlyMap<string, Input>): Map<string, MediaStream> {
+  return new Map([...inputs].map(([id, input]) => [id, input.stream]))
 }
 
 function errorName(error: unknown): string {
@@ -563,15 +569,28 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
             const stream = await devices.getUserMedia({
               audio: audioConstraint(source.deviceId ?? DEFAULT_DEVICE_ID)
             })
-            if (mountedRef.current) holdInput(source.id, 'microphone', stream)
-            else releaseStream(stream)
+            // The sources may have changed meanwhile, e.g. a gone main microphone handed over
+            // to this one: the stream goes with the source, or is let go.
+            const claim = mountedRef.current
+              ? claimOpenedMicrophone(
+                  source,
+                  sourcesCell.value.list,
+                  microphones.latestSelected(),
+                  inputs.has(MAIN_SOURCE_ID)
+                )
+              : 'release'
+            if (claim === 'keep') holdInput(source.id, 'microphone', stream)
+            else if (claim === 'main') {
+              holdInput(MAIN_SOURCE_ID, 'microphone', stream)
+              mainDeviceRef.current = source.deviceId
+            } else releaseStream(stream)
           } catch (error) {
             if (mountedRef.current) dropMicrophone(source, error)
           }
         })
       )
     },
-    [dropMicrophone, holdInput, inputs, mountedRef, sourcesCell]
+    [dropMicrophone, holdInput, inputs, mainDeviceRef, microphones, mountedRef, sourcesCell]
   )
 
   /**
@@ -638,6 +657,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         }
       )
       for (const chunk of early.splice(0)) journal.add(chunk)
+      // Sources came, went or handed over while the take started: it mixes those open now.
+      session.mixer?.sync(inputStreams(inputs))
       sessionRef.current = {
         ...session,
         recorder,
@@ -655,6 +676,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       dispatch,
       fail,
       finish,
+      inputs,
       me,
       mountedRef,
       sessionRef,
@@ -710,7 +732,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         return
       }
       try {
-        for (const [id, input] of inputs) mixer.add(id, input.stream)
+        mixer.sync(inputStreams(inputs))
         await mixer.run()
       } catch {
         release()
@@ -849,13 +871,16 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     [busyRef, dispatch, fail, mode, setSourceError, startLive, startRecord, startingRef, t]
   )
 
-  /** Makes `stream` of `deviceId` the main microphone of the running mix, in place. */
+  /**
+   * Makes `stream` of `deviceId` the main microphone, in place in the running mix; without one, a
+   * starting take mixes it once it runs.
+   */
   const replaceMain = useCallback(
-    (mixer: AudioMixer, deviceId: string, stream: MediaStream) => {
+    (mixer: AudioMixer | null, deviceId: string, stream: MediaStream) => {
       const old = inputs.get(MAIN_SOURCE_ID)
       holdInput(MAIN_SOURCE_ID, 'microphone', stream)
       // The recorder goes on with the mix.
-      mixer.add(MAIN_SOURCE_ID, stream)
+      mixer?.add(MAIN_SOURCE_ID, stream)
       mainDeviceRef.current = deviceId
       if (old && old.stream !== stream) releaseStream(old.stream)
     },
@@ -864,8 +889,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
 
   /**
    * Chooses the main microphone; a running regular recording swaps it in its mix. An added
-   * microphone that is chosen keeps its open stream; another device opens first, and the take
-   * goes on with the microphone it had until then.
+   * microphone that is chosen keeps its open stream, also while a take starts or ends; another
+   * device opens first, and the take goes on with the microphone it had until then.
    */
   const selectMicrophone = useCallback(
     (deviceId: string) => {
@@ -886,14 +911,11 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         mixer?.remove(added.id)
       }
       dispatchSources({ type: 'mainSelected', deviceId })
-      if (!running || !mixer) {
-        releaseStream(promoted?.stream ?? null)
-        return
-      }
       if (promoted) {
-        replaceMain(mixer, deviceId, promoted.stream)
+        replaceMain(mixer ?? null, deviceId, promoted.stream)
         return
       }
+      if (!running || !mixer) return
 
       const devices = typeof navigator === 'undefined' ? undefined : navigator.mediaDevices
       if (!devices) return

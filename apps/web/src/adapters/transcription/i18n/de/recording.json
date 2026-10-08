@@ -91,7 +91,7 @@
     "add": "Quelle hinzufügen",
     "addMicrophone": "Mikrofon hinzufügen",
     "noMoreMicrophones": "Kein weiteres Mikrofon gefunden",
-    "switchMicrophone": "Mikrofon wechseln",
+    "switchMicrophone": "Mikrofon wechseln, aktuell: {{name}}",
     "addDisplay": "Tab, Fenster oder Bildschirm hinzufügen",
     "displayUnsupported": "Nur in Chrome oder Edge möglich",
     "displayUnsupportedDesktop": "In der Desktop-App nicht möglich",

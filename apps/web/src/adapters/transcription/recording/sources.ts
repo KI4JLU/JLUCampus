@@ -116,6 +116,21 @@ export function mainSuccessor(list: readonly RecordingSource[]): string | null {
 }
 
 /**
+ * Whom a microphone opened for a starting take belongs to once it is open: the listed source it
+ * was opened for (`keep`); the main microphone when that source became the main one meanwhile and
+ * none is open (`main`); else nobody, and it is released.
+ */
+export function claimOpenedMicrophone(
+  source: Pick<RecordingSource, 'id' | 'deviceId'>,
+  list: readonly RecordingSource[],
+  main: string | null,
+  mainOpen: boolean
+): 'keep' | 'main' | 'release' {
+  if (list.some((entry) => entry.id === source.id)) return 'keep'
+  return source.deviceId === main && !mainOpen ? 'main' : 'release'
+}
+
+/**
  * Microphones whose device is no longer among `choices`, e.g. unplugged. The browser's default
  * input is never gone.
  */
