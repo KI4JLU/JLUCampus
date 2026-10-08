@@ -206,7 +206,7 @@ function ActiveStep({
                 'relative h-1.5 min-w-8 flex-1 overflow-hidden rounded-full',
                 percent !== null
                   ? 'bg-outline-variant'
-                  : 'bg-outline-variant motion-reduce:bg-outline/40'
+                  : 'bg-primary-fixed-dim/50 motion-reduce:bg-primary-fixed-dim/70'
               )}
             >
               {percent !== null ? (
@@ -215,10 +215,10 @@ function ActiveStep({
                   style={{ width: `${percent}%` }}
                 />
               ) : (
-                // Without a percentage a grey glow with soft ends glides over the grey bar, from just
-                // left of it to just right of it, so the loop has no seam; when motion is reduced,
-                // the still bar only turns a shade stronger.
-                <div className="absolute inset-y-0 left-full w-2/5 bg-linear-to-r from-transparent via-outline/50 to-transparent animate-in slide-in-from-left-[350%] repeat-infinite animation-duration-2000 ease-[cubic-bezier(0.45,0,0.55,1)] motion-reduce:hidden" />
+                // Without a percentage a light grey glow with soft ends glides over the light blue
+                // bar, from just left of it to just right of it, so the loop has no seam; when motion
+                // is reduced, the still bar only turns a shade stronger.
+                <div className="absolute inset-y-0 left-full w-2/5 bg-linear-to-r from-transparent via-secondary-fixed to-transparent animate-in slide-in-from-left-[350%] repeat-infinite animation-duration-2000 ease-[cubic-bezier(0.45,0,0.55,1)] motion-reduce:hidden" />
               )}
             </div>
           ) : (
