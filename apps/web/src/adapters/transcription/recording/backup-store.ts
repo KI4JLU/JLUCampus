@@ -36,13 +36,18 @@ export interface TrackBackupMeta {
   kind: SourceKind
   /** When the track started, in milliseconds since the epoch; the take's start is its offset 0. */
   startedAt: number
+  /**
+   * When it stopped capturing, written once it did; a track still running when the page went has
+   * none. Its last chunk is stored later than that, so only this tells when it ended.
+   */
+  endedAt?: number
   mimeType: string
 }
 
 /** A track read back from the backup. */
 export interface StoredTrack extends TrackBackupMeta {
   blob: Blob
-  /** Seconds, from its start to its last chunk written. */
+  /** Seconds, from its start to its end, else to its last chunk written. */
   duration: number
 }
 
@@ -113,6 +118,7 @@ export function parseTrackMeta(text: string): TrackBackupMeta | null {
       typeof value.label === 'string' &&
       (value.kind === 'microphone' || value.kind === 'display') &&
       typeof value.startedAt === 'number' &&
+      (value.endedAt === undefined || typeof value.endedAt === 'number') &&
       typeof value.mimeType === 'string'
     )
       return {
@@ -120,6 +126,7 @@ export function parseTrackMeta(text: string): TrackBackupMeta | null {
         label: value.label,
         kind: value.kind,
         startedAt: value.startedAt,
+        ...(value.endedAt === undefined ? {} : { endedAt: value.endedAt }),
         mimeType: value.mimeType
       }
   } catch {
@@ -177,8 +184,11 @@ async function writeFile(
 export interface BackupJournal {
   /** One recorder chunk; every `CHUNKS_PER_FILE` of them are written as one file. */
   add: (chunk: Blob) => void
-  /** Writes what is pending and waits for every write; never rejects. */
-  close: () => Promise<void>
+  /**
+   * Writes what is pending, then `meta` over the first one if given, and waits for every write;
+   * never rejects.
+   */
+  close: (meta?: BackupMeta | TrackBackupMeta) => Promise<void>
 }
 
 /**
@@ -234,8 +244,17 @@ export function createBackupJournal(
       pending.push(chunk)
       if (pending.length >= chunksPerFile) flush()
     },
-    close: () => {
+    close: (final) => {
       flush()
+      if (final)
+        chain = chain.then(async () => {
+          if (failed) return
+          try {
+            await writeFile(await own, META_FILE, JSON.stringify(final))
+          } catch {
+            fail()
+          }
+        })
       return chain
     }
   }
@@ -315,8 +334,8 @@ export async function readStoredRecording(directory: StoreDirectory, id: string)
 
 /**
  * A take's tracks in the backup, by start, each as one blob read into memory; a take backed up
- * before tracks, or without any, has none. Tracks that cannot be read or have no chunk are left
- * out.
+ * before tracks, or without any, has none. Tracks that cannot be listed or read, or have no
+ * chunk, are left out; it never rejects, so the take is restored however its tracks fare.
  */
 export async function readStoredTracks(
   directory: StoreDirectory,
@@ -329,7 +348,11 @@ export async function readStoredTracks(
     return []
   }
   const ids: string[] = []
-  for await (const id of folder.keys()) ids.push(id)
+  try {
+    for await (const id of folder.keys()) ids.push(id)
+  } catch {
+    // The tracks listed so far are read; the take comes back either way.
+  }
   const tracks: StoredTrack[] = []
   for (const id of ids) {
     try {
@@ -348,7 +371,7 @@ export async function readStoredTracks(
       tracks.push({
         ...meta,
         blob: new Blob(parts, { type: meta.mimeType }),
-        duration: Math.max(0, (last - meta.startedAt) / 1000)
+        duration: Math.max(0, ((meta.endedAt ?? last) - meta.startedAt) / 1000)
       })
     } catch {
       // Not offered, as a take that cannot be read.

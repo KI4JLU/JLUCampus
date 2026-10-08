@@ -121,6 +121,7 @@
   },
   "backup": {
     "failed": "Die Sicherung im Browser ist ausgefallen. Die Aufnahme läuft weiter, geht bei einem Absturz des Browsers aber verloren.",
+    "tracksFailed": "Die einzelnen Audiospuren dieser Aufnahme konnten nicht im Browser gesichert werden; die Aufnahme selbst ist sicher.",
     "leftoverTitle": "Nicht hochgeladene Aufnahme gefunden",
     "leftoverDetails": "Begonnen am {{started}} · etwa {{duration}} · {{size}}",
     "restore": "Zu den Aufnahmen hinzufügen",

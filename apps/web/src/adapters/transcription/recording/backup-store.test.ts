@@ -18,6 +18,7 @@ import {
   type StoreDirectory,
   type StoreFile
 } from './backup-store'
+import { keepsTracks, trackOffset } from './tracks'
 
 /** An in-memory OPFS directory: files commit on `close`, as in the browser. */
 class FakeDirectory implements StoreDirectory {
@@ -120,6 +121,18 @@ describe('createBackupJournal', () => {
     expect(await folder.files.get(chunkName(2))!.text()).toBe('e')
   })
 
+  it('writes the final metadata over the first one when closed with it', async () => {
+    const root = new FakeDirectory()
+    const journal = createBackupJournal(Promise.resolve(root), meta, () => undefined, 1)
+    journal.add(chunk('a'))
+    await journal.close({ ...meta, filename: 'renamed.webm' })
+    const folder = root.folders.get('m1')!
+    expect(parseBackupMeta(await folder.files.get(META_FILE)!.text())?.filename).toBe(
+      'renamed.webm'
+    )
+    expect(await folder.files.get(chunkName(0))!.text()).toBe('a')
+  })
+
   it('reports a failed write once and stops backing up', async () => {
     const root = new FakeDirectory()
     root.failing.add(chunkName(1))
@@ -190,6 +203,9 @@ describe('parseTrackMeta', () => {
       mimeType: 'audio/webm'
     }
     expect(parseTrackMeta(JSON.stringify(track))).toEqual(track)
+    const ended = { ...track, endedAt: 1_030_000 }
+    expect(parseTrackMeta(JSON.stringify(ended))).toEqual(ended)
+    expect(parseTrackMeta(JSON.stringify({ ...track, endedAt: 'soon' }))).toBeNull()
     expect(parseTrackMeta(JSON.stringify({ ...track, kind: 'camera' }))).toBeNull()
     expect(parseTrackMeta(JSON.stringify(meta))).toBeNull()
     expect(parseTrackMeta('not json')).toBeNull()
@@ -213,22 +229,34 @@ describe('stored tracks', () => {
   }
 
   /** A track of the take from `startedAt`, its chunks written `seconds` after its start. */
+  /**
+   * A track of the take from `startedAt`, its chunks written `seconds` after its start; `endedAt`
+   * as its recorder ended, none for one still running when the page went.
+   */
   async function storedTrack(
     root: FakeDirectory,
     id: string,
     startedAt: number,
     seconds: number,
-    texts: string[]
+    texts: string[],
+    endedAt?: number
   ): Promise<void> {
+    const trackMeta: TrackBackupMeta = {
+      id,
+      label: `Track ${id}`,
+      kind: 'microphone',
+      startedAt,
+      mimeType: 'audio/webm'
+    }
     const journal = createBackupJournal(
       trackDirectory(Promise.resolve(root), meta.id),
-      { id, label: `Track ${id}`, kind: 'microphone', startedAt, mimeType: 'audio/webm' },
+      trackMeta,
       () => undefined,
       1
     )
     root.clock.now = startedAt + seconds * 1000
     for (const text of texts) journal.add(chunk(text))
-    await journal.close()
+    await journal.close(endedAt === undefined ? undefined : { ...trackMeta, endedAt })
   }
 
   it('backs tracks up inside their take, which lists and reads as before', async () => {
@@ -253,6 +281,48 @@ describe('stored tracks', () => {
       kind: 'microphone',
       startedAt: at + 12_000
     })
+  })
+
+  it('takes a track’s end from when it stopped, not from when its last chunk was stored', async () => {
+    const root = new FakeDirectory()
+    await storedTake(root)
+    // The microphone was swapped at 30 s; the old one's last chunk was stored a second later.
+    await storedTrack(root, 'old', at, 31, ['a'], at + 30_000)
+    // The new one still ran when the page went: its last stored chunk is all there is.
+    await storedTrack(root, 'new', at + 30_000, 20, ['b'])
+    const tracks = await readStoredTracks(root, meta.id)
+    expect(tracks.map((track) => [track.id, track.endedAt, track.duration])).toEqual([
+      ['old', at + 30_000, 30],
+      ['new', undefined, 20]
+    ])
+    // One after the other: the restored take keeps no tracks.
+    const spans = tracks.map((track) => ({
+      offset: trackOffset(at, track.startedAt),
+      duration: track.duration
+    }))
+    expect(keepsTracks(spans)).toBe(false)
+  })
+
+  it('restores what it can when the tracks cannot be listed', async () => {
+    const root = new FakeDirectory()
+    await storedTake(root)
+    await storedTrack(root, 'a', at, 5, ['a'])
+    await storedTrack(root, 'b', at, 5, ['b'])
+    const folder = root.folders.get(meta.id)!.folders.get(TRACKS_DIRECTORY)!
+    folder.keys = async function* () {
+      await Promise.resolve()
+      yield 'a'
+      throw new Error('NotReadableError')
+    }
+    expect((await readStoredTracks(root, meta.id)).map((track) => track.id)).toEqual(['a'])
+    folder.keys = async function* () {
+      await Promise.resolve()
+      yield* []
+      throw new Error('NotReadableError')
+    }
+    await expect(readStoredTracks(root, meta.id)).resolves.toEqual([])
+    // The take's own audio is untouched.
+    expect(await (await readStoredRecording(root, meta.id)).text()).toBe('one-two-three')
   })
 
   it('reads a take backed up before tracks as one without any', async () => {

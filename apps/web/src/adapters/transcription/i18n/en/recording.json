@@ -121,6 +121,7 @@
   },
   "backup": {
     "failed": "The backup in your browser failed. The recording goes on, but a browser crash would lose it.",
+    "tracksFailed": "The separate audio tracks of this recording could not be backed up in your browser; the recording itself is safe.",
     "leftoverTitle": "Recording found that was not uploaded",
     "leftoverDetails": "Started {{started}} · about {{duration}} · {{size}}",
     "restore": "Add to recordings",

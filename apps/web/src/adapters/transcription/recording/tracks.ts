@@ -1,4 +1,3 @@
-import type { BackupJournal } from './backup-store'
 import type { RecordedTrack } from './context'
 import type { LocalRecorder } from './local-recorder'
 import type { SourceKind } from './sources'
@@ -24,10 +23,18 @@ export interface FinishedTrack extends TrackSpan {
   blob: Blob
 }
 
+/**
+ * A track's backup as the tracks end it: with when the track stopped capturing, so a restored
+ * take knows its tracks' true ends, not when their last chunks were stored.
+ */
+export interface TrackJournal {
+  close: (endedAt: number) => Promise<void>
+}
+
 /** The recorder of a track and its backup; the backup is `null` where it could not start. */
 export interface TrackRecording {
   recorder: LocalRecorder
-  journal: BackupJournal | null
+  journal: TrackJournal | null
 }
 
 /** What a track starts with, for its recorder and its backup. */
@@ -139,19 +146,20 @@ export class TakeTracks {
     const track = this.running.get(stream)
     if (!track) return
     this.running.delete(stream)
-    const duration = (this.now() - track.startedAt) / 1000
+    const endedAt = this.now()
+    const duration = (endedAt - track.startedAt) / 1000
     const { recorder, journal } = track.recording
     this.ended.push(
       recorder.stop().then(
         async (blob) => {
           // The backup gets the last chunk, which comes before the recorder's end.
-          await journal?.close()
+          await journal?.close(endedAt)
           if (blob.size === 0) return null
           const offset = trackOffset(this.takeStartedAt, track.startedAt)
           return { id: track.id, label: track.label, kind: track.kind, offset, duration, blob }
         },
         async () => {
-          await journal?.close()
+          await journal?.close(endedAt)
           return null
         }
       )
@@ -173,10 +181,11 @@ export class TakeTracks {
     this.closed = true
     const running = [...this.running.values()]
     this.running.clear()
+    const endedAt = this.now()
     await Promise.all([
       ...running.map(async ({ recording }) => {
         await recording.recorder.discard()
-        await recording.journal?.close()
+        await recording.journal?.close(endedAt)
       }),
       ...this.ended
     ])

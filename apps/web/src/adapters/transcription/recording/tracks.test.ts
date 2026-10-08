@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { BackupJournal } from './backup-store'
 import type { LocalRecorder } from './local-recorder'
 import {
   keepsTracks,
@@ -8,6 +7,7 @@ import {
   trackFiles,
   trackOffset,
   type FinishedTrack,
+  type TrackJournal,
   type TrackRecording,
   type TrackStart
 } from './tracks'
@@ -27,10 +27,9 @@ function fakeRecording(text: string, events: string[]): TrackRecording {
       return Promise.resolve()
     })
   }
-  const journal: BackupJournal = {
-    add: () => undefined,
-    close: vi.fn(() => {
-      events.push(`close ${text}`)
+  const journal: TrackJournal = {
+    close: vi.fn((endedAt: number) => {
+      events.push(`close ${text} at ${endedAt}`)
       return Promise.resolve()
     })
   }
@@ -177,9 +176,9 @@ describe('TakeTracks', () => {
       ['t1', 'Headset', 'microphone', 0, 60],
       ['t2', 'Seminar', 'display', 12, 8]
     ])
-    // Each backup closes after its recorder's last chunk.
-    expect(events.indexOf('close tab')).toBeGreaterThan(events.indexOf('stop tab'))
-    expect(events.indexOf('close mic')).toBeGreaterThan(events.indexOf('stop mic'))
+    // Each backup closes after its recorder's last chunk, with when the track stopped.
+    expect(events.indexOf('close tab at 20000')).toBeGreaterThan(events.indexOf('stop tab'))
+    expect(events.indexOf('close mic at 60000')).toBeGreaterThan(events.indexOf('stop mic'))
   })
 
   it('starts a new track for a stream swapped in, and stops none twice', async () => {
@@ -229,6 +228,6 @@ describe('TakeTracks', () => {
     tracks.start(tab, 'Tab', 'display')
     tracks.stop(tab)
     await tracks.discard()
-    expect(events).toEqual(['stop tab', 'discard mic', 'close tab', 'close mic'])
+    expect(events).toEqual(['stop tab', 'discard mic', 'close tab at 0', 'close mic at 0'])
   })
 })

@@ -312,6 +312,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   const [backupFailed, setBackupFailed] = useMemoryCell(
     memory.cell('recording.backupFailed', () => false)
   )
+  const [trackBackupFailed, setTrackBackupFailed] = useMemoryCell(
+    memory.cell('recording.trackBackupFailed', () => false)
+  )
   const [leftovers, setLeftovers] = useMemoryCell(
     memory.cell<StoredRecording[]>('recording.leftovers', () => [])
   )
@@ -718,6 +721,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         format.extension
       )
       setBackupFailed(false)
+      setTrackBackupFailed(false)
       // Granted before the first write, so no other tab offers or removes the backup while it
       // grows; the recorder's chunks wait in the journal meanwhile.
       const lock = holdBackupLock(id)
@@ -732,23 +736,31 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         backupFailed
       )
       for (const chunk of early.splice(0)) journal.add(chunk)
-      // A track records as the mix does; its backup failing fails neither it nor the take.
+      // A track records as the mix does; its backup failing fails neither it nor the take, and
+      // the record tab says less than for the mix's.
+      const trackBackupFailed = (): void => {
+        if (mountedRef.current) setTrackBackupFailed(true)
+      }
       const tracks = session.mixer
         ? new TakeTracks(startedAt, (stream, track) => {
+            const meta = { ...track, mimeType: type }
             const trackJournal = createBackupJournal(
               trackDirectory(
                 lock.held.then(() => backupDirectory()),
                 id
               ),
-              { ...track, mimeType: type },
-              backupFailed
+              meta,
+              trackBackupFailed
             )
             const trackRecorder = startLocalRecorder(stream, {
               mimeType: recorderMimeType((supported) => MediaRecorder.isTypeSupported(supported)),
               audioBitsPerSecond: RECORDING_AUDIO_BITS_PER_SECOND,
               onChunk: (chunk) => trackJournal.add(chunk)
             })
-            return { recorder: trackRecorder, journal: trackJournal }
+            return {
+              recorder: trackRecorder,
+              journal: { close: (endedAt) => trackJournal.close({ ...meta, endedAt }) }
+            }
           })
         : null
       // Sources came, went or handed over while the take started: it mixes those open now.
@@ -777,6 +789,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       mountedRef,
       sessionRef,
       setBackupFailed,
+      setTrackBackupFailed,
       startingRef,
       t,
       trackMixed
@@ -1351,25 +1364,24 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       }
       const type = recordingFormat(leftover.mimeType)?.type ?? leftover.mimeType
       let file: File
-      let tracks: RecordedTake['tracks']
       try {
         const blob = await readStoredRecording(directory, id)
         file = new File([blob], leftover.filename, { type })
-        // Its tracks come back with it; a take backed up before tracks has none.
-        const stored = await readStoredTracks(directory, id)
-        tracks = trackFiles(
-          leftover.filename,
-          type,
-          stored.map((track) => ({
-            ...track,
-            offset: trackOffset(leftover.startedAt, track.startedAt)
-          }))
-        )
       } catch {
         release()
         if (mountedRef.current) setLeftoverError(t('transcription.recording.backup.restoreFailed'))
         return
       }
+      // Its tracks come back with it, those that read; a take backed up before tracks has none.
+      const stored = await readStoredTracks(directory, id).catch(() => [])
+      const tracks = trackFiles(
+        leftover.filename,
+        type,
+        stored.map((track) => ({
+          ...track,
+          offset: trackOffset(leftover.startedAt, track.startedAt)
+        }))
+      )
       if (!mountedRef.current) {
         release()
         return
@@ -1416,12 +1428,13 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   const backup = useMemo<RecordingBackup>(
     () => ({
       failed: backupFailed,
+      tracksFailed: trackBackupFailed,
       leftovers,
       restore: restoreLeftover,
       discard: discardLeftover,
       leftoverError
     }),
-    [backupFailed, leftovers, restoreLeftover, discardLeftover, leftoverError]
+    [backupFailed, trackBackupFailed, leftovers, restoreLeftover, discardLeftover, leftoverError]
   )
 
   const option = useCallback(

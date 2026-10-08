@@ -42,6 +42,8 @@ export interface RecordedTrack {
 export interface RecordingBackup {
   /** The backup in the browser failed for the running or last take; the take is complete. */
   failed: boolean
+  /** Only the backup of the running or last take's separate tracks failed; the mix is safe. */
+  tracksFailed: boolean
   /** Recordings a crash, reload or leaving the page left in the backup. */
   leftovers: readonly StoredRecording[]
   /** Adds a leftover to the takes. */
