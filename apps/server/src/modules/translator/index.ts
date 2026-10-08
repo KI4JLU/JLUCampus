@@ -713,6 +713,7 @@ translatorAdminApp.post('/models', async (context) => {
 export const translatorModule: ServerModule<'translator'> = {
   type: 'translator',
   defaultName: 'Übersetzer',
+  defaultNameTranslations: { en: 'Translator' },
   defaultIcon: 'languages',
   defaultConfig: {
     defaultTargetLanguage: 'en-gb',

@@ -134,6 +134,13 @@
       "when": 1791320000000,
       "tag": "0018_transcription_events",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791443010665,
+      "tag": "0019_component_name_translations",
+      "breakpoints": true
     }
   ]
 }

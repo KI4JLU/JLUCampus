@@ -12,6 +12,7 @@ import {
 } from '@ki4jlu/design-system'
 import { widgetRefKey, type FolderTemplate } from '@justcampus/shared'
 import { externalUrlOf, widgetViewOf } from '@/adapters/registry'
+import { useComponentName } from '@/lib/component-name'
 import type { ComponentWidget } from '@/lib/widgets'
 import { ComponentIcon } from './component-icon'
 import { FolderTitleIcon } from './folder-title-icon'
@@ -49,6 +50,7 @@ export function AddWidgetDialog({
   onAddFeed
 }: AddWidgetDialogProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent closeLabel={t('common.close')} className="max-h-[90dvh] overflow-y-auto">
@@ -103,7 +105,7 @@ export function AddWidgetDialog({
                   }
                   onClick={() => onAdd(widget)}
                 >
-                  {widgetName(widget, t)}
+                  {widgetName(widget, componentName(widget.component), t)}
                 </AddButton>
               ))}
             </ul>
@@ -153,7 +155,7 @@ function AddButton({
 }
 
 /** The component's name, with the widget's own where its type offers several. */
-function widgetName(widget: ComponentWidget, t: TFunction): string {
+function widgetName(widget: ComponentWidget, componentName: string, t: TFunction): string {
   const name = widgetViewOf(widget.component, widget.widgetKey)?.name?.(t)
-  return name ? `${widget.component.name}: ${name}` : widget.component.name
+  return name ? `${componentName}: ${name}` : componentName
 }

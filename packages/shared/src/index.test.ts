@@ -27,6 +27,7 @@ import {
   folderTemplateInputSchema,
   folderTileSchema,
   componentInputSchema,
+  componentName,
   httpsUrlSchema,
   widgetDefinition
 } from './index'
@@ -56,6 +57,39 @@ describe('componentInputSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) expect(result.error.issues[0]?.path).toEqual(['config', 'url'])
+  })
+
+  const link = {
+    type: 'link',
+    name: 'Mensa',
+    icon: null,
+    iconUrl: null,
+    enabled: true,
+    config: { url: 'https://example.org' }
+  }
+
+  it('takes translated names, trimmed, and none from older clients', () => {
+    const translated = componentInputSchema.parse({
+      ...link,
+      nameTranslations: { en: ' Canteen ' }
+    })
+    expect(translated.nameTranslations).toEqual({ en: 'Canteen' })
+    expect(componentInputSchema.parse(link).nameTranslations).toEqual({})
+  })
+
+  it('rejects blank, overlong and unknown-language names', () => {
+    for (const nameTranslations of [{ en: ' ' }, { en: 'x'.repeat(81) }, { fr: 'Cantine' }]) {
+      expect(componentInputSchema.safeParse({ ...link, nameTranslations }).success).toBe(false)
+    }
+  })
+})
+
+describe('componentName', () => {
+  const component = { name: 'Mensa', nameTranslations: { en: 'Canteen' } }
+
+  it('shows the translation, or the name where there is none', () => {
+    expect(componentName(component, 'en')).toBe('Canteen')
+    expect(componentName(component, 'de')).toBe('Mensa')
   })
 })
 

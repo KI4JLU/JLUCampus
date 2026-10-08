@@ -940,8 +940,8 @@ export function toFolderTemplateInput(template: FolderTemplate): FolderTemplateI
  * Secrets are left out, so they stay as they are.
  */
 export function toComponentInput(component: Component): ComponentInput {
-  const { name, icon, iconUrl, enabled } = component
-  const base = { name, icon, iconUrl, enabled }
+  const { name, nameTranslations, icon, iconUrl, enabled } = component
+  const base = { name, nameTranslations, icon, iconUrl, enabled }
   switch (component.type) {
     case 'iframe':
       return { ...base, type: component.type, config: component.config }

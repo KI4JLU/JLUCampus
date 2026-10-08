@@ -10,6 +10,7 @@ import {
   DialogTitle
 } from '@ki4jlu/design-system'
 import type { Component } from '@justcampus/shared'
+import { useComponentName } from '@/lib/component-name'
 import { useDeleteComponent } from '@/lib/queries'
 import { toast } from '@/lib/toast'
 
@@ -27,13 +28,17 @@ export function DeleteComponentDialog({
   onDeleted
 }: DeleteComponentDialogProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const remove = useDeleteComponent()
 
   const confirm = (): void => {
     if (!component) return
     remove.mutate(component.id, {
       onSuccess: () => {
-        toast({ variant: 'success', title: t('admin.delete.done', { name: component.name }) })
+        toast({
+          variant: 'success',
+          title: t('admin.delete.done', { name: componentName(component) })
+        })
         onClose()
         onDeleted?.()
       },
@@ -47,7 +52,7 @@ export function DeleteComponentDialog({
         <DialogHeader>
           <DialogTitle>{t('admin.delete.title')}</DialogTitle>
           <DialogDescription>
-            {t('admin.delete.description', { name: component?.name ?? '' })}
+            {t('admin.delete.description', { name: component ? componentName(component) : '' })}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

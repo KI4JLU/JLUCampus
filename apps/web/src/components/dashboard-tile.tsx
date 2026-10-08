@@ -9,6 +9,7 @@ import {
   type FolderTile as FolderTileData
 } from '@justcampus/shared'
 import { widgetViewOf } from '@/adapters/registry'
+import { useComponentName } from '@/lib/component-name'
 import { hostnameTitle } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import type { ComponentWidget } from '@/lib/widgets'
@@ -57,12 +58,13 @@ export function DashboardTile({
   onItemDrop
 }: DashboardTileProps): React.JSX.Element | null {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const [editingTile, setEditingTile] = useState(false)
   const widget = tile.kind === 'widget' ? widgetsByKey.get(widgetRefKey(tile)) : undefined
   if (tile.kind === 'widget' && !widget) return null
   const name =
     tile.kind === 'widget'
-      ? widget!.component.name
+      ? componentName(widget!.component)
       : tile.kind === 'feed'
         ? (tile.title ?? t('feed.fallbackName', { host: hostnameTitle(tile.feedUrl) }))
         : tile.title

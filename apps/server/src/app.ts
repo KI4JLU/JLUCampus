@@ -392,6 +392,7 @@ app.post(API.adminComponents, async (context) => {
     .insert(component)
     .values({
       name: input.name,
+      nameTranslations: input.nameTranslations,
       type: input.type,
       icon: input.icon,
       iconUrl: input.iconUrl,
@@ -459,6 +460,7 @@ app.put('/api/admin/components/:id', async (context) => {
       .update(component)
       .set({
         name: input.name,
+        nameTranslations: input.nameTranslations,
         type: input.type,
         icon: input.icon,
         iconUrl: input.iconUrl,

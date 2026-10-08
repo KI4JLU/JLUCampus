@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Button, navItemVariants } from '@ki4jlu/design-system'
 import { isDesktopComponentType, type Component } from '@justcampus/shared'
 import { externalUrlOf } from '@/adapters/registry'
+import { useComponentName } from '@/lib/component-name'
 import type { SidebarList } from '@/lib/use-sidebar-arrangement'
 import { cn } from '@/lib/utils'
 import { ComponentIcon } from './component-icon'
@@ -37,6 +38,7 @@ export function SidebarEditRow({
   onAction
 }: SidebarEditRowProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const {
     attributes,
     listeners,
@@ -63,7 +65,7 @@ export function SidebarEditRow({
         size="icon"
         className="-my-1 -ml-2 shrink-0 cursor-grab"
         {...attributes}
-        aria-label={t('sidebarEditor.move', { name: component.name })}
+        aria-label={t('sidebarEditor.move', { name: componentName(component) })}
         onKeyDown={(event) => onKeyDown?.(event)}
       >
         <GripVerticalIcon {...icon} />
@@ -80,6 +82,7 @@ export function SidebarEditRow({
  */
 function RowLabel({ component }: { component: Component }): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   return (
     <>
       <ComponentIcon
@@ -87,7 +90,7 @@ function RowLabel({ component }: { component: Component }): React.JSX.Element {
         iconUrl={component.iconUrl}
         siteUrl={externalUrlOf(component)}
       />
-      <span className="min-w-0 flex-1 truncate">{component.name}</span>
+      <span className="min-w-0 flex-1 truncate">{componentName(component)}</span>
       {isDesktopComponentType(component.type) ? (
         // The rows are narrow: a badge would squeeze the name, so the mark is an icon.
         <span className="shrink-0 text-on-surface-variant" title={t('sidebarEditor.desktopBadge')}>
@@ -108,6 +111,7 @@ interface RowActionProps {
 /** The trailing add or remove button; the arrangement finds it by `data-row-action` for focus. */
 function RowAction({ component, action, onAction }: RowActionProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   return (
     <Button
       variant="ghost"
@@ -115,7 +119,7 @@ function RowAction({ component, action, onAction }: RowActionProps): React.JSX.E
       className="-my-1 -mr-2 shrink-0"
       data-row-action={component.id}
       aria-label={t(action === 'add' ? 'sidebarEditor.add' : 'sidebarEditor.remove', {
-        name: component.name
+        name: componentName(component)
       })}
       onClick={onAction}
     >

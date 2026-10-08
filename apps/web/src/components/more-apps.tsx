@@ -12,6 +12,7 @@ import {
   PopoverTrigger
 } from '@ki4jlu/design-system'
 import type { Component } from '@justcampus/shared'
+import { useComponentName } from '@/lib/component-name'
 import type { SidebarArrangement } from '@/lib/use-sidebar-arrangement'
 import { cn } from '@/lib/utils'
 import { SidebarEditRow } from './sidebar-edit-row'
@@ -65,6 +66,7 @@ export function MoreAppsPanel({
   wide
 }: MoreAppsPanelProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const titleId = useId()
   const hintId = useId()
   const [search, setSearch] = useState('')
@@ -77,9 +79,9 @@ export function MoreAppsPanel({
     const inSidebar = new Set(lists.sidebar)
     return [...(catalogue ?? [])]
       .filter((c) => !inSidebar.has(c.id))
-      .filter((c) => !query || c.name.toLocaleLowerCase().includes(query))
+      .filter((c) => !query || componentName(c).toLocaleLowerCase().includes(query))
       .sort((a, b) => a.sortOrder - b.sortOrder)
-  }, [catalogue, lists.sidebar, search])
+  }, [catalogue, lists.sidebar, search, componentName])
   const { setNodeRef, isOver } = useDroppable({ id: 'available' })
 
   return (

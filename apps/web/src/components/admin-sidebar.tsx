@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next'
 import { Label, NavItem, useSidebarCollapsed } from '@ki4jlu/design-system'
 import { isBuiltInType } from '@justcampus/shared'
 import { activeAdminEntry, type AdminSection } from '@/lib/admin-nav'
+import { useComponentName } from '@/lib/component-name'
 import { adminComponentsQuery } from '@/lib/queries'
 import { ComponentIcon } from './component-icon'
 
@@ -32,6 +33,7 @@ const SECTION_LINKS = [
  */
 export function AdminSidebar({ pathname }: { pathname: string }): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const { data: components } = useQuery(adminComponentsQuery)
   const modules = useMemo(
     () => (components ?? []).filter((component) => isBuiltInType(component.type)),
@@ -75,12 +77,12 @@ export function AdminSidebar({ pathname }: { pathname: string }): React.JSX.Elem
             <NavItem
               key={module.id}
               asChild
-              label={module.name}
+              label={componentName(module)}
               active={active?.kind === 'module' && active.id === module.id}
             >
               <Link to="/admin/components/$componentId" params={{ componentId: module.id }}>
                 <ComponentIcon icon={module.icon} iconUrl={module.iconUrl} />
-                <span className="truncate">{module.name}</span>
+                <span className="truncate">{componentName(module)}</span>
               </Link>
             </NavItem>
           ))}

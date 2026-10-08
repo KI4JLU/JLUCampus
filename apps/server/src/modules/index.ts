@@ -50,6 +50,7 @@ export async function ensureSingletonComponents(): Promise<void> {
     ...Object.values(moduleRegistry).map((serverModule) => ({
       type: serverModule.type,
       name: serverModule.defaultName,
+      nameTranslations: serverModule.defaultNameTranslations,
       icon: serverModule.defaultIcon,
       config: serverModule.defaultConfig,
       enabled: false

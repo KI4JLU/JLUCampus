@@ -24,9 +24,11 @@ import {
   Switch
 } from '@ki4jlu/design-system'
 import {
+  COMPONENT_NAME_MAX,
   componentTypeSchema,
   isBuiltInType,
   isDesktopComponentType,
+  LANGUAGES,
   type AdminComponent
 } from '@justcampus/shared'
 import { adapterOf, componentAdapters } from '@/adapters/registry'
@@ -40,6 +42,7 @@ import {
   type ComponentFormState,
   type FieldErrors
 } from '@/lib/component-form'
+import { useComponentName } from '@/lib/component-name'
 import { isSecretSet, secretKeysOf } from '@/lib/component-secrets'
 import { queryKeys, useCreateComponent, useUpdateComponent } from '@/lib/queries'
 import { toast } from '@/lib/toast'
@@ -68,6 +71,7 @@ interface ComponentEditorProps {
  */
 export function ComponentEditor({ component }: ComponentEditorProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const navigate = useNavigate()
   const client = useQueryClient()
   const formId = useId()
@@ -160,7 +164,7 @@ export function ComponentEditor({ component }: ComponentEditorProps): React.JSX.
       <PageHeader
         title={
           component
-            ? t('admin.form.editTitle', { name: component.name })
+            ? t('admin.form.editTitle', { name: componentName(component) })
             : t('admin.form.createTitle')
         }
         actions={
@@ -227,7 +231,7 @@ export function ComponentEditor({ component }: ComponentEditorProps): React.JSX.
                 <Input
                   {...control}
                   value={state.name}
-                  maxLength={80}
+                  maxLength={COMPONENT_NAME_MAX}
                   required
                   onChange={(event) => set('name', event.target.value)}
                 />
@@ -272,6 +276,38 @@ export function ComponentEditor({ component }: ComponentEditorProps): React.JSX.
               checked={state.enabled}
               onCheckedChange={(checked) => set('enabled', checked)}
             />
+          </div>
+        </FormSection>
+        <FormSection
+          title={t('admin.form.nameTranslations')}
+          description={t('admin.form.nameTranslationsDescription')}
+        >
+          <div className="grid items-start gap-stack-md md:grid-cols-2">
+            {LANGUAGES.map((language) => (
+              <Field
+                key={language}
+                id={`${formId}-name-${language}`}
+                label={t(`language.${language}`)}
+                error={errors[`nameTranslations.${language}`]}
+              >
+                {(control) => (
+                  <Input
+                    {...control}
+                    lang={language}
+                    value={state.nameTranslations[language]}
+                    maxLength={COMPONENT_NAME_MAX}
+                    placeholder={state.name}
+                    onChange={(event) => {
+                      const { value } = event.target
+                      setState((current) => ({
+                        ...current,
+                        nameTranslations: { ...current.nameTranslations, [language]: value }
+                      }))
+                    }}
+                  />
+                )}
+              </Field>
+            ))}
           </div>
         </FormSection>
         {secretKeys.length > 0 ? (

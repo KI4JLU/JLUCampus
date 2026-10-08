@@ -31,6 +31,7 @@ import { ComponentIcon } from '@/components/component-icon'
 import { PageHeader } from '@/components/page-header'
 import { PageMessage } from '@/components/page-message'
 import { desktopBridge, desktopModule } from '@/desktop/bridge'
+import { useComponentName } from '@/lib/component-name'
 import { formatFeedDate } from '@/lib/feed'
 import { toast } from '@/lib/toast'
 import type { ComponentViewProps } from '../types'
@@ -85,6 +86,7 @@ interface FilesViewProps extends ComponentViewProps<'files'> {
  */
 function FilesView({ bridge, component }: FilesViewProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const client = useQueryClient()
   const os = desktopBridge()?.os
   const [networkOpen, setNetworkOpen] = useState(false)
@@ -154,7 +156,7 @@ function FilesView({ bridge, component }: FilesViewProps): React.JSX.Element {
           title={
             <>
               <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} />
-              <span className="truncate">{component.name}</span>
+              <span className="truncate">{componentName(component)}</span>
             </>
           }
           description={t('desktop.files.description')}

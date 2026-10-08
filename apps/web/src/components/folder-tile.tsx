@@ -9,6 +9,7 @@ import {
   type FolderTile as FolderTileData
 } from '@justcampus/shared'
 import { externalUrlOf } from '@/adapters/registry'
+import { useComponentName } from '@/lib/component-name'
 import { folderItemKey } from '@/lib/dashboard'
 import { externalLinkProps } from '@/lib/external'
 import { cn } from '@/lib/utils'
@@ -45,7 +46,8 @@ interface Entry {
 
 function toEntry(
   item: FolderItem,
-  widgetsByKey: ReadonlyMap<string, ComponentWidget>
+  widgetsByKey: ReadonlyMap<string, ComponentWidget>,
+  componentName: (component: ComponentWidget['component']) => string
 ): Entry | null {
   const key = folderItemKey(item)
   if (item.kind === 'link') {
@@ -63,7 +65,7 @@ function toEntry(
   return {
     key,
     item,
-    name: component.name,
+    name: componentName(component),
     icon: <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} siteUrl={url} />,
     target: url ? { kind: 'external', url } : { kind: 'page', componentId: component.id }
   }
@@ -87,7 +89,8 @@ export function FolderTile({
   onItemDrop
 }: FolderTileProps): React.JSX.Element {
   const { t } = useTranslation()
-  const entries = tile.items.flatMap((item) => toEntry(item, widgetsByKey) ?? [])
+  const componentName = useComponentName()
+  const entries = tile.items.flatMap((item) => toEntry(item, widgetsByKey, componentName) ?? [])
   const [ghost, setGhost] = useState<{ entry: Entry; point: Point } | null>(null)
   const press = useRef<{ entry: Entry; start: Point; dragging: boolean } | null>(null)
 

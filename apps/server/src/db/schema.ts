@@ -1,5 +1,6 @@
 import type {
   ComponentConfig,
+  ComponentNameTranslations,
   Dashboard,
   Sidebar,
   TranscriptionJobError,
@@ -124,6 +125,10 @@ export const component = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
+    nameTranslations: jsonb('name_translations')
+      .$type<ComponentNameTranslations>()
+      .notNull()
+      .default({}),
     type: text('type').notNull(),
     icon: text('icon'),
     iconUrl: text('icon_url'),

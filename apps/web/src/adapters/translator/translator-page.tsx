@@ -23,6 +23,7 @@ import {
   useTranslatorEngines,
   useTranslatorGlossaries
 } from '@/lib/queries'
+import { useComponentName } from '@/lib/component-name'
 import { SIDE_PANEL_MEDIA } from '@/lib/page-side-panel'
 import { useMediaQuery } from '@/lib/use-media-query'
 import { cn } from '@/lib/utils'
@@ -60,6 +61,7 @@ function carriesFiles(event: React.DragEvent): boolean {
  */
 export function TranslatorPage({ component }: ComponentViewProps<'translator'>): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const id = useId()
   const engines = useTranslatorEngines()
   const glossaries = useTranslatorGlossaries()
@@ -173,7 +175,7 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
             title={
               <>
                 <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} />
-                <span className="truncate">{component.name}</span>
+                <span className="truncate">{componentName(component)}</span>
               </>
             }
           />

@@ -373,8 +373,29 @@ export const lucideIconNameSchema = z
   .max(64)
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'Expected a kebab-case Lucide icon name')
 
+export const COMPONENT_NAME_MAX = 80
+
+const componentNameSchema = z.string().trim().min(1).max(COMPONENT_NAME_MAX)
+
+/**
+ * A component's name in the interface languages, keyed by language. A language without one shows
+ * `name`, so `name` is the name in every language the admin did not translate it into.
+ */
+export const componentNameTranslationsSchema = z.partialRecord(languageSchema, componentNameSchema)
+export type ComponentNameTranslations = z.infer<typeof componentNameTranslationsSchema>
+
+/** The name a component shows in `language`: its translation, or else its own name. */
+export function componentName(
+  component: { name: string; nameTranslations: ComponentNameTranslations },
+  language: Language
+): string {
+  return component.nameTranslations[language] ?? component.name
+}
+
 const componentBaseSchema = z.object({
-  name: z.string().trim().min(1).max(80),
+  name: componentNameSchema,
+  /** Older clients send none; the component then shows `name` in every language. */
+  nameTranslations: componentNameTranslationsSchema.default({}),
   /** Lucide icon name. Used when `iconUrl` is null. */
   icon: lucideIconNameSchema.nullable(),
   /** Optional image override (favicon, logo). Takes precedence over `icon`. */
