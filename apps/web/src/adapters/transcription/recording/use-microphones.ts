@@ -26,6 +26,11 @@ export interface Microphones {
   granted: boolean
   /** After a successful `getUserMedia`: the permission is there and devices have labels now. */
   markGranted: () => void
+  /**
+   * Asks for the microphone once, unless the browser reports it as granted already: without it,
+   * the devices have no names to choose by. The stream it opens is closed at once.
+   */
+  requestAccess: () => void
 }
 
 function mediaDevices(): MediaDevices | undefined {
@@ -47,6 +52,12 @@ export function useMicrophones(selection: MemoryCell<string | null>): Microphone
   const [selected, select] = useMemoryCell(selection)
   const latestSelected = selection.get
   const [granted, setGranted] = useState(false)
+  // Whether the permission query answered (or cannot): asking before would prompt even when granted.
+  const [checked, setChecked] = useState(
+    () => typeof navigator === 'undefined' || !navigator.permissions
+  )
+  const [wanted, setWanted] = useState(false)
+  const asked = useRef(false)
   const mounted = useRef(true)
 
   const refresh = useCallback((): Promise<void> => {
@@ -86,10 +97,12 @@ export function useMicrophones(selection: MemoryCell<string | null>): Microphone
         if (!mounted.current) return
         status = result
         setGranted(result.state === 'granted')
+        setChecked(true)
         result.addEventListener('change', onPermission)
       })
       .catch(() => {
         // Firefox before 131 and some WebViews know no microphone permission query.
+        if (mounted.current) setChecked(true)
       })
 
     return () => {
@@ -104,8 +117,34 @@ export function useMicrophones(selection: MemoryCell<string | null>): Microphone
     void refresh()
   }, [refresh])
 
+  const requestAccess = useCallback(() => setWanted(true), [])
+
+  useEffect(() => {
+    const devices = mediaDevices()
+    if (!wanted || !checked || granted || asked.current || !devices?.getUserMedia) return
+    asked.current = true
+    devices.getUserMedia({ audio: true }).then(
+      (stream) => {
+        for (const track of stream.getTracks()) track.stop()
+        if (mounted.current) markGranted()
+      },
+      () => {
+        // Denied or no device: the take asks again when it starts and says why it cannot.
+      }
+    )
+  }, [checked, granted, markGranted, wanted])
+
   return useMemo(
-    () => ({ list, choices, selected, latestSelected, select, granted, markGranted }),
-    [list, choices, selected, latestSelected, select, granted, markGranted]
+    () => ({
+      list,
+      choices,
+      selected,
+      latestSelected,
+      select,
+      granted,
+      markGranted,
+      requestAccess
+    }),
+    [list, choices, selected, latestSelected, select, granted, markGranted, requestAccess]
   )
 }

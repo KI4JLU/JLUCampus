@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   CheckIcon,
   CircleIcon,
@@ -151,8 +151,11 @@ function ElapsedBadge(): React.JSX.Element | null {
 export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.Element {
   const { t } = useTranslation()
   const { capabilities } = useTranscriptionWorkspace()
-  const { state, takes, start, stop, uploadTakes, live } = useRecording()
+  const { state, takes, start, stop, uploadTakes, live, microphones } = useRecording()
   const id = useId()
+  const { requestAccess } = microphones
+  // Opening the tab asks for the microphone, so the "+" lists the devices by name.
+  useEffect(() => requestAccess(), [requestAccess])
   const status = state.status
   const running = status === 'recording'
   const pending = status === 'requesting' || status === 'stopping'
