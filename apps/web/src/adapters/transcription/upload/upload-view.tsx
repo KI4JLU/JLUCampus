@@ -1,12 +1,12 @@
 import { useId, useRef, useState, type DragEvent } from 'react'
-import { PlayIcon, PlusIcon } from 'lucide-react'
+import { PlayIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Badge, Button, FileDropzone, PageHeader, Spinner } from '@ki4jlu/design-system'
+import { Button, FileDropzone, Spinner } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_MAX_FILE_BYTES } from '@justcampus/shared'
 import { SpeakerMappingDialog } from '../mapping'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { GroupBlock } from './group-block'
-import { allFiles, totalBytes, type FilePosition } from './queue'
+import { allFiles, type FilePosition } from './queue'
 import { useQueueState, useUpload } from './use-upload'
 import { limitMegabytes } from './validation'
 
@@ -21,7 +21,7 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 export function UploadView(): React.JSX.Element {
   const { t } = useTranslation()
   const headingId = useId()
-  const { queue, addFiles, moveFile, start } = useUpload()
+  const { addFiles, moveFile, start } = useUpload()
   const state = useQueueState()
   const { capabilities } = useTranscriptionWorkspace()
   const input = useRef<HTMLInputElement>(null)
@@ -101,28 +101,6 @@ export function UploadView(): React.JSX.Element {
       </h2>
       {files.length > 0 ? (
         <>
-          {/*
-           * The list is the page's own content, no card around it: a section header with the
-           * total size and adding a group on the title's line, then the groups.
-           */}
-          <PageHeader
-            headingLevel={3}
-            title={`${t('transcription.upload.fileListTitle')} (${files.length})`}
-            actions={
-              <>
-                <Badge appearance="text" tone="neutral">
-                  {t('transcription.upload.totalFileSize', {
-                    size: (totalBytes(state.groups) / (1024 * 1024)).toFixed(1)
-                  })}
-                </Badge>
-                {/* Open during a start too, as kiChat's; the start leaves the new group alone. */}
-                <Button type="button" variant="outline" size="sm" onClick={() => queue.addGroup()}>
-                  <PlusIcon {...ICON} />
-                  {t('transcription.upload.addTranscript')}
-                </Button>
-              </>
-            }
-          />
           {state.groups.map((group, index) => (
             <GroupBlock
               key={group.id}
