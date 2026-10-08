@@ -116,18 +116,19 @@ export function mainSuccessor(list: readonly RecordingSource[]): string | null {
 }
 
 /**
- * Whom a microphone opened for a starting take belongs to once it is open: the listed source it
- * was opened for (`keep`); the main microphone when that source became the main one meanwhile and
- * none is open (`main`); else nobody, and it is released.
+ * Whom a microphone opening for a starting take belongs to once it opened or failed: the listed
+ * source it was opened for (`source`); the main microphone when that source became the main one
+ * meanwhile and none is open (`main`); else nobody (`null`), as it was removed. An opened stream
+ * goes to its owner or is let go; a failure takes the owner off the list, as removing it would.
  */
-export function claimOpenedMicrophone(
+export function startupMicrophoneOwner(
   source: Pick<RecordingSource, 'id' | 'deviceId'>,
   list: readonly RecordingSource[],
   main: string | null,
   mainOpen: boolean
-): 'keep' | 'main' | 'release' {
-  if (list.some((entry) => entry.id === source.id)) return 'keep'
-  return source.deviceId === main && !mainOpen ? 'main' : 'release'
+): 'source' | 'main' | null {
+  if (list.some((entry) => entry.id === source.id)) return 'source'
+  return source.deviceId === main && !mainOpen ? 'main' : null
 }
 
 /**

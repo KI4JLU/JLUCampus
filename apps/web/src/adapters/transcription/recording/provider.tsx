@@ -60,12 +60,12 @@ import { AudioMixer } from './mixer'
 import {
   addableMicrophones,
   canRemoveSource,
-  claimOpenedMicrophone,
   goneMicrophones,
   INITIAL_SOURCES,
   MAIN_SOURCE_ID,
   mainSuccessor,
   sourcesReducer,
+  startupMicrophoneOwner,
   type RecordingSource,
   type SourceKind,
   type SourcesAction,
@@ -152,7 +152,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   const { t } = useTranslation()
   const { capabilities, enqueueUpload, memory } = useTranscriptionWorkspace()
   const me = useQuery(meQuery).data
-  const microphones = useMicrophones()
+  const microphones = useMicrophones(
+    memory.cell<string | null>('recording.microphone', () => DEFAULT_DEVICE_ID)
+  )
   const stateCell = memory.cell<RecordingState>('recording.state', () => INITIAL_RECORDING_STATE)
   const [state, setState] = useMemoryCell(stateCell)
   const dispatch = useCallback(
@@ -501,6 +503,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         current: null as {
           finish: (lost: string | null) => Promise<void>
           sourceEnded: (id: string, stream?: MediaStream) => void
+          dropMain: (change: 'removed' | 'ended') => void
         } | null
       })).value
   )
@@ -540,23 +543,29 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     [dispatchSources, fail, microphones, t]
   )
 
+  /** Why a microphone could not be opened. */
+  const microphoneFailed = useCallback(
+    (name: string, error: unknown): string =>
+      t('transcription.recording.sources.microphoneFailed', {
+        name,
+        message: errorText(error) || errorName(error)
+      }),
+    [t]
+  )
+
   /** An added microphone that could not be opened leaves the list, with the reason. */
   const dropMicrophone = useCallback(
     (source: RecordingSource, error: unknown) => {
       dispatchSources({ type: 'remove', id: source.id })
-      setSourceError(
-        t('transcription.recording.sources.microphoneFailed', {
-          name: source.label,
-          message: errorText(error) || errorName(error)
-        })
-      )
+      setSourceError(microphoneFailed(source.label, error))
     },
-    [dispatchSources, setSourceError, t]
+    [dispatchSources, microphoneFailed, setSourceError]
   )
 
   /**
    * Opens the added microphones with the take. One that fails leaves the list and the take starts
-   * without it.
+   * without it. The sources may change meanwhile, e.g. a gone main microphone hands over to one
+   * still opening: each outcome goes to whom the microphone belongs to by then.
    */
   const openAddedMicrophones = useCallback(
     async (devices: MediaDevices): Promise<void> => {
@@ -565,32 +574,51 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       )
       await Promise.all(
         wanted.map(async (source) => {
-          try {
-            const stream = await devices.getUserMedia({
-              audio: audioConstraint(source.deviceId ?? DEFAULT_DEVICE_ID)
-            })
-            // The sources may have changed meanwhile, e.g. a gone main microphone handed over
-            // to this one: the stream goes with the source, or is let go.
-            const claim = mountedRef.current
-              ? claimOpenedMicrophone(
+          const owner = (): 'source' | 'main' | null =>
+            mountedRef.current
+              ? startupMicrophoneOwner(
                   source,
                   sourcesCell.value.list,
                   microphones.latestSelected(),
                   inputs.has(MAIN_SOURCE_ID)
                 )
-              : 'release'
-            if (claim === 'keep') holdInput(source.id, 'microphone', stream)
-            else if (claim === 'main') {
-              holdInput(MAIN_SOURCE_ID, 'microphone', stream)
-              mainDeviceRef.current = source.deviceId
-            } else releaseStream(stream)
+              : null
+          let stream: MediaStream
+          try {
+            stream = await devices.getUserMedia({
+              audio: audioConstraint(source.deviceId ?? DEFAULT_DEVICE_ID)
+            })
           } catch (error) {
-            if (mountedRef.current) dropMicrophone(source, error)
+            const failed = owner()
+            if (failed === 'source') dropMicrophone(source, error)
+            else if (failed === 'main') {
+              // It took over the main microphone: it goes as the main one, removed with a reason.
+              latestRef.current?.dropMain('removed')
+              setSourceError(microphoneFailed(source.label, error))
+            }
+            return
           }
+          const opened = owner()
+          if (opened === 'source') holdInput(source.id, 'microphone', stream)
+          else if (opened === 'main') {
+            holdInput(MAIN_SOURCE_ID, 'microphone', stream)
+            mainDeviceRef.current = source.deviceId
+          } else releaseStream(stream)
         })
       )
     },
-    [dropMicrophone, holdInput, inputs, mainDeviceRef, microphones, mountedRef, sourcesCell]
+    [
+      dropMicrophone,
+      holdInput,
+      inputs,
+      latestRef,
+      mainDeviceRef,
+      microphoneFailed,
+      microphones,
+      mountedRef,
+      setSourceError,
+      sourcesCell
+    ]
   )
 
   /**
@@ -700,7 +728,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       // Leaving the page closes the mixer; the opened sources go with `inputs`.
       startingRef.current = () => mixer.close()
       // Without a main microphone the take starts with the other sources alone.
-      const deviceId = microphones.selected
+      const deviceId = microphones.latestSelected()
       if (deviceId !== null) {
         let main: MediaStream
         try {
@@ -771,7 +799,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       let stream: MediaStream
       try {
         stream = await devices.getUserMedia({
-          audio: audioConstraint(microphones.selected ?? DEFAULT_DEVICE_ID)
+          audio: audioConstraint(microphones.latestSelected() ?? DEFAULT_DEVICE_ID)
         })
       } catch (error) {
         failMicrophone(error)
@@ -894,7 +922,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
    */
   const selectMicrophone = useCallback(
     (deviceId: string) => {
-      if (deviceId === microphones.selected) return
+      if (deviceId === microphones.latestSelected()) return
       // Each choice outdates the swaps still opening.
       const swap = ++swapRef.current
       microphones.select(deviceId)
@@ -930,12 +958,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         (error: unknown) => {
           if (outdated()) return
           microphones.select(mainDeviceRef.current)
-          setSourceError(
-            t('transcription.recording.sources.microphoneFailed', {
-              name: microphoneLabel(deviceId),
-              message: errorText(error) || errorName(error)
-            })
-          )
+          setSourceError(microphoneFailed(microphoneLabel(deviceId), error))
           // Nothing left to record: the take ends as if stopped.
           if (mixer.size === 0) void finish(null)
         }
@@ -946,6 +969,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       finish,
       inputs,
       mainDeviceRef,
+      microphoneFailed,
       microphoneLabel,
       microphones,
       mountedRef,
@@ -954,8 +978,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       setSourceError,
       sourcesCell,
       stateCell,
-      swapRef,
-      t
+      swapRef
     ]
   )
 
@@ -966,7 +989,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
    */
   const dropMain = useCallback(
     (change: 'removed' | 'ended') => {
-      const deviceId = microphones.selected
+      const deviceId = microphones.latestSelected()
       if (deviceId === null) return
       const input = inputs.get(MAIN_SOURCE_ID)
       if (input) {
@@ -1028,7 +1051,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   )
 
   useEffect(() => {
-    latestRef.current = { finish, sourceEnded }
+    latestRef.current = { finish, sourceEnded, dropMain }
   })
 
   /** Every source as the card lists it: the main microphone first, unless there is none. */
@@ -1061,7 +1084,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       setSourceError(null)
       const label = microphoneLabel(deviceId)
       // Without a main microphone it becomes the main one, opened at once while a take runs.
-      if (microphones.selected === null) {
+      if (microphones.latestSelected() === null) {
         dispatchSources({ type: 'mainChanged', change: 'added', label })
         selectMicrophone(deviceId)
         return
@@ -1098,7 +1121,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       dropMicrophone,
       holdInput,
       microphoneLabel,
-      microphones.selected,
+      microphones,
       mountedRef,
       selectMicrophone,
       sessionRef,
@@ -1175,7 +1198,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   const removeSource = useCallback(
     (id: string) => {
       // One source always remains.
-      if (!canRemoveSource(microphones.selected, sourcesCell.value.list)) return
+      if (!canRemoveSource(microphones.latestSelected(), sourcesCell.value.list)) return
       if (id === MAIN_SOURCE_ID) {
         dropMain('removed')
         return
@@ -1191,7 +1214,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       // The last source: the take ends as if stopped.
       if (running?.mixer?.size === 0) void finish(null)
     },
-    [dispatchSources, dropMain, finish, inputs, microphones.selected, sessionRef, sourcesCell]
+    [dispatchSources, dropMain, finish, inputs, microphones, sessionRef, sourcesCell]
   )
 
   const dismissAnnouncement = useCallback(

@@ -3,11 +3,11 @@ import { DEFAULT_DEVICE_ID, type MicrophoneChoice } from './devices'
 import {
   addableMicrophones,
   canRemoveSource,
-  claimOpenedMicrophone,
   goneMicrophones,
   INITIAL_SOURCES,
   mainSuccessor,
   sourcesReducer,
+  startupMicrophoneOwner,
   type RecordingSource,
   type SourcesAction,
   type SourcesState
@@ -136,20 +136,21 @@ describe('mainSuccessor', () => {
   })
 })
 
-describe('claimOpenedMicrophone', () => {
-  it('keeps a microphone that is still listed', () => {
-    expect(claimOpenedMicrophone(headset, [headset, tab], 'laptop', true)).toBe('keep')
+describe('startupMicrophoneOwner', () => {
+  it('gives a microphone that is still listed to its source, opened or failed', () => {
+    expect(startupMicrophoneOwner(headset, [headset, tab], 'laptop', true)).toBe('source')
   })
 
-  it('makes it the main one when it took over a main microphone gone while it opened', () => {
-    // The main microphone went before this one was open: it left the list as the new main.
-    expect(claimOpenedMicrophone(headset, [tab], 'headset', false)).toBe('main')
+  it('gives it to the main microphone when it took over a main one gone while it opened', () => {
+    // The main microphone went before this one opened or failed: it left the list as the new
+    // main one. Opened, it plays as such; failed, it goes as the main one would.
+    expect(startupMicrophoneOwner(headset, [tab], 'headset', false)).toBe('main')
   })
 
-  it('lets it go when it was removed, or a main microphone is open already', () => {
-    expect(claimOpenedMicrophone(headset, [tab], 'laptop', true)).toBe('release')
-    expect(claimOpenedMicrophone(headset, [tab], null, false)).toBe('release')
-    expect(claimOpenedMicrophone(headset, [tab], 'headset', true)).toBe('release')
+  it('gives it to nobody when it was removed, or a main microphone is open already', () => {
+    expect(startupMicrophoneOwner(headset, [tab], 'laptop', true)).toBeNull()
+    expect(startupMicrophoneOwner(headset, [tab], null, false)).toBeNull()
+    expect(startupMicrophoneOwner(headset, [tab], 'headset', true)).toBeNull()
   })
 })
 

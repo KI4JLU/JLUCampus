@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { DEFAULT_DEVICE_ID, microphoneChoices, type MicrophoneChoice } from './devices'
+import { useMemoryCell, type MemoryCell } from '../page-memory'
+import { microphoneChoices, type MicrophoneChoice } from './devices'
 
 /**
  * The state of the device list: `loading` until the first enumeration, `unsupported` without
@@ -15,7 +16,10 @@ export interface Microphones {
    * regular recording takes only other sources.
    */
   selected: string | null
-  /** `selected` as of now, also before the next render: for what resolves while a take starts. */
+  /**
+   * `selected` as of now, also before the next render and in a remounted page: for what resolves
+   * while a take starts.
+   */
   latestSelected: () => string | null
   select: (deviceId: string | null) => void
   /** Whether the browser reports the microphone permission as granted. */
@@ -31,21 +35,17 @@ function mediaDevices(): MediaDevices | undefined {
 /**
  * Microphone permission and input devices after kiChat (T-55): checks the permission without
  * prompting, enumerates the inputs, follows permission changes and plugged or unplugged devices.
- * One selection serves regular recording and live transcription; the provider lets a selected
- * device that disappears go, as any other source.
+ * One selection serves regular recording and live transcription, kept in `selection` (the page's
+ * memory, as the take it opens); the provider lets a selected device that disappears go, as any
+ * other source.
  */
-export function useMicrophones(): Microphones {
+export function useMicrophones(selection: MemoryCell<string | null>): Microphones {
   const [list, setList] = useState<MicrophoneListState>(() =>
     mediaDevices()?.enumerateDevices ? 'loading' : 'unsupported'
   )
   const [choices, setChoices] = useState<MicrophoneChoice[]>([])
-  const [selected, setSelected] = useState<string | null>(DEFAULT_DEVICE_ID)
-  const selectedRef = useRef(selected)
-  const select = useCallback((deviceId: string | null) => {
-    selectedRef.current = deviceId
-    setSelected(deviceId)
-  }, [])
-  const latestSelected = useCallback(() => selectedRef.current, [])
+  const [selected, select] = useMemoryCell(selection)
+  const latestSelected = selection.get
   const [granted, setGranted] = useState(false)
   const mounted = useRef(true)
 
