@@ -76,17 +76,18 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
       role="group"
       aria-label={group.name}
       accent={props.dropTarget}
+      className="overflow-hidden"
       onDragOver={(event) => props.onDragOver(index, null, event)}
       onDrop={(event) => props.onDrop(index, null, event)}
     >
       {/*
        * The header names the folder: its name takes the card title's type (CardTitle hands its type
-       * tokens to the inline field), so it reads apart from the file names below.
-       * DS gap: no divider between a CardHeader and its CardContent (and no Separator at all), so
-       * the header stands apart by its type and the card's own spacing only.
+       * tokens to the inline field), and the band is tinted, so it reads apart from the files below.
+       * DS gap: CardHeader has no tone; the tint is the primary/10 of a pressed outline button, the
+       * card clips it to its corners.
        */}
-      <CardHeader className="flex-row flex-wrap items-center gap-2">
-        <FolderIcon aria-hidden className="size-6 shrink-0" />
+      <CardHeader className="flex-row flex-wrap items-center gap-2 bg-primary/10 py-4">
+        <FolderIcon aria-hidden className="size-6 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           <CardTitle asChild>
             <Input
@@ -145,7 +146,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
         )}
       </CardHeader>
       {hasBody ? (
-        <CardContent className="flex flex-col gap-stack-md">
+        <CardContent className="flex flex-col gap-stack-md pt-6">
           {group.saveConflict ? (
             <Notice tone="warning" title={t('transcription.upload.saveFailed')}>
               {t(`transcription.upload.saveConflict.${group.saveConflict}`)}
