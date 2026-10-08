@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type DragEvent } from 'react'
-import { FilePlusIcon, FileTextIcon, FolderIcon, Trash2Icon } from 'lucide-react'
+import { FileTextIcon, FolderIcon, Trash2Icon, UploadIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_TITLE_MAX } from '@justcampus/shared'
@@ -130,7 +130,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
               title={t('transcription.upload.addFile')}
               onClick={() => props.onAddFile(index)}
             >
-              <FilePlusIcon {...ICON} />
+              <UploadIcon {...ICON} />
             </Button>
             {/* Open during a start too: kiChat cancels the group's jobs then. */}
             <Button
@@ -172,7 +172,9 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
             />
           ) : null}
           {group.files.length > 0 ? (
-            <ul className="m-0 flex list-none flex-col gap-3 p-0">
+            // A line between the files keeps their players apart; each row pads itself off it.
+            // DS gap: no Separator; the divider takes the outline-variant token of the DS's borders.
+            <ul className="m-0 flex list-none flex-col divide-y divide-outline-variant p-0">
               {group.files.map((file, fileIndex) => (
                 <FileRow
                   key={file.id}

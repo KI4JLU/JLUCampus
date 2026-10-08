@@ -4,6 +4,7 @@ import {
   addableMicrophones,
   canRemoveSource,
   goneMicrophones,
+  hasRecordingSource,
   INITIAL_SOURCES,
   mainSuccessor,
   sourcesReducer,
@@ -120,11 +121,32 @@ describe('addableMicrophones', () => {
 })
 
 describe('canRemoveSource', () => {
-  it('keeps the last source, be it the main microphone or another', () => {
-    expect(canRemoveSource(DEFAULT_DEVICE_ID, [])).toBe(false)
-    expect(canRemoveSource(null, [tab])).toBe(false)
-    expect(canRemoveSource(DEFAULT_DEVICE_ID, [tab])).toBe(true)
-    expect(canRemoveSource(null, [headset, tab])).toBe(true)
+  it('lets every source go before a take, down to none', () => {
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [], false)).toBe(true)
+    expect(canRemoveSource(null, [tab], false)).toBe(true)
+    expect(canRemoveSource(null, [], false)).toBe(false)
+  })
+
+  it('keeps the last source of a take, be it the main microphone or another', () => {
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [], true)).toBe(false)
+    expect(canRemoveSource(null, [tab], true)).toBe(false)
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [tab], true)).toBe(true)
+    expect(canRemoveSource(null, [headset, tab], true)).toBe(true)
+  })
+})
+
+describe('hasRecordingSource', () => {
+  it('has nothing to record before a source is chosen', () => {
+    expect(INITIAL_SOURCES.list).toEqual([])
+    expect(hasRecordingSource('record', null, INITIAL_SOURCES.list)).toBe(false)
+    expect(hasRecordingSource('live', null, INITIAL_SOURCES.list)).toBe(false)
+  })
+
+  it('records any source, and transcribes live only a chosen microphone', () => {
+    expect(hasRecordingSource('record', null, [tab])).toBe(true)
+    expect(hasRecordingSource('record', 'headset', [])).toBe(true)
+    expect(hasRecordingSource('live', null, [tab, headset])).toBe(false)
+    expect(hasRecordingSource('live', DEFAULT_DEVICE_ID, [])).toBe(true)
   })
 })
 

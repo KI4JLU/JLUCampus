@@ -108,7 +108,7 @@ function KindIcon({
 
 /** Title and hint of the recording state (kiChat's status in the middle of the card). */
 export function RecordingStatusCard({ kind }: { kind: RecordingKind }): React.JSX.Element {
-  const texts = useRecordingStatusTexts()
+  const texts = useRecordingStatusTexts(kind)
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-stack-md py-12 text-center">
@@ -148,12 +148,14 @@ function ElapsedBadge(): React.JSX.Element | null {
 
 /**
  * Start and stop, uploading the takes, and the sources with the "+" beside them (kiChat's bar under
- * the card). Live transcription lists its one microphone, and the "+" switches it.
+ * the card). Live transcription lists its one microphone, and the "+" chooses or switches it.
+ * Without a source, start waits, described by the placeholder that says to add one.
  */
 export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.Element {
   const { t } = useTranslation()
   const { capabilities } = useTranscriptionWorkspace()
-  const { state, takes, start, stop, uploadTakes, live, microphones } = useRecording()
+  const { state, takes, start, stop, uploadTakes, live, microphones, sources, liveMicrophone } =
+    useRecording()
   const id = useId()
   const { requestAccess } = microphones
   // Opening the tab asks for the microphone, so the "+" lists the devices by name.
@@ -162,6 +164,7 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
   const running = status === 'recording'
   const pending = status === 'requesting' || status === 'stopping'
   const unavailable = kind === 'live' && live.mode === null
+  const empty = kind === 'live' ? liveMicrophone.current === null : sources.list.length === 0
   const batch = capabilities?.batch ?? false
   // While stopping, kiChat's disabled button reads "Aufnahme starten"; the spinner still tells
   // screen readers that the take is being finished.
@@ -181,7 +184,8 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
           <Button
             type="button"
             variant="destructive"
-            disabled={pending || (!running && unavailable)}
+            disabled={pending || (!running && (unavailable || empty))}
+            aria-describedby={!running && empty ? `${id}-empty` : undefined}
             onClick={() => void (running ? stop() : start(kind))}
           >
             {pending ? (
@@ -207,7 +211,7 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
             </Button>
           ) : null}
         </div>
-        <SourceControls kind={kind} />
+        <SourceControls kind={kind} emptyId={`${id}-empty`} />
         {!batch && takes.length > 0 ? (
           <p id={`${id}-upload-hint`} className="m-0 basis-full">
             {t('transcription.recording.uploadUnavailable')}
@@ -331,8 +335,8 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
 }
 
 /**
- * The tracks of a take, one per source, open from the start and closable; the mix above is what
- * they make together.
+ * The tracks of a take, one per source, closed at first and openable; the mix above is what they
+ * make together. Open, they are indented under it as its parts.
  */
 function TrackList({
   name,
@@ -342,7 +346,7 @@ function TrackList({
   tracks: readonly RecordedTrack[]
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
   const id = useId()
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon
   return (
@@ -370,7 +374,7 @@ function TrackList({
         <ul
           id={id}
           aria-label={t('transcription.recording.tracks.listLabel', { name })}
-          className="m-0 flex list-none flex-col gap-stack-sm p-0"
+          className="m-0 flex list-none flex-col gap-stack-sm py-0 pr-0 pl-6"
         >
           {tracks.map((track, index) => (
             <TrackItem key={track.id} track={track} number={index + 1} />
@@ -381,29 +385,36 @@ function TrackList({
   )
 }
 
-/** One source's track: what it is, where it starts in the take, its player and its download. */
+/**
+ * One source's track: its player, named with the source's icon and with its download on the play
+ * button's line, and below it where it starts in the take.
+ */
 function TrackItem({ track, number }: { track: RecordedTrack; number: number }): React.JSX.Element {
   const { t } = useTranslation()
   const Icon = track.kind === 'display' ? MonitorUpIcon : MicIcon
   const decoded = decodesLocally(track.file, track.duration)
   return (
-    <li className="flex flex-wrap items-center gap-stack-sm">
-      <Icon {...ICON} />
-      <div className="flex min-w-64 flex-1 flex-col gap-1">
-        <WaveformPlayer source={track.file} name={track.label} knownDuration={track.duration} />
-        {track.offset >= 1 ? (
-          <p className="m-0">
-            {t('transcription.recording.tracks.from', { time: formatTime(track.offset) })}
-          </p>
-        ) : null}
-        {decoded ? null : <p className="m-0">{t('transcription.recording.waveformSkipped')}</p>}
-      </div>
-      <IconButton
-        label={t('transcription.recording.tracks.download', { number, name: track.label })}
-        onClick={() => download(track.file)}
-      >
-        <DownloadIcon {...ICON} />
-      </IconButton>
+    <li className="flex flex-col gap-1">
+      <WaveformPlayer
+        source={track.file}
+        name={track.label}
+        icon={<Icon {...ICON} />}
+        knownDuration={track.duration}
+        trailing={
+          <IconButton
+            label={t('transcription.recording.tracks.download', { number, name: track.label })}
+            onClick={() => download(track.file)}
+          >
+            <DownloadIcon {...ICON} />
+          </IconButton>
+        }
+      />
+      {track.offset >= 1 ? (
+        <p className="m-0">
+          {t('transcription.recording.tracks.from', { time: formatTime(track.offset) })}
+        </p>
+      ) : null}
+      {decoded ? null : <p className="m-0">{t('transcription.recording.waveformSkipped')}</p>}
     </li>
   )
 }

@@ -1,10 +1,12 @@
 import { DEFAULT_DEVICE_ID, type MicrophoneChoice } from './devices'
+import type { RecordingKind } from './state'
 
 /**
  * The sources a take mixes besides the main microphone: more microphones, and tabs, windows or
- * screens. They can be added and removed before and while recording, as can the main microphone,
- * as long as one source remains. Microphones stay listed for the next take and open with it; a
- * tab, window or screen is shared once, held from then on and let go when its take ends.
+ * screens. None is chosen at first. They can be added and removed before and while recording, as
+ * can the main microphone; a running take keeps one. Microphones stay listed for the next take and
+ * open with it; a tab, window or screen is shared once, held from then on and let go when its take
+ * ends.
  */
 
 /** The main microphone's id in the mix. */
@@ -102,9 +104,28 @@ export function addableMicrophones(
   )
 }
 
-/** Whether a source may be removed: one always remains. */
-export function canRemoveSource(main: string | null, list: readonly RecordingSource[]): boolean {
-  return (main === null ? 0 : 1) + list.length > 1
+/**
+ * Whether a source may be removed: any before a take, and while one starts, runs or ends all but
+ * the last (`taking`), as the take would end without it.
+ */
+export function canRemoveSource(
+  main: string | null,
+  list: readonly RecordingSource[],
+  taking: boolean
+): boolean {
+  return (main === null ? 0 : 1) + list.length > (taking ? 1 : 0)
+}
+
+/**
+ * Whether a take of `kind` has something to record: live transcription its microphone, regular
+ * recording any source.
+ */
+export function hasRecordingSource(
+  kind: RecordingKind,
+  main: string | null,
+  list: readonly RecordingSource[]
+): boolean {
+  return main !== null || (kind === 'record' && list.length > 0)
 }
 
 /**

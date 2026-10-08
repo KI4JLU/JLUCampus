@@ -28,7 +28,10 @@ type DragMode = 'start' | 'end' | 'window' | 'outside'
 interface Drag {
   mode: DragMode
   x: number
+  /** The time where the press was. */
   time: number
+  /** The time under the pointer now. */
+  at: number
   window: TimeWindow
   scale: TrackScale
   moved: boolean
@@ -50,17 +53,22 @@ export interface WindowTrackProps {
   onChange: (window: TimeWindow) => void
   /** A click without dragging: play from there, or stop (kiChat's editor). */
   onClick: (time: number) => void
+  /** Dragging beside the window scrubs: the pointer's time, at every move. */
+  onScrub: (time: number) => void
+  /** Where a scrub was let go. */
+  onScrubEnd: (time: number) => void
 }
 
 /**
  * The sample window over the whole file's waveform, after kiChat's editor player (T-19): the window
  * takes a tenth of the track, the audio before and after it the rest (`trackScale`). Dragging an
  * edge changes the window between 0.2 and 5 seconds and pushes it along beyond that, dragging the
- * window moves it, a click plays from there. The arrow keys move it too; the start and end fields
- * beside it set it exactly.
+ * window moves it, dragging beside it scrubs (the playhead follows the pointer), a click plays from
+ * there. The window shows as a light tint behind the bars with a grip at each edge. The arrow keys
+ * move it too; the start and end fields beside it set it exactly.
  */
 export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
-  const { window, duration, peaks, playhead, onChange, onClick } = props
+  const { window, duration, peaks, playhead, onChange, onClick, onScrub, onScrubEnd } = props
   const { t } = useTranslation()
   const barRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -69,6 +77,9 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
   // `frozenMetrics`); it zooms onto the moved window when the drag ends.
   const [frozen, setFrozen] = useState<TrackScale | null>(null)
   const [hover, setHover] = useState<DragMode>('outside')
+  // The playhead under the pointer while scrubbing, ahead of the sound that follows it.
+  const [scrub, setScrub] = useState<number | null>(null)
+  const shownPlayhead = scrub ?? playhead
   const live = useMemo(
     () => trackScale({ start: window.start, end: window.end }, duration),
     [window.start, window.end, duration]
@@ -90,22 +101,22 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     const colors: WaveformColors = {
       played: cssColor(bar, '--color-primary'),
       unplayed: cssColor(bar, '--color-outline-variant'),
-      region: cssColor(bar, '--color-primary-container'),
+      region: '',
       speakers: TRANSCRIPTION_SPEAKER_COLORS
     }
-    // Drawn on the track's own scale, from 0 to 1: one peak per bar, the window and the playhead
-    // where the scale puts them.
+    // Drawn on the track's own scale, from 0 to 1: one peak per bar and the playhead where the
+    // scale puts them. The window is no solid region here but the tint and grips below.
     drawWaveform(context, {
       width,
       height,
       peaks: trackBarPeaks(scale, peaks, width, BAR_STEP),
       duration: 1,
-      time: playhead === null ? 0 : scale.toFraction(playhead),
+      time: shownPlayhead === null ? 0 : scale.toFraction(shownPlayhead),
       segments: [],
-      region: { start: scale.toFraction(window.start), end: scale.toFraction(window.end) },
+      region: null,
       colors
     })
-  }, [peaks, playhead, scale, window.end, window.start])
+  }, [peaks, shownPlayhead, scale])
 
   useEffect(() => {
     draw()
@@ -139,6 +150,7 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
       mode: modeAt(event.clientX),
       x: event.clientX,
       time: timeAt(event.clientX, scale),
+      at: timeAt(event.clientX, scale),
       window,
       scale,
       moved: false
@@ -155,10 +167,14 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     if (!current.moved && Math.abs(event.clientX - current.x) < DRAG_PX) return
     current.moved = true
     const time = timeAt(event.clientX, current.scale)
+    current.at = time
     if (current.mode === 'start' || current.mode === 'end') {
       onChange(moveWindowEdge(window, current.mode, time, duration))
     } else if (current.mode === 'window') {
       onChange(slideWindow(current.window, current.window.start + time - current.time, duration))
+    } else {
+      setScrub(time)
+      onScrub(time)
     }
   }
 
@@ -166,10 +182,13 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     const current = drag.current
     drag.current = null
     setFrozen(null)
+    setScrub(null)
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
-    if (click && current && !current.moved) onClick(current.time)
+    if (!click || !current) return
+    if (!current.moved) onClick(current.time)
+    else if (current.mode === 'outside') onScrubEnd(current.at)
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -187,6 +206,10 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     event.preventDefault()
     onChange(slideWindow(window, target, duration))
   }
+
+  // Where the window lies on the track, in percent, for its tint and grips.
+  const windowLeft = scale.toFraction(window.start) * 100
+  const windowRight = scale.toFraction(window.end) * 100
 
   const cursor =
     hover === 'start' || hover === 'end'
@@ -224,7 +247,22 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
         if (!drag.current) setHover('outside')
       }}
     >
+      {/* DS gap: no range slider with two thumbs, as above; the window is a light primary tint
+      behind the bars, with a grip at each edge, from the tokens. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 bg-primary/10"
+        style={{ left: `${windowLeft}%`, width: `${windowRight - windowLeft}%` }}
+      />
       <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" />
+      {[windowLeft, windowRight].map((at, index) => (
+        <div
+          key={index}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-1 w-1.5 -translate-x-1/2 rounded-full bg-primary"
+          style={{ left: `${at}%` }}
+        />
+      ))}
     </div>
   )
 }

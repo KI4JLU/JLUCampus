@@ -106,7 +106,7 @@
     "sampleEnd": "Ende",
     "sampleWindow": "Ausschnitt von {{sample}}",
     "sampleWindowValue": "{{start}} bis {{end}}",
-    "sampleWindowHint": "Ziehen verschiebt den Ausschnitt, an seinen Rändern ändert es seine Länge (0,2 bis 5 Sekunden). Mit den Pfeiltasten verschiebt er sich, mit Umschalt in ganzen Sekunden.",
+    "sampleWindowHint": "Ziehen verschiebt den Ausschnitt, an seinen Rändern ändert es seine Länge (0,2 bis 5 Sekunden), daneben spult es die Wiedergabe. Mit den Pfeiltasten verschiebt er sich, mit Umschalt in ganzen Sekunden.",
     "invalidTime": "Bitte eine Zeit in Sekunden oder als mm:ss eingeben.",
     "confirmDeleteSample": "Löschen von {{sample}} bestätigen",
     "cancelDeleteSample": "Löschen von {{sample}} abbrechen",

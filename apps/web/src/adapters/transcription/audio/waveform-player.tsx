@@ -87,6 +87,8 @@ export interface WaveformPlayerProps {
    * whether it is decoded here (`decodesLocally`).
    */
   name?: string
+  /** Shown before the name on its line, e.g. the kind of source the audio came from. */
+  icon?: ReactNode
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
   /**
@@ -117,8 +119,6 @@ export interface WaveformPlayerProps {
    * part stays drawn above it. `null` or left out draws none.
    */
   progress?: number | null
-  /** Shown before the play button on its line, e.g. a drag handle. */
-  leading?: ReactNode
   /** Shown after the waveform on its line, e.g. the row's actions; wraps below where narrow. */
   trailing?: ReactNode
   onTimeUpdate?: (seconds: number) => void
@@ -164,6 +164,7 @@ function cssColor(element: Element, name: string): string {
 export function WaveformPlayer({
   source,
   name,
+  icon,
   size,
   knownDuration: givenDuration,
   jobId = null,
@@ -173,7 +174,6 @@ export function WaveformPlayer({
   timeline,
   compact = false,
   progress = null,
-  leading,
   trailing,
   onTimeUpdate,
   onPlayingChange,
@@ -472,6 +472,12 @@ export function WaveformPlayer({
   }
 
   const timeLabel = `${formatTime(time)} / ${formatTime(knownDuration)}`
+  const nameText = (
+    <span className="min-w-0 truncate">
+      {name}
+      {byteSize !== undefined ? ` · ${formatMegabytes(byteSize)}` : null}
+    </span>
+  )
   const playLabel = playing
     ? t('transcription.common.player.pause')
     : t('transcription.common.player.play')
@@ -479,18 +485,27 @@ export function WaveformPlayer({
   return (
     <div className={cn('flex min-w-0 flex-col gap-2', className)}>
       {compact ? null : (
-        <div className="flex min-w-0 items-baseline justify-between gap-3">
-          <span className="min-w-0 truncate">
-            {name}
-            {byteSize !== undefined ? ` · ${formatMegabytes(byteSize)}` : null}
-          </span>
+        // With an icon the texts are centred on it; they share one type, so they stay level.
+        <div
+          className={cn(
+            'flex min-w-0 justify-between gap-3',
+            icon ? 'items-center' : 'items-baseline'
+          )}
+        >
+          {icon ? (
+            <span className="flex min-w-0 items-center gap-2">
+              {icon}
+              {nameText}
+            </span>
+          ) : (
+            nameText
+          )}
           <span aria-hidden="true" className="shrink-0">
             {timeLabel}
           </span>
         </div>
       )}
       <div className={cn('flex min-w-0 items-center gap-3', trailing && 'flex-wrap')}>
-        {leading}
         <Button
           type="button"
           variant="default"

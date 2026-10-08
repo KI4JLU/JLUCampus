@@ -106,7 +106,7 @@
     "sampleEnd": "End",
     "sampleWindow": "Window of {{sample}}",
     "sampleWindowValue": "{{start}} to {{end}}",
-    "sampleWindowHint": "Dragging moves the window, its edges change its length (0.2 to 5 seconds). The arrow keys move it, with Shift in whole seconds.",
+    "sampleWindowHint": "Dragging moves the window, its edges change its length (0.2 to 5 seconds), and dragging beside it scrubs the playback. The arrow keys move it, with Shift in whole seconds.",
     "invalidTime": "Enter a time in seconds or as mm:ss.",
     "confirmDeleteSample": "Confirm deleting {{sample}}",
     "cancelDeleteSample": "Cancel deleting {{sample}}",

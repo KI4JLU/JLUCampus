@@ -24,6 +24,8 @@ export interface SampleEditorProps {
   time: number
   onPlay: (start: number, end: number) => void
   onStop: () => void
+  /** Moves the playhead of this sample playing, which then stops at `end`. */
+  onSeek: (time: number, end: number) => void
   onChange: (change: Partial<SampleDraft>) => void
   onDelete: () => void
 }
@@ -40,6 +42,9 @@ export function SampleEditor(props: SampleEditorProps): React.JSX.Element {
   const name = { sample: sample.label, voice: props.voiceName }
 
   const setWindow = (window: TimeWindow): void => props.onChange(window)
+  // kiChat's editor pauses where the window ends: from before or inside it the sound plays up to
+  // there, from after it on.
+  const playEnd = (time: number): number => (time < sample.end ? sample.end : Infinity)
 
   return (
     <section
@@ -67,11 +72,15 @@ export function SampleEditor(props: SampleEditorProps): React.JSX.Element {
           label={t('transcription.upload.mapping.sampleWindow', name)}
           describedBy={`${id}-hint`}
           onChange={setWindow}
-          // kiChat's editor pauses where the window ends: a click before or inside it plays up to
-          // there, one after it plays on.
-          onClick={(time) =>
-            playing ? props.onStop() : props.onPlay(time, time < sample.end ? sample.end : Infinity)
-          }
+          onClick={(time) => (playing ? props.onStop() : props.onPlay(time, playEnd(time)))}
+          // A scrub moves the sound playing along; without one it plays from where it was let go,
+          // as a click there would.
+          onScrub={(time) => {
+            if (playing) props.onSeek(time, playEnd(time))
+          }}
+          onScrubEnd={(time) => {
+            if (!playing) props.onPlay(time, playEnd(time))
+          }}
         />
       </div>
       <p id={`${id}-hint`} className="sr-only">

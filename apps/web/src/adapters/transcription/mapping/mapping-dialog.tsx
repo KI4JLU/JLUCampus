@@ -423,26 +423,28 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
   return (
     <Card>
       <CardContent className="flex flex-col gap-stack-md pt-6">
-        <div className="flex items-end gap-3">
+        {/* The label over the name only; colour, name and removal share one row, centred on the
+        field. */}
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
+          <Label htmlFor={`${id}-name`} className="col-start-2">
+            {placeLabel}
+          </Label>
           <ColorPicker
             value={voiceColor(voice, index)}
             label={t('transcription.upload.mapping.colorOf', { voice: voiceName })}
             onChange={props.onColor}
           />
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <Label htmlFor={`${id}-name`}>{placeLabel}</Label>
-            <Input
-              id={`${id}-name`}
-              value={props.name}
-              maxLength={TRANSCRIPTION_SPEAKER_NAME_MAX}
-              placeholder={t('transcription.upload.enterNamePlaceholder')}
-              // A voice just added takes the focus, to be named at once.
-              autoFocus={props.focusName}
-              disabled={props.disabled}
-              onChange={(event) => props.onName(event.target.value)}
-            />
-          </div>
-          <div className="flex shrink-0 gap-1">
+          <Input
+            id={`${id}-name`}
+            value={props.name}
+            maxLength={TRANSCRIPTION_SPEAKER_NAME_MAX}
+            placeholder={t('transcription.upload.enterNamePlaceholder')}
+            // A voice just added takes the focus, to be named at once.
+            autoFocus={props.focusName}
+            disabled={props.disabled}
+            onChange={(event) => props.onName(event.target.value)}
+          />
+          <div className="flex gap-1">
             {props.removing ? (
               <>
                 <Button
@@ -495,11 +497,15 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
           {voice.samples.map((sample) => {
             const playing = player.playing === sample.key
             return (
-              <span key={sample.key} className="flex items-center">
+              // DS gap: no ButtonGroup; play and edit join into one outlined control, with the
+              // inner corners squared and one border between them. The focused one lies on top,
+              // so its ring is not hidden under its neighbour.
+              <span key={sample.key} className="flex">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
+                  className="rounded-r-none focus-visible:z-10"
                   // Marks the chip for the dialog's click listener that stops a preview.
                   data-sample-key={sample.key}
                   aria-pressed={playing}
@@ -516,8 +522,10 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
                 </Button>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="icon"
+                  // The play button's corners, not the round icon button's.
+                  className="rounded-action rounded-l-none border-l-0"
                   aria-expanded={editing === sample.key}
                   aria-label={t('transcription.upload.mapping.editSample', {
                     sample: sample.label
@@ -570,6 +578,7 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
             time={player.time}
             onPlay={(start, end) => void player.play(editedSample.key, start, end)}
             onStop={player.stop}
+            onSeek={player.seek}
             onChange={(change) => props.onChangeSample(editedSample.key, change)}
             onDelete={() => props.onDeleteSample(editedSample.key)}
           />
