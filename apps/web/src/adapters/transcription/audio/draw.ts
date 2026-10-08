@@ -1,4 +1,5 @@
 import type { TranscriptionSpeakerColorId } from '@justcampus/shared'
+import { formatTime } from './peaks'
 
 /** The colours a waveform is drawn in, from the design tokens and the speaker palette. */
 export interface WaveformColors {
@@ -29,6 +30,8 @@ export interface WaveformDrawing {
 /** Bar width and gap, as in kiChat's player. */
 const BAR = 3
 const GAP = 3
+/** Pixels from one bar to the next; one peak per bar is drawn as is. */
+export const BAR_STEP = BAR + GAP
 /** Height of the speaker timeline under the bars. */
 const TIMELINE = 4
 
@@ -36,6 +39,21 @@ const TIMELINE = 4
 export function timeToX(seconds: number, duration: number, width: number): number {
   if (duration <= 0) return 0
   return (Math.min(Math.max(seconds, 0), duration) / duration) * width
+}
+
+/**
+ * The hover text of the speaker timeline at a time, kiChat's global player title:
+ * `<speaker>: mm:ss - mm:ss` of the stretch under the pointer, `''` where there is none or it has
+ * no label.
+ */
+export function segmentTitle(
+  segments: ReadonlyArray<{ start: number; end: number; label?: string }>,
+  time: number
+): string {
+  const segment = segments.find((stretch) => time >= stretch.start && time < stretch.end)
+  return segment?.label
+    ? `${segment.label}: ${formatTime(segment.start)} - ${formatTime(segment.end)}`
+    : ''
 }
 
 /**

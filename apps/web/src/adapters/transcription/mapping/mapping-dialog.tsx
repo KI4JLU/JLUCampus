@@ -25,7 +25,10 @@ import {
   Label,
   Spinner
 } from '@ki4jlu/design-system'
-import { TRANSCRIPTION_SPEAKER_NAME_MAX } from '@justcampus/shared'
+import {
+  TRANSCRIPTION_SAMPLES_PER_SPEAKER_MAX,
+  TRANSCRIPTION_SPEAKER_NAME_MAX
+} from '@justcampus/shared'
 import { useJobAudioUrl } from '../api'
 import { decodesLocally } from '../audio'
 import { Notice } from '../notice'
@@ -63,8 +66,11 @@ export interface SpeakerMappingDialogProps {
 /**
  * kiChat's `openSpeakerMappingModal` (T-17 to T-21): the analysed voices in the order they first
  * speak, each with its name, colour and samples; samples play, open for editing, can be added and
- * deleted; voices can be added and removed; the analysis can run again. The dialog edits a copy:
- * only Save keeps it, for the dispatch to send (there is no separate save on the server).
+ * deleted; voices can be added and removed; the analysis can run again. As in kiChat, samples,
+ * their windows, voices added or removed and colours change the file's voices at once and stay
+ * when the dialog closes without Save; typed names stay a draft until Save, adding a voice or
+ * picking a colour takes them (kiChat's `saveCurrentInputs`). Only Save marks the voices as
+ * checked; the dispatch sends them (there is no separate save on the server).
  */
 export function SpeakerMappingDialog({
   fileId,
@@ -81,11 +87,11 @@ export function SpeakerMappingDialog({
   )
 }
 
-/** Which sample's detail is open. */
-interface Editing {
-  voiceId: string
-  key: string
-}
+/** Which sample's detail is open, by voice: one per voice, as kiChat's `toggleEditor`. */
+type Editing = Record<string, string | null>
+
+/** The repeated analysis: asked for (kiChat's `Analysiere...`), or answered as running. */
+type Reanalysis = 'starting' | 'polling' | null
 
 function MappingContent({
   file,
@@ -99,34 +105,28 @@ function MappingContent({
   const autoLabel = (n: number): string => t('transcription.common.speakerN', { n })
   const sampleLabel = (n: number): string => t('transcription.upload.sampleN', { n })
 
-  /** The saved voices, in order, automatic names and sample labels in the UI language (T-02). */
-  const prepare = (voices: readonly VoiceDraft[] | null): VoiceDraft[] =>
-    orderVoices(voices ?? []).map((voice, index) => ({
-      ...voice,
-      name: isAutoLabel(voice.name) ? localizeAutoLabel(voice.name, index, autoLabel) : voice.name,
-      samples: voice.samples.map((sample) => ({
-        ...sample,
-        label: localizeSampleLabel(sample.label, sampleLabel)
-      }))
+  /** The file's voices, in order, automatic names and sample labels in the UI language (T-02). */
+  const voices = orderVoices(file.voices ?? []).map((voice, index) => ({
+    ...voice,
+    name: isAutoLabel(voice.name) ? localizeAutoLabel(voice.name, index, autoLabel) : voice.name,
+    samples: voice.samples.map((sample) => ({
+      ...sample,
+      label: localizeSampleLabel(sample.label, sampleLabel)
     }))
+  }))
 
-  const [base, setBase] = useState(file.voices)
-  const [draft, setDraft] = useState(() => prepare(file.voices))
-  const [editing, setEditing] = useState<Editing | null>(null)
+  // Names typed but not taken yet, by voice; closing the dialog drops them, as kiChat does.
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [editing, setEditing] = useState<Editing>({})
   const [removing, setRemoving] = useState<string | null>(null)
   const [added, setAdded] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
-  const [reanalyzing, setReanalyzing] = useState(() => queue.isReanalyzing(file.id))
+  const [reanalysis, setReanalysis] = useState<Reanalysis>(() =>
+    queue.isReanalyzing(file.id) ? 'polling' : null
+  )
+  const reanalyzing = reanalysis !== null
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => clearTimeout(closeTimer.current ?? undefined), [])
-
-  // A new analysis replaces the voices: the copy starts over from them (T-21).
-  if (base !== file.voices) {
-    setBase(file.voices)
-    setDraft(prepare(file.voices))
-    setEditing(null)
-    setRemoving(null)
-  }
 
   const source = useSampleSource(file)
   const player = useSamplePlayer(source.resolve)
@@ -148,12 +148,33 @@ function MappingContent({
   const peaks = loadedPeaks ?? null
   const duration = file.duration ?? peaks?.duration ?? player.duration
 
+  // kiChat's `speakerModalOutsideClickHandler`: a chip's preview stops at any click that is not
+  // on a chip (a name, a colour, empty space, outside the dialog). A chip's own click plays its
+  // sample, stops it or switches to another. What the sample editor plays goes on.
+  const { preview, stop } = player
+  useEffect(() => {
+    const onClick = (event: MouseEvent): void => {
+      if (preview() === null) return
+      if (event.target instanceof Element && event.target.closest('[data-sample-key]')) return
+      stop()
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  }, [preview, stop])
+
+  /** The voices with the names typed so far. */
+  const withNames = (list: readonly VoiceDraft[]): VoiceDraft[] =>
+    list.map((voice) => {
+      const name = names[voice.id]
+      return name === undefined ? voice : { ...voice, name }
+    })
+
   const updateVoice = (
     voiceId: string,
     change: Partial<VoiceDraft> | ((voice: VoiceDraft) => Partial<VoiceDraft>)
   ): void =>
-    setDraft((voices) =>
-      voices.map((voice) =>
+    queue.updateVoices(file.id, (list) =>
+      list.map((voice) =>
         voice.id === voiceId
           ? { ...voice, ...(typeof change === 'function' ? change(voice) : change) }
           : voice
@@ -175,15 +196,15 @@ function MappingContent({
       label: t('transcription.upload.sampleN', { n: nextSampleNumber(voice.samples) }),
       ...window
     }
-    updateVoice(voice.id, { samples: [...voice.samples, sample] })
+    updateVoice(voice.id, (current) => ({ samples: [...current.samples, sample] }))
     player.stop()
     // kiChat opens the new sample's detail at once.
-    setEditing({ voiceId: voice.id, key: sample.key })
+    setEditing((open) => ({ ...open, [voice.id]: sample.key }))
   }
 
   const deleteSample = (voiceId: string, key: string): void => {
     player.stop()
-    setEditing(null)
+    setEditing((open) => ({ ...open, [voiceId]: null }))
     updateVoice(voiceId, (voice) => ({
       samples: voice.samples.filter((sample) => sample.key !== key)
     }))
@@ -191,39 +212,67 @@ function MappingContent({
 
   const removeVoice = (voiceId: string): void => {
     player.stop()
-    if (editing?.voiceId === voiceId) setEditing(null)
+    setEditing((open) => ({ ...open, [voiceId]: null }))
     setRemoving(null)
-    setDraft((voices) => voices.filter((voice) => voice.id !== voiceId))
+    setNames((typed) => {
+      const rest = { ...typed }
+      delete rest[voiceId]
+      return rest
+    })
+    queue.updateVoices(file.id, (list) => list.filter((voice) => voice.id !== voiceId))
   }
 
   const addVoice = (): void => {
-    const voice = manualVoice(draft, autoLabel)
-    setDraft((voices) => [...voices, voice])
+    // kiChat takes the names typed before it adds the voice.
+    const voice = manualVoice(voices, autoLabel)
+    queue.updateVoices(file.id, (list) => [...withNames(list), voice])
+    setNames({})
     setAdded(voice.id)
+  }
+
+  const setColor = (voiceId: string, colorId: NonNullable<VoiceDraft['colorId']>): void => {
+    // Picking a colour takes the names typed too (kiChat's avatar picker).
+    queue.updateVoices(file.id, (list) =>
+      withNames(list).map((voice) => (voice.id === voiceId ? { ...voice, colorId } : voice))
+    )
+    setNames({})
   }
 
   const reanalyze = async (): Promise<void> => {
     player.stop()
-    setEditing(null)
-    setReanalyzing(true)
-    const outcome = await queue.reanalyze(file.id, { keepVoices: false })
-    setReanalyzing(false)
-    if (!outcome.ok) {
-      await dialogs.alert({
-        title: t('transcription.common.error'),
-        message: `${t('transcription.upload.speakerAnalysisRetryFailed')}${
-          outcome.message ?? t('transcription.common.unknown')
-        }`
-      })
+    setEditing({})
+    setRemoving(null)
+    // kiChat says `Analysiere...` until the server answers that the analysis runs.
+    setReanalysis('starting')
+    const outcome = await queue.reanalyze(file.id, {
+      keepVoices: false,
+      onPoll: () => setReanalysis('polling')
+    })
+    setReanalysis(null)
+    if (outcome.ok) {
+      // The new voices come with their automatic names (T-21).
+      setNames({})
+      return
     }
+    await dialogs.alert({
+      title: t('transcription.common.error'),
+      message: `${t('transcription.upload.speakerAnalysisRetryFailed')}${
+        outcome.message ?? t('transcription.common.unknown')
+      }`
+    })
   }
 
   const save = (): void => {
     player.stop()
-    queue.saveVoices(file.id, draft)
+    queue.saveVoices(file.id, withNames(voices))
     setSaved(true)
     closeTimer.current = setTimeout(onClose, SAVED_MS)
   }
+
+  const reanalysisLabel =
+    reanalysis === 'starting'
+      ? t('transcription.upload.analyzingShort')
+      : t('transcription.upload.analyzingSpeakers')
 
   return (
     <DialogContent
@@ -231,7 +280,12 @@ function MappingContent({
       // DS gap: DialogContent has no height cap of its own; the voices scroll in it. One shrinkable
       // column keeps long names inside.
       className="max-h-9/10 grid-cols-1 overflow-y-auto sm:max-w-2xl"
-      onEscapeKeyDown={() => player.stop()}
+      // As kiChat's modal, only Close and Save end it: Escape and a click beside it do not.
+      onEscapeKeyDown={(event) => {
+        event.preventDefault()
+        player.stop()
+      }}
+      onInteractOutside={(event) => event.preventDefault()}
     >
       <DialogHeader>
         {/* The right padding keeps the action clear of the dialog's own close button. */}
@@ -249,13 +303,11 @@ function MappingContent({
             onClick={() => void reanalyze()}
           >
             {reanalyzing ? (
-              <Spinner size="sm" label={t('transcription.upload.analyzingSpeakers')} />
+              <Spinner size="sm" label={reanalysisLabel} />
             ) : (
               <RefreshCwIcon {...ICON} />
             )}
-            {reanalyzing
-              ? t('transcription.upload.analyzingSpeakers')
-              : t('transcription.upload.repeatAnalysis')}
+            {reanalyzing ? reanalysisLabel : t('transcription.upload.repeatAnalysis')}
           </Button>
         </div>
       </DialogHeader>
@@ -271,36 +323,39 @@ function MappingContent({
       ) : null}
 
       <div aria-busy={reanalyzing || undefined} className="flex flex-col gap-stack-md">
-        {draft.length === 0 ? (
+        {voices.length === 0 ? (
           <Badge appearance="text">{t('transcription.upload.mapping.noVoices')}</Badge>
         ) : null}
-        {draft.map((voice, index) => (
+        {voices.map((voice, index) => (
           <VoiceCard
             key={voice.id}
             voice={voice}
+            name={names[voice.id] ?? voice.name}
             index={index}
             duration={duration}
             peaks={peaks}
             player={player}
-            editing={editing?.voiceId === voice.id ? editing.key : null}
+            editing={editing[voice.id] ?? null}
             removing={removing === voice.id}
             focusName={added === voice.id}
             disabled={reanalyzing}
-            onName={(name) => updateVoice(voice.id, { name })}
-            onColor={(colorId) => updateVoice(voice.id, { colorId })}
+            onName={(name) => setNames((typed) => ({ ...typed, [voice.id]: name }))}
+            onColor={(colorId) => setColor(voice.id, colorId)}
             onRemove={() => setRemoving(voice.id)}
             onCancelRemove={() => setRemoving(null)}
             onConfirmRemove={() => removeVoice(voice.id)}
             onSample={(sample) => {
-              // A chip plays its sample; another sample's open detail closes (kiChat).
-              if (editing?.key !== sample.key) setEditing(null)
+              // A chip plays its sample; every open sample detail closes (kiChat).
+              setEditing({})
               player.toggle(sample.key, sample.start, sample.end)
             }}
             onEdit={(sample) => {
+              // Opens or closes this voice's detail only; other voices keep theirs (kiChat).
               player.stop()
-              setEditing(
-                editing?.key === sample.key ? null : { voiceId: voice.id, key: sample.key }
-              )
+              setEditing((open) => ({
+                ...open,
+                [voice.id]: open[voice.id] === sample.key ? null : sample.key
+              }))
             }}
             onAddSample={() => addSample(voice)}
             onChangeSample={(key, change) => updateSample(voice.id, key, change)}
@@ -332,6 +387,8 @@ function MappingContent({
 
 interface VoiceCardProps {
   voice: VoiceDraft
+  /** The name shown: the one typed, else the voice's. */
+  name: string
   index: number
   duration: number | null
   peaks: TimePeaks | null
@@ -359,7 +416,8 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
   const { t } = useTranslation()
   const id = useId()
   const placeLabel = t('transcription.common.speakerN', { n: index + 1 })
-  const voiceName = voice.name.trim() || placeLabel
+  const voiceName = props.name.trim() || placeLabel
+  const atLimit = !canAddSample(voice)
   const editedSample = voice.samples.find((sample) => sample.key === editing) ?? null
 
   return (
@@ -375,7 +433,7 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
             <Label htmlFor={`${id}-name`}>{placeLabel}</Label>
             <Input
               id={`${id}-name`}
-              value={voice.name}
+              value={props.name}
               maxLength={TRANSCRIPTION_SPEAKER_NAME_MAX}
               placeholder={t('transcription.upload.enterNamePlaceholder')}
               // A voice just added takes the focus, to be named at once.
@@ -442,6 +500,8 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
                   type="button"
                   variant="outline"
                   size="sm"
+                  // Marks the chip for the dialog's click listener that stops a preview.
+                  data-sample-key={sample.key}
                   aria-pressed={playing}
                   aria-label={
                     playing
@@ -476,12 +536,27 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
             variant="outline"
             size="icon"
             aria-label={t('transcription.upload.mapping.addSampleTo', { voice: voiceName })}
-            title={t('transcription.upload.addSnippet')}
-            disabled={props.disabled || !canAddSample(voice)}
+            aria-describedby={atLimit ? `${id}-limit` : undefined}
+            title={
+              atLimit
+                ? t('transcription.upload.mapping.samplesLimit', {
+                    max: TRANSCRIPTION_SAMPLES_PER_SPEAKER_MAX
+                  })
+                : t('transcription.upload.addSnippet')
+            }
+            disabled={props.disabled || atLimit}
             onClick={props.onAddSample}
           >
             <PlusIcon {...ICON} />
           </Button>
+          {/* kiChat has no limit; the contract's guard against abuse is said, not silent. */}
+          {atLimit ? (
+            <Badge id={`${id}-limit`} appearance="text">
+              {t('transcription.upload.mapping.samplesLimit', {
+                max: TRANSCRIPTION_SAMPLES_PER_SPEAKER_MAX
+              })}
+            </Badge>
+          ) : null}
         </div>
 
         {editedSample ? (

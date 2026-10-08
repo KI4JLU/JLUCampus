@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TRANSCRIPTION_SPEAKER_COLORS } from '@justcampus/shared'
-import { drawWaveform, timeToX, type WaveformDrawing } from './draw'
+import { drawWaveform, segmentTitle, timeToX, type WaveformDrawing } from './draw'
 
 /** A canvas context that records what is filled with which colour. */
 function recordingContext(): {
@@ -81,5 +81,23 @@ describe('drawWaveform', () => {
     expect(rects[0]).toEqual([12, 0, 12, 34])
     expect(fills).toContain(TRANSCRIPTION_SPEAKER_COLORS[1])
     expect(fills).toContain('neutral')
+  })
+})
+
+describe('segmentTitle', () => {
+  const segments = [
+    { start: 0, end: 8.58, label: 'Stimme 1' },
+    { start: 8.58, end: 75, label: 'Frau Becker' },
+    { start: 80, end: 90 }
+  ]
+
+  it("names the speaker and range under the pointer, as kiChat's global player", () => {
+    expect(segmentTitle(segments, 3)).toBe('Stimme 1: 00:00 - 00:08')
+    expect(segmentTitle(segments, 8.58)).toBe('Frau Becker: 00:08 - 01:15')
+  })
+
+  it('is empty between stretches and for a stretch without a label', () => {
+    expect(segmentTitle(segments, 77)).toBe('')
+    expect(segmentTitle(segments, 85)).toBe('')
   })
 })

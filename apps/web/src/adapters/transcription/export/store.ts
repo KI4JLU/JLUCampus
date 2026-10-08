@@ -121,7 +121,10 @@ export const exportActions = {
   /** Back to the defaults: the next user does not work on the last one's saved format. */
   reset: (): void => exportStore.set(INITIAL),
 
-  /** Shows or hides one speaker of one transcript in the transcript export (T-43). */
+  /**
+   * Shows or hides one speaker of one transcript in the transcript export (T-43). Like kiChat's
+   * speaker chips this makes the format custom; the saved format being changed stays the same.
+   */
   toggleSpeaker: (transcriptId: string, speaker: string): void =>
     exportStore.set((state) => {
       const current = state.visibleSpeakers[transcriptId] ?? {}
@@ -129,7 +132,8 @@ export const exportActions = {
         visibleSpeakers: {
           ...state.visibleSpeakers,
           [transcriptId]: { ...current, [speaker]: current[speaker] === false }
-        }
+        },
+        choice: { kind: 'custom' }
       }
     })
 }

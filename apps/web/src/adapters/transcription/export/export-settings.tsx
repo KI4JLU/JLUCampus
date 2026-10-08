@@ -42,6 +42,7 @@ import { useDeleteFormat, useSaveFormat, useTranscriptionFormats } from '../api'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import type { ExportCategory } from './files'
 import { isSpeakerVisible, speakerColorId, speakerLabel, speakersInOrder } from './format'
+import { TRANSCRIPT_FORMATTING_ID } from './formatting-focus'
 import { useSpeakerLabels } from './hooks'
 import { SpeakerAvatar } from './parts'
 import { formatDetails, isChoice, uniqueFormatName } from './presets'
@@ -216,6 +217,43 @@ function SubtitleSettings(): React.JSX.Element {
   )
 }
 
+/** The presets' names in the current language. */
+function usePresetNames(): Record<TranscriptPresetId, string> {
+  const { t } = useTranslation()
+  return {
+    dialog_standard: t('transcription.export.presetDialog'),
+    lesefassung: t('transcription.export.presetReading'),
+    zeitcodes: t('transcription.export.presetTimecodes'),
+    sprecher_gruppiert: t('transcription.export.presetBySpeaker'),
+    fliesstext: t('transcription.export.presetPlainText')
+  }
+}
+
+/**
+ * The format in use with its icon, as the preview's subheader names it: a preset, a saved
+ * format (bookmark) or "Benutzerdefiniert" (sliders), as kiChat.
+ */
+export function ActiveFormatName(): React.JSX.Element {
+  const { t } = useTranslation()
+  const { choice } = useExportState()
+  const formats = useTranscriptionFormats()
+  const presetName = usePresetNames()
+  const saved =
+    choice.kind === 'saved' ? formats.data?.find((format) => format.id === choice.id) : undefined
+  const [icon, name] =
+    choice.kind === 'preset'
+      ? [PRESET_ICONS[choice.id], presetName[choice.id]]
+      : saved
+        ? [<BookmarkIcon key="saved" {...ICON} />, saved.name]
+        : [<SlidersHorizontalIcon key="custom" {...ICON} />, t('transcription.export.custom')]
+  return (
+    <span className="flex min-w-0 items-center gap-stack-sm">
+      {icon}
+      <span className="truncate">{name}</span>
+    </span>
+  )
+}
+
 /**
  * The transcript's format (T-43 to T-45): kiChat's presets and the user's saved formats, the
  * switches, the order, which speakers show, and saving the settings as a format of one's own.
@@ -224,13 +262,7 @@ function TranscriptFormatting(): React.JSX.Element {
   const { t } = useTranslation()
   const { flags, choice } = useExportState()
   const formats = useTranscriptionFormats()
-  const presetName: Record<TranscriptPresetId, string> = {
-    dialog_standard: t('transcription.export.presetDialog'),
-    lesefassung: t('transcription.export.presetReading'),
-    zeitcodes: t('transcription.export.presetTimecodes'),
-    sprecher_gruppiert: t('transcription.export.presetBySpeaker'),
-    fliesstext: t('transcription.export.presetPlainText')
-  }
+  const presetName = usePresetNames()
   const presetDescription: Record<TranscriptPresetId, string> = {
     dialog_standard: t('transcription.export.presetDialogDesc'),
     lesefassung: t('transcription.export.presetReadingDesc'),
@@ -241,13 +273,16 @@ function TranscriptFormatting(): React.JSX.Element {
   const toggles: { key: Exclude<keyof TranscriptFormatFlags, 'order'>; label: string }[] = [
     { key: 'speakers', label: t('transcription.export.toggleSpeakerNames') },
     { key: 'timestamps', label: t('transcription.export.toggleTimestamps') },
+    { key: 'anonymize', label: t('transcription.export.toggleAnonymize') },
     { key: 'avatars', label: t('transcription.export.toggleAvatars') },
-    { key: 'bubbles', label: t('transcription.export.toggleBubbles') },
-    { key: 'anonymize', label: t('transcription.export.toggleAnonymize') }
+    { key: 'bubbles', label: t('transcription.export.toggleBubbles') }
   ]
 
+  // kiChat's order: own formats, presets, the switches, the order, the speakers, saving.
   return (
-    <>
+    <div id={TRANSCRIPT_FORMATTING_ID} className="flex flex-col gap-stack-lg">
+      <SavedFormats formats={formats.data} failed={formats.isError} loading={formats.isPending} />
+
       <PanelSection
         title={t('transcription.export.presets')}
         aside={
@@ -278,9 +313,7 @@ function TranscriptFormatting(): React.JSX.Element {
         </ul>
       </PanelSection>
 
-      <SavedFormats formats={formats.data} failed={formats.isError} loading={formats.isPending} />
-
-      <PanelSection title={t('transcription.export.formatting')}>
+      <PanelSection title={t('transcription.export.customise')}>
         {toggles.map((toggle) => (
           <ToggleRow
             key={toggle.key}
@@ -306,7 +339,7 @@ function TranscriptFormatting(): React.JSX.Element {
       <SpeakerChips />
 
       <SaveFormat formats={formats.data ?? []} />
-    </>
+    </div>
   )
 }
 
@@ -470,7 +503,7 @@ function SaveFormat({ formats }: { formats: TranscriptionFormat[] }): React.JSX.
       flags={flags}
       editingId={editing?.id ?? null}
       formats={formats}
-      label={t('transcription.export.saveAsOwnTemplate')}
+      label={t('transcription.export.saveTemplate')}
     />
   )
 }
@@ -525,7 +558,7 @@ function SaveFormatForm({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-stack-sm">
-      <Label htmlFor={id}>{t('transcription.export.templateNamePlaceholder')}</Label>
+      <Label htmlFor={id}>{t('transcription.export.saveAsOwnTemplate')}</Label>
       <Input
         id={id}
         value={name}

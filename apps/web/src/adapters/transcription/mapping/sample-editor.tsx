@@ -67,7 +67,11 @@ export function SampleEditor(props: SampleEditorProps): React.JSX.Element {
           label={t('transcription.upload.mapping.sampleWindow', name)}
           describedBy={`${id}-hint`}
           onChange={setWindow}
-          onClick={(time) => (playing ? props.onStop() : props.onPlay(time, Infinity))}
+          // kiChat's editor pauses where the window ends: a click before or inside it plays up to
+          // there, one after it plays on.
+          onClick={(time) =>
+            playing ? props.onStop() : props.onPlay(time, time < sample.end ? sample.end : Infinity)
+          }
         />
       </div>
       <p id={`${id}-hint`} className="sr-only">

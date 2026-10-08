@@ -8,30 +8,27 @@ import {
   type Ref
 } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Button,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@ki4jlu/design-system'
+import { Button } from '@ki4jlu/design-system'
 import type { TranscriptionSourceFile } from '@justcampus/shared'
 import { mediaUrlExpiresSoon, useJobAudioUrl } from '../api'
-import { formatTime, WaveformPlayer, type WaveformPlayerHandle } from '../audio'
 import {
-  playbackStep,
-  sourceIndexAt,
-  sourceTimeline,
-  toLocalTime,
-  type SpeakerBlock
-} from '../segments'
+  formatTime,
+  globalPeaks,
+  sourceWaveform,
+  WaveformPlayer,
+  type DecodedWaveform,
+  type WaveformPlayerHandle,
+  type WaveformSegment,
+  type WaveformTimeline
+} from '../audio'
+import { playbackStep, sourceIndexAt, toLocalTime, type SpeakerBlock } from '../segments'
+import { useSpeakerLabel } from './use-speaker-label'
 
 /** What the transcript does with the player: all times are global, over every source file. */
 export interface GlobalPlayerHandle {
   seek: (time: number) => void
-  /** Plays from `start`; with `end` it stops there (a block in correction mode). */
-  play: (start: number, end?: number) => void
+  /** Plays from `start` on, as kiChat's avatar of a block does in both tabs. */
+  play: (start: number) => void
   pause: () => void
 }
 
@@ -50,14 +47,21 @@ interface PendingAction {
   play: boolean
 }
 
+/** The waveform of every source file, by file; `null` where there is none. */
+interface SourceWaveforms {
+  sources: readonly TranscriptionSourceFile[]
+  waveforms: (DecodedWaveform | null)[]
+}
+
 /**
- * The result's global player (T-24), after kiChat's `initGlobalAudioPlayer`: a waveform with the
- * speakers' time line, play and pause, seeking and the time over all source files of the
- * transcript. Each file's audio comes from a fresh audio URL of its job, fetched again before it
- * expires and when playback fails. Playback keeps to the saved ranges (`playbackStep`): at a
- * file's saved end the next one plays on, also when its audio runs longer, and a block played in
- * Corrections stops at its end in whichever file that lies. Above 100 MB the waveform is not
- * decoded, the audio still plays.
+ * The result's global player (T-24), after kiChat's `initGlobalAudioPlayer` and its global
+ * `CustomAudioPlayer`: one waveform over the merged time line of all source files, with the
+ * speakers' time line (hover names a speaker's stretch), play and pause, and seeking anywhere on
+ * it by pointer or keys, which changes files on its own. Each file's audio comes from a fresh
+ * audio URL of its job, fetched again before it expires and when playback fails. Playback keeps to
+ * the saved ranges (`playbackStep`): at a file's saved end the next one plays on, also when its
+ * audio runs longer. Files above 100 MB are not decoded; their part shows the waveform the
+ * analysis computed.
  */
 export function GlobalPlayer({
   sources,
@@ -68,6 +72,7 @@ export function GlobalPlayer({
   ref
 }: GlobalPlayerProps): React.JSX.Element {
   const { t } = useTranslation()
+  const speakerLabel = useSpeakerLabel()
   const [index, setIndex] = useState(0)
   const [time, setTime] = useState(0)
   const [failed, setFailed] = useState(false)
@@ -81,13 +86,60 @@ export function GlobalPlayer({
   const retried = useRef(false)
   const playing = useRef(false)
   const [active, setActive] = useState(false)
-  /** The global end of the block being played, across files; `null` plays on. */
-  const rangeEnd = useRef<number | null>(null)
-  /** The global time shown last, to tell when the block's end is crossed. */
-  const shown = useRef<number | null>(null)
   /** Set while the next file is being loaded, so the hand-over happens once. */
   const switching = useRef(false)
-  const timeline = useMemo(() => sourceTimeline(blocks, source), [blocks, source])
+  const [loaded, setLoaded] = useState<SourceWaveforms | null>(null)
+  const waveforms = loaded?.sources === sources ? loaded.waveforms : null
+
+  // Every file's waveform, placed on the global time line like kiChat's `computeWaveformPeaks`.
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all(
+      sources.map((file) => (file.jobId ? sourceWaveform(file.jobId, file) : null))
+    ).then((results) => {
+      if (!cancelled) setLoaded({ sources, waveforms: results })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sources])
+
+  const peaks = useMemo(
+    () =>
+      waveforms
+        ? globalPeaks(
+            sources,
+            waveforms.map((waveform) => waveform?.peaks ?? null),
+            total
+          )
+        : null,
+    [sources, waveforms, total]
+  )
+
+  // The speakers' time line over all files, global like the bar.
+  const segments = useMemo<WaveformSegment[]>(
+    () =>
+      blocks.map((block) => ({
+        start: block.start,
+        end: block.end,
+        colorId: block.colorId,
+        label: speakerLabel(block.speaker)
+      })),
+    [blocks, speakerLabel]
+  )
+
+  // The transcript forgets the playing state and block when the player goes.
+  const report = useRef({ onTime, onPlayingChange })
+  useEffect(() => {
+    report.current = { onTime, onPlayingChange }
+  })
+  useEffect(
+    () => () => {
+      report.current.onPlayingChange(false)
+      report.current.onTime(-1)
+    },
+    []
+  )
 
   const apply = useCallback(() => {
     const action = pending.current
@@ -106,23 +158,38 @@ export function GlobalPlayer({
     setIndex(target)
   }, [])
 
+  /**
+   * Fetches the playing file's audio URL anew; a waiting action applies once its audio reported
+   * its length again (`onDuration`). The backend's URLs stay the same, and the element does not
+   * load an unchanged source by itself, so it is told to.
+   */
+  const reload = useCallback(async () => {
+    const before = media?.url
+    const result = await refetchAudio()
+    const element = wave.current?.audio()
+    if (!before || result.isError || result.data?.url !== before) return
+    // Unless another file was loaded meanwhile.
+    if (element?.getAttribute('src') === before) element.load()
+  }, [media, refetchAudio])
+
   const go = useCallback(
-    (global: number, play: boolean, end: number | null) => {
+    (global: number, play: boolean) => {
       const target = sourceIndexAt(sources, global)
       const file = sources[target]
       if (!file) return
-      rangeEnd.current = play ? end : null
-      shown.current = null
+      // The bar and the transcript follow at once, also while another file loads.
+      setTime(global)
+      onTime(global)
       pending.current = { local: toLocalTime(file, global), play }
       if (target !== index) {
         ready.current = false
         setIndex(target)
       } else if (media && mediaUrlExpiresSoon(media)) {
         ready.current = false
-        void refetchAudio()
+        void reload()
       } else apply()
     },
-    [sources, index, media, refetchAudio, apply]
+    [sources, index, media, reload, apply, onTime]
   )
 
   const onDuration = useCallback(() => {
@@ -133,8 +200,8 @@ export function GlobalPlayer({
   useImperativeHandle(
     ref,
     () => ({
-      seek: (global) => go(global, false, null),
-      play: (start, end) => go(start, true, end ?? null),
+      seek: (global) => go(global, false),
+      play: (start) => go(start, true),
       pause: () => wave.current?.pause()
     }),
     [go]
@@ -142,17 +209,17 @@ export function GlobalPlayer({
 
   /**
    * Shows the time of the playing file's `local` second on the global time line and keeps
-   * playback to the saved ranges: the next file at a file's saved end, a stop at a block's end.
+   * playback to the saved ranges: the next file at a file's saved end, a stop at the last one's.
    */
   const follow = useCallback(
     (local: number) => {
-      const step = playbackStep(sources, index, local, rangeEnd.current, shown.current)
-      shown.current = step.time
+      // While another file loads, the old one's time does not count.
+      if (switching.current || pending.current) return
+      const step = playbackStep(sources, index, local, null, null)
       setTime(step.time)
       onTime(step.time)
-      if (!playing.current || switching.current) return
+      if (!playing.current) return
       if (step.kind === 'stop') {
-        rangeEnd.current = null
         wave.current?.pause()
         // At the saved end of the last file the audio counts as ended, so the next play starts it
         // from the beginning instead of stopping again at once.
@@ -202,7 +269,7 @@ export function GlobalPlayer({
       retried.current = true
       pending.current = { local: element.currentTime, play: playing.current }
       ready.current = false
-      void refetchAudio()
+      void reload()
     }
     const onPlaying = (): void => {
       retried.current = false
@@ -215,38 +282,28 @@ export function GlobalPlayer({
       element.removeEventListener('error', onError)
       element.removeEventListener('playing', onPlaying)
     }
-  }, [index, sources, refetchAudio, load])
+  }, [index, sources, reload, load])
 
   if (sources.length === 0) {
     return <p className="m-0">{t('transcription.result.noAudio')}</p>
   }
 
   const name = source?.name ?? ''
+  const timeline: WaveformTimeline = {
+    peaks,
+    duration: total,
+    time,
+    onSeek: (global) => go(global, playing.current),
+    sourceDuration:
+      waveforms?.[index]?.duration ??
+      source?.duration ??
+      (source ? source.endTime - source.startTime : undefined)
+  }
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-        {sources.length > 1 ? (
-          <Select
-            value={String(index)}
-            onValueChange={(value) => {
-              const file = sources[Number(value)]
-              if (file) go(file.startTime, playing.current, null)
-            }}
-          >
-            <SelectTrigger aria-label={t('transcription.result.audioFile')} className="max-w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {sources.map((file, position) => (
-                <SelectItem key={`${file.jobId ?? 'none'}-${position}`} value={String(position)}>
-                  {file.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <span className="min-w-0 truncate">{name}</span>
-        )}
+        {/* The file playing now; the bar spans all of them. */}
+        <span className="min-w-0 truncate">{name}</span>
         <span className="shrink-0">{`${formatTime(time)} / ${formatTime(total)}`}</span>
       </div>
       <WaveformPlayer
@@ -255,7 +312,8 @@ export function GlobalPlayer({
         name={name}
         size={source?.size || undefined}
         jobId={source?.jobId ?? null}
-        segments={timeline}
+        segments={segments}
+        timeline={timeline}
         compact
         onTimeUpdate={follow}
         onPlayingChange={(value) => {
@@ -275,7 +333,8 @@ export function GlobalPlayer({
             onClick={() => {
               setFailed(false)
               retried.current = false
-              void refetchAudio()
+              ready.current = false
+              void reload()
             }}
           >
             {t('transcription.common.retry')}

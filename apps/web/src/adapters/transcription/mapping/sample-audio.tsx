@@ -53,6 +53,12 @@ interface Playing {
   end: number
 }
 
+/**
+ * Who started the sound: a sample's chip (kiChat's preview, which any other click stops) or the
+ * sample editor (kiChat's editor player, which plays on).
+ */
+export type PlayOrigin = 'chip' | 'editor'
+
 export interface SamplePlayer {
   /** The key of the sample playing, if any. */
   playing: string | null
@@ -62,11 +68,16 @@ export interface SamplePlayer {
   duration: number | null
   /** Whether the audio could not be loaded. */
   failed: boolean
-  /** Plays from `start` and stops at `end` (`Infinity`: at the end of the file). */
-  play: (key: string, start: number, end: number) => Promise<void>
+  /**
+   * Plays from `start` and stops at `end` (`Infinity`: at the end of the file); `origin` defaults
+   * to the editor.
+   */
+  play: (key: string, start: number, end: number, origin?: PlayOrigin) => Promise<void>
   stop: () => void
   /** Plays the window, or stops it when it is the one playing (kiChat's chips). */
   toggle: (key: string, start: number, end: number) => void
+  /** The key of a chip's preview playing or starting, else `null`; read at event time. */
+  preview: () => string | null
   /** The hidden `<audio>` element to render. */
   element: React.JSX.Element
 }
@@ -149,6 +160,8 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
   const loaded = useRef<string | null>(null)
   const range = useRef<Playing | null>(null)
   const requests = useRef(new PlayRequests())
+  // The latest request, set before it waits for the audio, so a click meanwhile sees it.
+  const requested = useRef<{ key: string; origin: PlayOrigin } | null>(null)
   const [playing, setPlaying] = useState<string | null>(null)
   const [time, setTime] = useState(0)
   const [duration, setDuration] = useState<number | null>(null)
@@ -156,16 +169,23 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
 
   const stop = useCallback(() => {
     requests.current.cancel()
+    requested.current = null
     range.current = null
     audioRef.current?.pause()
     setPlaying(null)
   }, [])
 
   const play = useCallback(
-    async (key: string, start: number, end: number): Promise<void> => {
+    async (
+      key: string,
+      start: number,
+      end: number,
+      origin: PlayOrigin = 'editor'
+    ): Promise<void> => {
       const audio = audioRef.current
       if (!audio) return
       const current = requests.current.begin()
+      requested.current = { key, origin }
       const outcome = await startSample(audio, {
         resolve,
         loaded,
@@ -179,6 +199,7 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
         }
       })
       if (outcome === 'noUrl') setFailed(true)
+      if ((outcome === 'noUrl' || outcome === 'failed') && current()) requested.current = null
       if (outcome === 'failed') {
         range.current = null
         setPlaying(null)
@@ -191,9 +212,14 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
   const toggle = useCallback(
     (key: string, start: number, end: number) => {
       if (playing === key) stop()
-      else void play(key, start, end)
+      else void play(key, start, end, 'chip')
     },
     [play, playing, stop]
+  )
+
+  const preview = useCallback(
+    () => (requested.current?.origin === 'chip' ? requested.current.key : null),
+    []
   )
 
   // While playing, the playhead moves every frame and the window stops at its end.
@@ -207,6 +233,7 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
         const current = range.current
         if (current && audio.currentTime >= current.end) {
           range.current = null
+          requested.current = null
           audio.pause()
         }
       }
@@ -234,18 +261,22 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
     play,
     stop,
     toggle,
+    preview,
     element: (
       <audio
         ref={audioRef}
         hidden
         preload="metadata"
         onPlay={(event) => playExclusively(event.currentTarget)}
-        onPause={() => {
+        onPause={(event) => {
+          // A stop right before a new start: the pause arrives once the new sound plays.
+          if (!event.currentTarget.paused) return
           range.current = null
           setPlaying(null)
         }}
         onEnded={() => {
           range.current = null
+          requested.current = null
           setPlaying(null)
         }}
         onLoadedMetadata={(event) => {

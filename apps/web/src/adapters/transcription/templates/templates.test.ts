@@ -91,12 +91,12 @@ const source = (duration: number): PlaceholderSource => ({
 })
 
 describe('placeholders', () => {
-  it('inserts the English tokens at the cursor, replacing the selection', () => {
+  it("inserts kiChat's German tokens at the cursor, replacing the selection", () => {
     expect(PLACEHOLDERS.map(placeholderToken)).toEqual([
-      '{{title}}',
-      '{{date}}',
-      '{{participants}}',
-      '{{duration}}'
+      '{{titel}}',
+      '{{datum}}',
+      '{{teilnehmer}}',
+      '{{dauer}}'
     ])
     expect(insertToken('Datum: ', 7, 7, '{{date}}')).toEqual({
       value: 'Datum: {{date}}',

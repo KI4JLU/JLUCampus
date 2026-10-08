@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { TranscriptionRealtimeConfig, TranscriptionRealtimeMode } from '@justcampus/shared'
+import type { LiveTranscriptWindow } from '../live/lines'
 import type { StoredRecording } from './backup-store'
 import type { MicrophoneChoice } from './devices'
 import type { DisplaySupport } from './display-capture'
@@ -54,7 +55,10 @@ export interface RecordingSources {
 
 /** How the live transcript is shown (T-61). None of it changes the text. */
 export interface LiveAppearance {
-  /** CSS pixels, `TRANSCRIPTION_LIVE_FONT_SIZE`. */
+  /**
+   * `TRANSCRIPTION_LIVE_FONT_SIZE`: CSS pixels at a panel 1280 px wide, scaling with the panel's
+   * width as kiChat's `--live-font-size` does.
+   */
   fontSize: number
   inverted: boolean
   maximized: boolean
@@ -70,6 +74,10 @@ export interface LiveTranscription {
   setMode: (mode: TranscriptionRealtimeMode) => void
   /** Everything transcribed in this session. */
   text: string
+  /** The last lines of `text` as subtitles: what the transcript panel shows (T-61). */
+  subtitles: LiveTranscriptWindow
+  /** Whether a live session started since the page opened; the sample text shows until then. */
+  started: boolean
   /** The last service error of the running session. */
   serviceError: string | null
   clearText: () => void

@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode
@@ -17,6 +16,7 @@ import {
 } from '@justcampus/shared'
 import {
   analyzeJob,
+  awaitGeneratedTitle,
   createJob,
   createTranscript,
   deleteJob,
@@ -25,6 +25,7 @@ import {
   getTranscript,
   listJobs,
   patchTranscript,
+  reportTranscriptAdopted,
   transcriptionKeys,
   uploadToTarget,
   useTranscriptionEvents
@@ -33,7 +34,7 @@ import { transcriptionEvents } from '../events'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { UploadDialog } from './dialogs'
 import { useDialogHost } from './use-dialog-host'
-import { dropTargetIndex, fitIntoGroup, type FilePosition } from './queue'
+import { dropTargetIndex, fitIntoGroup, handoverGroupIndex, type FilePosition } from './queue'
 import { UploadQueue, type QueueLabels } from './store'
 import { UploadContext } from './use-upload'
 import { limitMegabytes, partitionFiles } from './validation'
@@ -67,19 +68,15 @@ function measureDuration(file: File): Promise<number | null> {
 
 /**
  * Holds the upload queue for as long as the page lives, so it survives switching views; it wraps
- * the whole page, side column included. On arrival it restores the user's active jobs (T-15),
- * takes the files other areas hand over (recorded takes, T-58) and, back at the entry choice,
- * clears the selection unless a start runs (T-01).
+ * the whole page, side column included. Each time the upload view opens it restores the user's
+ * active jobs (T-15, kiChat's file view); it takes the files other areas hand over (recorded
+ * takes, T-58) and, back at the entry choice, clears the selection unless a start runs (T-01).
  */
 export function UploadProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const { t } = useTranslation()
   const client = useQueryClient()
   const workspace = useTranscriptionWorkspace()
   const { dialogs, request, close } = useDialogHost()
-  const view = useRef(workspace.view)
-  useEffect(() => {
-    view.current = workspace.view
-  })
 
   // Kept in the page's memory, so uploads and job updates go on through a remount of the page.
   const { memory } = workspace
@@ -109,6 +106,12 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
         void client.invalidateQueries({ queryKey: transcriptionKeys.transcripts })
         void client.invalidateQueries({ queryKey: transcriptionKeys.jobs })
       },
+      // kiChat's `pollForTitleUpdate`: the AI title reaches the history and the group's link.
+      onTranscriptCreated: (transcript) =>
+        awaitGeneratedTitle(client, transcript, {
+          onTitle: (latest) => created.takeGeneratedTitle(latest.id, latest.title)
+        }),
+      onSaveAdopted: reportTranscriptAdopted,
       latestRevision: (id) =>
         client.getQueryData<TranscriptionTranscript>(transcriptionKeys.transcript(id))?.revision ??
         null
@@ -118,7 +121,7 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     return created
   })
 
-  const { capabilities, openTranscript } = workspace
+  const { capabilities } = workspace
   // The job list in the cache stays current while the page is open, as the widgets show it.
   useTranscriptionEvents(capabilities?.batch ?? false)
   const maxBytes = capabilities?.limits.maxFileBytes ?? TRANSCRIPTION_MAX_FILE_BYTES
@@ -138,7 +141,10 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     queue.attach()
   }, [queue])
 
-  /** The catalog's alert for refused files, with their names; the admin's limit if changed. */
+  /**
+   * kiChat's alert for refused files, without their names; the admin's limit if changed. One
+   * dialog for all refused files of a pick instead of kiChat's alert per file.
+   */
   const checkFiles = useCallback(
     async (files: readonly File[]): Promise<File[]> => {
       const { accepted, rejected } = partitionFiles(files, maxBytes)
@@ -149,11 +155,8 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
             : t('transcription.upload.unsupportedFileAlertLimit', {
                 size: limitMegabytes(maxBytes)
               })
-        const names = rejected.map(({ file }) => `"${file.name}"`).join(', ')
-        await dialogs.alert({
-          title: t('transcription.common.error'),
-          message: `${alert}\n\n${t('transcription.upload.rejectedFiles', { names })}`
-        })
+        // The DS dialog needs a title; 'Fehler' stands in for the browser's alert chrome.
+        await dialogs.alert({ title: t('transcription.common.error'), message: alert })
       }
       return accepted
     },
@@ -188,15 +191,22 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     [alertGroupFull, checkFiles, maxFiles, queue]
   )
 
-  /** Moves a file; one refused because the target group is full gets the catalog's alert. */
+  /**
+   * Moves a file; one refused because the target group is full gets the catalog's alert, not one
+   * refused because a start runs or a group is being saved.
+   */
   const moveFile = useCallback(
     (from: FilePosition, toGroupIndex: number, toFileIndex: number | null = null): void => {
-      if (queue.moveFile(from, toGroupIndex, toFileIndex) || queue.getSnapshot().processing) return
+      if (queue.moveFile(from, toGroupIndex, toFileIndex)) return
+      const { groups, processing } = queue.getSnapshot()
+      const involved = [groups[from.groupIndex], groups[toGroupIndex]]
+      if (processing || involved.some((group) => group && queue.isSaving(group.id))) return
       void alertGroupFull()
     },
     [alertGroupFull, queue]
   )
 
+  // Like kiChat, the user stays at the queue after a start; each saved group offers its transcript.
   const start = useCallback(async (): Promise<void> => {
     const outcome = await queue.start()
     if (outcome.status === 'empty') {
@@ -204,15 +214,11 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
         title: t('transcription.common.error'),
         message: t('transcription.upload.addFileFirst')
       })
-      return
     }
-    const [only] = outcome.savedIds
-    if (outcome.savedIds.length === 1 && only && !outcome.failed && view.current === 'upload') {
-      await openTranscript(only)
-    }
-  }, [dialogs, openTranscript, queue, t])
+  }, [dialogs, queue, t])
 
-  // Files handed over by other areas join the queue as a group of their own, once it takes files.
+  // Files handed over by other areas join the queue once it takes files: as a group of their own,
+  // or the recorded takes in the first group like kiChat (T-58).
   const { pendingUploads, takePendingUploads } = workspace
   const processing = useSyncExternalStore(queue.subscribe, () => queue.getSnapshot().processing)
   useEffect(() => {
@@ -220,8 +226,13 @@ export function UploadProvider({ children }: { children: ReactNode }): React.JSX
     void (async () => {
       for (const pending of takePendingUploads()) {
         const accepted = await checkFiles(pending.files)
-        const { overflow } = fitIntoGroup([], accepted, maxFiles)
-        queue.addGroupOfFiles(accepted, pending)
+        if (pending.target === 'first') await queue.whenRestored()
+        const groups = queue.getSnapshot().groups
+        const index = handoverGroupIndex(groups, pending.target)
+        const present = index === null ? [] : groups[index]!.files
+        const { overflow } = fitIntoGroup(present, accepted, Math.max(0, maxFiles - present.length))
+        if (index === null) queue.addGroupOfFiles(accepted, pending)
+        else queue.addFiles(accepted, index, pending)
         if (overflow) await alertGroupFull()
       }
     })()

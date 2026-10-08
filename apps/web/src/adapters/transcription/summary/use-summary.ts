@@ -8,7 +8,6 @@ import {
   type QueryClient
 } from '@tanstack/react-query'
 import type { TranscriptionSummary, TranscriptionSummaryRequest } from '@justcampus/shared'
-import { ApiRequestError } from '@/lib/api'
 import { generateSummary, transcriptionKeys } from '../api'
 import { textFingerprint } from './source'
 
@@ -233,25 +232,6 @@ export function fileSummary(
 
 function sameKey(a: SummaryKey, b: SummaryKey): boolean {
   return a.every((part, index) => part === b[index])
-}
-
-/** The texts of a failed generation. */
-export interface SummaryErrorTexts {
-  /** `Generierung fehlgeschlagen: ` before the server's reason. */
-  prefix: string
-  /** The server gave no reason. */
-  serverError: string
-  /** No answer at all. */
-  communicationError: string
-}
-
-/** Why a generation failed, as kiChat words it: the server's reason, else a connection error. */
-export function summaryErrorMessage(error: unknown, texts: SummaryErrorTexts): string {
-  if (error instanceof ApiRequestError) {
-    const reason = error.body?.error.message
-    return reason ? `${texts.prefix}${reason}` : texts.serverError
-  }
-  return texts.communicationError
 }
 
 /** The skeleton's labels: the template's section headings, else kiChat's three. */

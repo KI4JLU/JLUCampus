@@ -117,6 +117,8 @@ export class ResultSession {
   private subtitleTouched = false
   private editingSubtitle = false
   private subtitleExpected = false
+  /** The title shown when the wait began; the AI title is awaited until it differs. */
+  private awaitedTitle = ''
   /** Ends the wait for the AI subtitle while it runs. */
   private stopAwaiting: (() => void) | null = null
   /** Counts the fetches of the details while waiting, so an older answer never wins. */
@@ -256,6 +258,19 @@ export class ResultSession {
       current = this.chain
       await current
     } while (current !== this.chain)
+  }
+
+  /**
+   * The save button (T-35), after kiChat's "Datei speichern": waits for a running save, and with
+   * nothing left to send still confirms "Gespeichert", as kiChat's button saves on every click.
+   */
+  async save(): Promise<void> {
+    const before = this.state.savedCount
+    await this.flush()
+    if (this.closed || this.discarded || this.state.savedCount !== before) return
+    if (this.state.saveStatus === 'saved' && !this.dirty && !this.contentQueued) {
+      this.set({ savedCount: before + 1 })
+    }
   }
 
   /** Whether edits have not reached the server (yet). */
@@ -421,6 +436,7 @@ export class ResultSession {
     if (!next || next === previous) return true
     this.titleTouched = true
     this.setTranscript({ title: next })
+    this.settleAwaiting()
     // Not stored locally, the title stays shown and unsaved until a retry stores it.
     if (this.state.local) return this.saveLocally()
     return this.enqueue(async () => {
@@ -441,7 +457,7 @@ export class ResultSession {
     const previous = this.state.transcript
     if (next === (previous.subtitle ?? '')) return true
     this.subtitleTouched = true
-    this.stopAwaiting?.()
+    this.settleAwaiting()
     this.setTranscript({ subtitle: next || null, subtitleSource: next ? 'manual' : null })
     if (this.state.local) return this.saveLocally()
     return this.enqueue(async () => {
@@ -480,7 +496,7 @@ export class ResultSession {
           subtitleSource: saved.subtitleSource,
           revision: this.base.revision
         })
-        if (saved.subtitle) this.stopAwaiting?.()
+        this.settleAwaiting()
         return true
       })
     } catch {
@@ -491,27 +507,29 @@ export class ResultSession {
   }
 
   /**
-   * Waits for the AI subtitle of a transcript saved in the last minutes that has none yet; call it
-   * when the module writes subtitles. Once per session.
+   * Waits for the AI subtitle and title of a transcript saved in the last minutes; call it when the
+   * module writes subtitles. Once per session.
    */
   expectSubtitle(): void {
     const { transcript, local, keptCopy } = this.state
     const events = this.deps.events
-    if (this.subtitleExpected || this.closed || local || keptCopy || transcript.subtitle) return
+    if (this.subtitleExpected || this.closed || local || keptCopy) return
     if (!events || Date.now() - Date.parse(transcript.createdAt) >= SUBTITLE_EXPECT_MS) return
     this.subtitleExpected = true
     this.awaitSubtitle(events)
   }
 
   /**
-   * kiChat's `pollForTitleUpdate`, without the polling: the chat model writes the AI subtitle (and
-   * title) of a new transcript after saving, and a `transcriptMetadata` event says it is done. The
+   * kiChat's `pollForTitleUpdate`, without the polling: the chat model writes the AI subtitle and
+   * title of a new transcript after saving, and a `transcriptMetadata` event says it is done. The
    * detail is fetched then, and once after each (re)connect of the stream in case the event came
-   * before. What the user typed in the meantime wins. The wait ends once the subtitle is there,
-   * after the event's fetch, or after `TRANSCRIPTION_SUBTITLE_WAIT_MS`.
+   * before. What the user typed in the meantime wins, and ends the wait for that part. The wait
+   * ends once the title differs from the one shown at the start and a subtitle is there, after the
+   * event's fetch, or after `TRANSCRIPTION_SUBTITLE_WAIT_MS`.
    */
   private awaitSubtitle(events: TranscriptionEvents): void {
-    this.set({ awaitingSubtitle: true })
+    this.awaitedTitle = this.state.transcript.title
+    if (!this.state.transcript.subtitle) this.set({ awaitingSubtitle: true })
     const timer = setTimeout(() => this.stopAwaiting?.(), TRANSCRIPTION_SUBTITLE_WAIT_MS)
     const unsubscribe = events.subscribe({
       onOpen: () => void this.fetchDetails(false),
@@ -527,6 +545,18 @@ export class ResultSession {
       unsubscribe()
       this.set({ awaitingSubtitle: false })
     }
+  }
+
+  /**
+   * Ends the busy state once a subtitle is there (or typed), and the wait once the title is new
+   * (or typed) too; `final` ends it in any case.
+   */
+  private settleAwaiting(final = false): void {
+    if (!this.stopAwaiting) return
+    const subtitled = Boolean(this.state.transcript.subtitle) || this.subtitleTouched
+    const titled = this.state.transcript.title !== this.awaitedTitle || this.titleTouched
+    if (final || (subtitled && titled)) this.stopAwaiting()
+    else if (subtitled && this.state.awaitingSubtitle) this.set({ awaitingSubtitle: false })
   }
 
   /** Fetches the detail while waiting for the AI subtitle; `final` after the chat model is done. */
@@ -546,7 +576,7 @@ export class ResultSession {
     if (latest.revision >= this.base.revision && sameContent(latest, this.base)) {
       this.adoptDetails(latest)
     }
-    if (final || this.state.transcript.subtitle || this.subtitleTouched) this.stopAwaiting?.()
+    this.settleAwaiting(final)
   }
 
   // -------------------------------------------------------------------------

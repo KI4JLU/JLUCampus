@@ -236,7 +236,7 @@ describe('live sessions over the server’s WebSocket', () => {
   })
 
   it('reports a socket that closes while recording, but not one closing on stop', async () => {
-    const { socket, session, stream, handlers, tracks } = setup()
+    const { socket, session, stream, handlers, tracks, capture } = setup()
     const started = session.start({ stream, mode: 'onprem' })
     socket.open()
     socket.receive({ type: 'session.created' })
@@ -244,7 +244,12 @@ describe('live sessions over the server’s WebSocket', () => {
     socket.finish()
     expect(handlers.onConnectionLost).toHaveBeenCalledWith('connectionClosed')
     expect(session.isRecording).toBe(false)
-    expect(tracks[0]!.stop).toHaveBeenCalled()
+    expect(capture()!.closed).toBe(true)
+    // The microphone stays with the local recording, which goes on without text.
+    expect(tracks[0]!.stop).not.toHaveBeenCalled()
+    // Stopping afterwards has nothing to wait for and leaves the stream alone.
+    await session.stop()
+    expect(tracks[0]!.stop).not.toHaveBeenCalled()
   })
 
   it('drops audio while the socket does not keep up', async () => {

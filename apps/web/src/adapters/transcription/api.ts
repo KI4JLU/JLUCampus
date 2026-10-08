@@ -12,6 +12,7 @@ import {
 import {
   TRANSCRIPTION_API,
   TRANSCRIPTION_MEDIA_URL_REFRESH_SECONDS,
+  TRANSCRIPTION_SUBTITLE_WAIT_MS,
   transcriptionCapabilitiesSchema,
   transcriptionConnectionTestSchema,
   transcriptionFormatListSchema,
@@ -234,6 +235,18 @@ export async function createTranscript(
   }
   createListeners.forEach((listener) => listener({ input, transcript }))
   return transcript
+}
+
+/**
+ * Tells the listeners of `onTranscriptCreate` that a refused save (`409`) is on the server after
+ * all: another page of the user saved the same jobs first, as `transcript`. The history then drops
+ * the local copy the refusal left (T-39).
+ */
+export function reportTranscriptAdopted(
+  input: TranscriptionTranscriptCreate,
+  transcript: TranscriptionTranscript
+): void {
+  createListeners.forEach((listener) => listener({ input, transcript }))
 }
 
 /** A saved transcript; segments sent as the JSON text of their array are read too (T-39). */
@@ -739,6 +752,105 @@ function storeTranscript(client: QueryClient, transcript: TranscriptionTranscrip
   void client.invalidateQueries({ queryKey: transcriptionKeys.transcripts })
 }
 
+/** The waits for a generated title under way, by transcript; a second save starts it over. */
+const titleWaits = new Map<string, () => void>()
+
+/**
+ * Takes the server's title and subtitle of a transcript into the history and the detail cache,
+ * unless the cached detail is of another revision: edits made meanwhile are not overwritten.
+ * `false` then.
+ */
+export function storeGeneratedDetails(
+  client: QueryClient,
+  latest: TranscriptionTranscript
+): boolean {
+  const cached = client.getQueryData<TranscriptionTranscript>(
+    transcriptionKeys.transcript(latest.id)
+  )
+  if (cached && cached.revision !== latest.revision) return false
+  if (cached) {
+    client.setQueryData(transcriptionKeys.transcript(latest.id), {
+      ...cached,
+      title: latest.title,
+      subtitle: latest.subtitle,
+      subtitleSource: latest.subtitleSource
+    })
+  }
+  client.setQueryData<TranscriptionTranscriptSummary[]>(transcriptionKeys.transcripts, (list) =>
+    list?.map((entry) =>
+      entry.id === latest.id ? { ...entry, title: latest.title, subtitle: latest.subtitle } : entry
+    )
+  )
+  return true
+}
+
+/**
+ * kiChat's `pollForTitleUpdate`, after every save of a new transcript, without the polling: the
+ * server's chat model writes the title (for a made-up one) and the subtitle afterwards (T-23), and
+ * a `transcriptMetadata` event says it is done. The transcript is fetched then, and once after each
+ * (re)connect of the stream in case the event came before. Every answer goes into the history
+ * (`storeGeneratedDetails`), so it shows the new title without the transcript being opened;
+ * `onTitle` hears of a new title, e.g. for the upload view's link. The wait ends after the event's
+ * fetch, once the title differs from the saved one and a subtitle is there, once the transcript is
+ * gone, or after `TRANSCRIPTION_SUBTITLE_WAIT_MS`.
+ */
+export function awaitGeneratedTitle(
+  client: QueryClient,
+  saved: TranscriptionTranscript,
+  options: {
+    onTitle?: (latest: TranscriptionTranscript) => void
+    get?: (id: string) => Promise<TranscriptionTranscript>
+    events?: TranscriptionEvents
+  } = {}
+): void {
+  const get = options.get ?? ((id: string) => getTranscript(id))
+  const events = options.events ?? transcriptionEvents()
+  titleWaits.get(saved.id)?.()
+  let title = saved.title
+  // Counts the fetches, so an older answer never wins over a newer one.
+  let fetches = 0
+  let taken = 0
+  let unsubscribe: () => void = () => undefined
+  const timer = setTimeout(() => stop(), TRANSCRIPTION_SUBTITLE_WAIT_MS)
+  const stop = (): void => {
+    clearTimeout(timer)
+    unsubscribe()
+    if (titleWaits.get(saved.id) === stop) titleWaits.delete(saved.id)
+  }
+  const current = (): boolean => titleWaits.get(saved.id) === stop
+  const fetchLatest = async (final: boolean): Promise<void> => {
+    const order = ++fetches
+    let latest: TranscriptionTranscript
+    try {
+      latest = await get(saved.id)
+    } catch (error) {
+      // Deleted meanwhile: nothing more to wait for. Other failures wait for the next connect of
+      // the stream or the event.
+      if (current() && error instanceof ApiRequestError && error.status === 404) stop()
+      return
+    }
+    // Replaced by a newer save's wait while asking, or overtaken by a later fetch: this late
+    // answer may predate what was stored, and generated details do not change the revision that
+    // would tell.
+    if (!current() || order < taken) return
+    taken = order
+    if (storeGeneratedDetails(client, latest) && latest.title !== title) {
+      title = latest.title
+      options.onTitle?.(latest)
+    }
+    if (final || (latest.title !== saved.title && latest.subtitle)) stop()
+  }
+  titleWaits.set(saved.id, stop)
+  unsubscribe = events.subscribe({
+    onOpen: () => void fetchLatest(false),
+    onEvent: (event) => {
+      if (event.type === 'transcriptMetadata' && event.data.id === saved.id) {
+        void fetchLatest(true)
+      }
+    }
+  })
+}
+
 export function useCreateJob(): UseMutationResult<
   TranscriptionJobCreated,
   Error,
@@ -804,6 +916,7 @@ export function useCreateTranscript(): UseMutationResult<
     mutationFn: createTranscript,
     onSuccess: (transcript) => {
       storeTranscript(client, transcript)
+      awaitGeneratedTitle(client, transcript)
       // Saved jobs leave the active list.
       void client.invalidateQueries({ queryKey: transcriptionKeys.jobs })
     }

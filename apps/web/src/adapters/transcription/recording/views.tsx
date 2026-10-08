@@ -228,15 +228,16 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
   const pending = status === 'requesting' || status === 'stopping'
   const unavailable = kind === 'live' && live.mode === null
   const batch = capabilities?.batch ?? false
+  // While stopping, kiChat's disabled button reads "Aufnahme starten"; the spinner still tells
+  // screen readers that the take is being finished.
   const label = running
     ? t('transcription.recording.stopRecording')
     : status === 'requesting'
       ? state.step === 'connecting'
         ? t('transcription.recording.connecting')
         : t('transcription.recording.grantMicrophone')
-      : status === 'stopping'
-        ? t('transcription.recording.recordingStopping')
-        : t('transcription.recording.startRecording')
+      : t('transcription.recording.startRecording')
+  const busyLabel = status === 'stopping' ? t('transcription.recording.recordingStopping') : label
 
   return (
     <Card>
@@ -249,7 +250,7 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
             onClick={() => void (running ? stop() : start(kind))}
           >
             {pending ? (
-              <Spinner size="sm" label={label} />
+              <Spinner size="sm" label={busyLabel} />
             ) : running ? (
               <SquareIcon aria-hidden="true" className="size-3 fill-current" />
             ) : (

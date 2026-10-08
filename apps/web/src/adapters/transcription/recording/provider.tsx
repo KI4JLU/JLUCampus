@@ -9,6 +9,11 @@ import {
 import { meQuery } from '@/lib/queries'
 import { liveSocketUrl, useRealtimeConfig } from '../api'
 import { startPcmCapture } from '../live/audio'
+import {
+  appendLiveTranscriptText,
+  EMPTY_LIVE_TRANSCRIPT_WINDOW,
+  type LiveTranscriptWindow
+} from '../live/lines'
 import { RealtimeError, RealtimeSession, type RealtimeDependencies } from '../live/session'
 import { useMemoryCell } from '../page-memory'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -174,7 +179,25 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     chosenMode && modes.includes(chosenMode)
       ? chosenMode
       : (config?.defaultMode ?? modes[0] ?? null)
-  const [text, setText] = useMemoryCell(memory.cell('recording.text', () => ''))
+  const [text, setTextState] = useMemoryCell(memory.cell('recording.text', () => ''))
+  const [subtitles, setSubtitles] = useMemoryCell(
+    memory.cell<LiveTranscriptWindow>('recording.subtitles', () => EMPTY_LIVE_TRANSCRIPT_WINDOW)
+  )
+  const [liveStarted, setLiveStarted] = useMemoryCell(
+    memory.cell('recording.liveStarted', () => false)
+  )
+  // The subtitles are kept chunk by chunk beside the text: where a chunk ends decides the trimming.
+  const appendText = useCallback(
+    (chunk: string) => {
+      setTextState((current) => current + chunk)
+      setSubtitles((current) => appendLiveTranscriptText(current, chunk))
+    },
+    [setTextState, setSubtitles]
+  )
+  const resetText = useCallback(() => {
+    setTextState('')
+    setSubtitles(EMPTY_LIVE_TRANSCRIPT_WINDOW)
+  }, [setTextState, setSubtitles])
   const [serviceError, setServiceError] = useMemoryCell(
     memory.cell<string | null>('recording.serviceError', () => null)
   )
@@ -739,20 +762,26 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       microphones.markGranted()
 
       dispatch({ type: 'connect' })
-      // A new session starts with an empty transcript (T-61).
-      setText('')
+      // A new session starts with an empty transcript (T-61); the sample text does not return.
+      resetText()
+      setLiveStarted(true)
       setServiceError(null)
-      const realtime = new RealtimeSession(
+      const realtime: RealtimeSession = new RealtimeSession(
         {
-          onText: (chunk) => setText((current) => current + chunk),
+          onText: appendText,
           onServiceError: (message) =>
             setServiceError(
               isTranscriptionLiveErrorCode(message)
                 ? t(`transcription.recording.liveErrors.${message}`)
                 : t('transcription.recording.liveServiceError', { message })
             ),
-          onConnectionLost: (code) =>
-            void latestRef.current.finish(t(`transcription.recording.errors.${code}`))
+          // As in kiChat, only the text stops: the microphone and the local recorder go on,
+          // and stopping as usual keeps the whole take.
+          onConnectionLost: (code) => {
+            const running = sessionRef.current
+            if (running?.realtime === realtime) running.realtime = null
+            setServiceError(t(`transcription.recording.errors.${code}`))
+          }
         },
         browserRealtime
       )
@@ -771,7 +800,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       }
       if (!mountedRef.current) return
       await startTake({ kind: 'live', realtime, mixer: null, stream }, stream, release)
-      if (sessionRef.current?.realtime !== realtime) return
+      // A lost connection leaves the take running without its realtime session.
+      if (sessionRef.current?.stream !== stream) return
       // A microphone that disappears ends the take with what it recorded (T-55).
       for (const track of stream.getAudioTracks())
         track.addEventListener('ended', () => void latestRef.current.finish(null), { once: true })
@@ -786,7 +816,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       realtimeErrorText,
       sessionRef,
       setServiceError,
-      setText,
+      appendText,
+      resetText,
+      setLiveStarted,
       startTake,
       startingRef,
       t
@@ -1054,10 +1086,12 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     // Recorded WebM names no length of its own: the queue takes the running time.
     const durations = new Map<File, number>()
     for (const take of taken) if (take.duration) durations.set(take.file, take.duration)
-    // One normal group, through the same queue, validation and analysis as picked files.
+    // Like kiChat, into the first group next to the files already there, through the same queue,
+    // validation and analysis as picked files.
     enqueueUpload(
       taken.map((take) => take.file),
       {
+        target: 'first',
         onStored: (file) => {
           const id = backups.get(file)
           if (id) void removeBackup(id)
@@ -1185,9 +1219,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     [setAppearanceState]
   )
   const clearText = useCallback(() => {
-    setText('')
+    resetText()
     setServiceError(null)
-  }, [setServiceError, setText])
+  }, [resetText, setServiceError])
 
   const recording = useMemo<Recording>(
     () => ({
@@ -1206,6 +1240,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         mode,
         setMode,
         text,
+        subtitles,
+        started: liveStarted,
         serviceError,
         clearText,
         appearance,
@@ -1229,6 +1265,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       mode,
       setMode,
       text,
+      subtitles,
+      liveStarted,
       serviceError,
       clearText,
       appearance,

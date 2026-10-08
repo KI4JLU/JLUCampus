@@ -3,8 +3,10 @@ export {
   type WaveformPlayerHandle,
   type WaveformPlayerProps,
   type WaveformRegion,
-  type WaveformSegment
+  type WaveformSegment,
+  type WaveformTimeline
 } from './waveform-player'
+export { segmentTitle } from './draw'
 export {
   blobWaveform,
   computePeaks,
@@ -12,14 +14,18 @@ export {
   decodeWaveform,
   formatMegabytes,
   formatTime,
+  GLOBAL_PEAK_RESOLUTION,
+  globalPeaks,
   jobTimePeaks,
   jobWaveform,
   overviewPeaks,
   PEAK_RESOLUTION,
   placeholderPeaks,
   serverTimePeaks,
+  sourceWaveform,
   urlWaveform,
   type DecodedWaveform,
-  type JobTimePeaks
+  type JobTimePeaks,
+  type TimelineRange
 } from './peaks'
 export { playExclusively } from './exclusive'

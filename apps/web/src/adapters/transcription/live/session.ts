@@ -70,7 +70,10 @@ export interface RealtimeHandlers {
   onText: (text: string) => void
   /** A transcription or service error: one of the server's codes, else its words. */
   onServiceError: (message: string) => void
-  /** The connection dropped while recording, not on `stop`. The session is torn down. */
+  /**
+   * The connection dropped while recording, not on `stop`. The session is torn down but leaves
+   * the microphone stream running, as kiChat's transcript page records on without text.
+   */
   onConnectionLost: (code: 'connectionFailed' | 'connectionClosed') => void
 }
 
@@ -159,8 +162,11 @@ export class RealtimeSession {
     return this.stopping
   }
 
-  /** Closes everything at once, without waiting for transcripts. */
-  teardown(): void {
+  /**
+   * Closes everything at once, without waiting for transcripts. `keepStream` leaves the
+   * microphone's tracks running for whoever else records from them.
+   */
+  teardown({ keepStream = false }: { keepStream?: boolean } = {}): void {
     this.closed = true
     this.recording = false
     // A start still waiting learns first that it was overtaken.
@@ -177,7 +183,7 @@ export class RealtimeSession {
       }
     }
     this.onClosed?.()
-    for (const track of this.stream?.getTracks() ?? []) track.stop()
+    if (!keepStream) for (const track of this.stream?.getTracks() ?? []) track.stop()
     this.stream = null
     this.events.clear()
   }
@@ -279,10 +285,13 @@ export class RealtimeSession {
     if (effect.error) this.handlers.onServiceError(effect.error)
   }
 
-  /** A socket that closes while recording must not leave a microphone that looks open. */
+  /**
+   * A socket that closes while recording ends the session; the stream stays with the local
+   * recording, which goes on (kiChat's `watchConnection` without `onConnectionLost`).
+   */
   private lost(): void {
     if (!this.recording || this.stopping) return
-    this.teardown()
+    this.teardown({ keepStream: true })
     this.handlers.onConnectionLost('connectionClosed')
   }
 

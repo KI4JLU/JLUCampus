@@ -16,9 +16,9 @@ export const PLACEHOLDERS = Object.keys(
   TRANSCRIPTION_TEMPLATE_PLACEHOLDERS
 ) as TranscriptionPlaceholder[]
 
-/** The token a palette button inserts. */
+/** The token a palette button inserts: kiChat's German one (`{{titel}}`, `{{datum}}` …). */
 export function placeholderToken(placeholder: TranscriptionPlaceholder): string {
-  return TRANSCRIPTION_TEMPLATE_PLACEHOLDERS[placeholder][0]
+  return TRANSCRIPTION_TEMPLATE_PLACEHOLDERS[placeholder][1]
 }
 
 /** kiChat's preview samples, used only without a transcript. */

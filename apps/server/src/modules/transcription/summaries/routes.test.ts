@@ -184,9 +184,9 @@ describe('summaries', () => {
       cached: false
     })
     const markdown = String(body.summary!.markdown)
-    expect(markdown).toMatch(
-      /^# Interview: Teamsitzung\n\nDatum: 04\.10\.2026 · Teilnehmer: Anna, Ben\n\n## Kernaussagen\n\n- 2 Redebeiträge von Anna, Ben\./
-    )
+    // Only the sections, as kiChat: the template's title and date lines stay out.
+    expect(markdown).toMatch(/^## Kernaussagen\n- 2 Redebeiträge von Anna, Ben\./)
+    expect(markdown).not.toContain('# Interview')
     expect(markdown).toContain('## Zitate')
     expect(markdown).toContain('## Themen')
     expect(markdown).toContain('Mein Name ist [AUSGEBLENDET].')
@@ -269,7 +269,6 @@ describe('summaries', () => {
       transcriptTitle: 'Planung der Klausurtagung',
       cached: false
     })
-    expect(String(second.body.summary!.markdown)).toMatch(/^# Interview: Planung der Klausurtagung/)
   })
 
   it('summarises unsaved text without storing it', async () => {
@@ -282,9 +281,7 @@ describe('summaries', () => {
       transcriptTitle: null,
       cached: false
     })
-    expect(String(body.summary!.markdown)).toMatch(
-      /^# Fokusgruppe: Transkript\n\nDatum: \d\d\.\d\d\.\d{4} · Teilnehmer: Anna, Ben/
-    )
+    expect(String(body.summary!.markdown)).toMatch(/^## \S.*\n- 2 Redebeiträge von Anna, Ben\./)
     expect(fake.summaries.size).toBe(0)
     expect(
       (

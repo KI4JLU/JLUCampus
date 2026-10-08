@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -9,16 +10,10 @@ import {
 import { useTranslation } from 'react-i18next'
 import { TRANSCRIPTION_SPEAKER_COLORS } from '@justcampus/shared'
 import { cn } from '@/lib/utils'
-import { placeholderPeaks } from '../audio'
-import { drawWaveform, type WaveformColors } from '../audio/draw'
-import {
-  formatWindowTime,
-  moveWindowEdge,
-  slideWindow,
-  windowView,
-  type TimeWindow
-} from './speakers'
-import { peaksBetween, type TimePeaks } from './window-peaks'
+import { BAR_STEP, drawWaveform, type WaveformColors } from '../audio/draw'
+import { formatWindowTime, moveWindowEdge, slideWindow, type TimeWindow } from './speakers'
+import { trackBarPeaks, trackScale, type TrackScale } from './track-scale'
+import type { TimePeaks } from './window-peaks'
 
 /** How close to an edge, in pixels, a press grabs it rather than the window. */
 const EDGE_PX = 8
@@ -35,7 +30,7 @@ interface Drag {
   x: number
   time: number
   window: TimeWindow
-  view: TimeWindow
+  scale: TrackScale
   moved: boolean
 }
 
@@ -58,7 +53,8 @@ export interface WindowTrackProps {
 }
 
 /**
- * The sample window over the waveform around it, after kiChat's editor player (T-19): dragging an
+ * The sample window over the whole file's waveform, after kiChat's editor player (T-19): the window
+ * takes a tenth of the track, the audio before and after it the rest (`trackScale`). Dragging an
  * edge changes the window between 0.2 and 5 seconds and pushes it along beyond that, dragging the
  * window moves it, a click plays from there. The arrow keys move it too; the start and end fields
  * beside it set it exactly.
@@ -69,11 +65,15 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
   const barRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drag = useRef<Drag | null>(null)
-  // While dragging the view stays put, so the track does not shift under the pointer.
-  const [frozen, setFrozen] = useState<TimeWindow | null>(null)
+  // While dragging the scale stays put, so the track does not shift under the pointer (kiChat's
+  // `frozenMetrics`); it zooms onto the moved window when the drag ends.
+  const [frozen, setFrozen] = useState<TrackScale | null>(null)
   const [hover, setHover] = useState<DragMode>('outside')
-  const view = frozen ?? windowView(window, duration)
-  const span = view.end - view.start
+  const live = useMemo(
+    () => trackScale({ start: window.start, end: window.end }, duration),
+    [window.start, window.end, duration]
+  )
+  const scale = frozen ?? live
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -94,17 +94,19 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
       neutral: cssColor(bar, '--color-outline'),
       speakers: TRANSCRIPTION_SPEAKER_COLORS
     }
+    // Drawn on the track's own scale, from 0 to 1: one peak per bar, the window and the playhead
+    // where the scale puts them.
     drawWaveform(context, {
       width,
       height,
-      peaks: peaks ? peaksBetween(peaks, view.start, view.end) : placeholderPeaks(),
-      duration: span,
-      time: playhead === null ? 0 : playhead - view.start,
+      peaks: trackBarPeaks(scale, peaks, width, BAR_STEP),
+      duration: 1,
+      time: playhead === null ? 0 : scale.toFraction(playhead),
       segments: [],
-      region: { start: window.start - view.start, end: window.end - view.start },
+      region: { start: scale.toFraction(window.start), end: scale.toFraction(window.end) },
       colors
     })
-  }, [peaks, playhead, span, view.end, view.start, window.end, window.start])
+  }, [peaks, playhead, scale, window.end, window.start])
 
   useEffect(() => {
     draw()
@@ -115,21 +117,20 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     return () => observer.disconnect()
   }, [draw])
 
-  const timeAt = (clientX: number, area: TimeWindow): number => {
+  const timeAt = (clientX: number, on: TrackScale): number => {
     const rect = barRef.current?.getBoundingClientRect()
-    if (!rect || rect.width === 0) return area.start
-    const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return area.start + fraction * (area.end - area.start)
+    if (!rect || rect.width === 0) return on.start
+    return on.toTime((clientX - rect.left) / rect.width)
   }
 
   const modeAt = (clientX: number): DragMode => {
     const rect = barRef.current?.getBoundingClientRect()
-    if (!rect || rect.width === 0 || span <= 0) return 'outside'
-    const toX = (seconds: number): number => ((seconds - view.start) / span) * rect.width
+    if (!rect || rect.width === 0) return 'outside'
+    const toX = (seconds: number): number => scale.toFraction(seconds) * rect.width
     const x = clientX - rect.left
     if (Math.abs(x - toX(window.start)) <= EDGE_PX) return 'start'
     if (Math.abs(x - toX(window.end)) <= EDGE_PX) return 'end'
-    const time = timeAt(clientX, view)
+    const time = timeAt(clientX, scale)
     return time >= window.start && time <= window.end ? 'window' : 'outside'
   }
 
@@ -138,12 +139,12 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     drag.current = {
       mode: modeAt(event.clientX),
       x: event.clientX,
-      time: timeAt(event.clientX, view),
+      time: timeAt(event.clientX, scale),
       window,
-      view,
+      scale,
       moved: false
     }
-    setFrozen(view)
+    setFrozen(scale)
   }
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
@@ -154,7 +155,7 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     }
     if (!current.moved && Math.abs(event.clientX - current.x) < DRAG_PX) return
     current.moved = true
-    const time = timeAt(event.clientX, current.view)
+    const time = timeAt(event.clientX, current.scale)
     if (current.mode === 'start' || current.mode === 'end') {
       onChange(moveWindowEdge(window, current.mode, time, duration))
     } else if (current.mode === 'window') {

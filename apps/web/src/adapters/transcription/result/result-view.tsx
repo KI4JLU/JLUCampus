@@ -37,14 +37,8 @@ import {
   withoutRecord
 } from '../history/local-store'
 import { Notice } from '../notice'
-import {
-  blockAt,
-  blockCopyText,
-  buildSpeakerBlocks,
-  buildTranscriptText,
-  formatTimestamp,
-  totalDuration
-} from '../segments'
+import { cn } from '@/lib/utils'
+import { blockAt, buildSpeakerBlocks, buildTranscriptText, totalDuration } from '../segments'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { scrollToBlock } from './dom'
 import { ResultHeader } from './header'
@@ -61,7 +55,6 @@ import {
   type SessionDeps
 } from './session'
 import { Transcript } from './transcript'
-import { useSpeakerLabel } from './use-speaker-label'
 
 /**
  * The work area of a saved transcript (T-22 to T-36): loads it, from the server or, for one only
@@ -255,13 +248,13 @@ function Loading(): React.JSX.Element {
 
 /**
  * The open transcript: head with title, subtitle, save state and tabs; in Preview and
- * Corrections the global player and the speaker blocks, in Export the export stream's view. It
- * publishes the document with its edits to the workspace, makes leaving wait for a running save
- * and asks before unsaved edits are dropped.
+ * Corrections the global player, pinned while the speaker blocks scroll, in Export the export
+ * stream's view. The player stays mounted in Export, only hidden, so playback goes on there as in
+ * kiChat. It publishes the document with its edits to the workspace, makes leaving wait for a
+ * running save and asks before unsaved edits are dropped.
  */
 function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Element {
   const { t, i18n } = useTranslation()
-  const speakerLabel = useSpeakerLabel()
   const { resultTab, setResultTab, setCurrentDocument, setBeforeLeave, capabilities } =
     useTranscriptionWorkspace()
   const state = useResultState(session)
@@ -330,37 +323,17 @@ function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Ele
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [session])
 
-  // The playing block stays in view (T-24).
+  // The block the player enters comes into view, while playing and on a seek alike (T-24), as
+  // kiChat's player does on every time update.
   useEffect(() => {
-    if (playing && activeBlock >= 0) scrollToBlock(activeBlock)
-  }, [activeBlock, playing])
+    if (activeBlock >= 0) scrollToBlock(activeBlock)
+  }, [activeBlock])
 
   const onTime = useCallback((time: number) => setActiveBlock(blockAt(blocks, time)), [blocks])
 
   const answerLeave = (ok: boolean): void => {
     leave?.resolve(ok)
     setLeave(null)
-  }
-
-  const download = (): void => {
-    const shown = blocks.filter((block) => !state.hidden.has(block.speaker))
-    const text =
-      shown
-        .map(
-          (block) =>
-            `${speakerLabel(block.speaker)} • [${formatTimestamp(block.start)}]\n${blockCopyText(
-              state.segments,
-              block,
-              t('transcription.result.emptySpeakerHint')
-            )}`
-        )
-        .join('\n\n') || transcript.text
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `transkription-${transcript.id}.txt`
-    link.click()
-    URL.revokeObjectURL(url)
   }
 
   const optimize = async (): Promise<void> => {
@@ -374,7 +347,6 @@ function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Ele
         state={state}
         tab={resultTab}
         onTab={setResultTab}
-        onDownload={resultTab === 'export' ? null : download}
         canGenerateSubtitle={Boolean(capabilities?.summaries)}
       />
       {state.keptCopy ? (
@@ -418,63 +390,66 @@ function ResultWorkspace({ session }: { session: ResultSession }): React.JSX.Ele
           {t('transcription.result.saveConflict')}
         </Notice>
       ) : null}
+      {/* Pinned above the scrolling transcript; in Export only hidden, so it plays on. */}
+      <div className={cn('sticky top-0 z-10', resultTab === 'export' && 'hidden')}>
+        <Card>
+          <CardContent className="flex flex-col gap-stack-md pt-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="m-0">
+                {`${t('transcription.result.aiTranscriptLabel')} | ${
+                  corrections
+                    ? t('transcription.result.correctionMode')
+                    : t('transcription.common.preview')
+                }`}
+              </p>
+              {corrections ? (
+                <div className="ml-auto flex items-center gap-1">
+                  <IconButton
+                    label={t('transcription.result.undoAction')}
+                    disabled={state.undo.length === 0}
+                    onClick={() => session.undo()}
+                  >
+                    <Undo2Icon aria-hidden="true" className="size-4" />
+                  </IconButton>
+                  {capabilities?.speakerOptimization ? (
+                    <IconButton
+                      label={
+                        state.optimizing
+                          ? t('transcription.result.speakerOptimizationRunning')
+                          : t('transcription.result.optimizeSpeakersAI')
+                      }
+                      disabled={state.optimizing || state.segments.length === 0}
+                      aria-busy={state.optimizing || undefined}
+                      onClick={() => void optimize()}
+                    >
+                      {state.optimizing ? (
+                        <Spinner
+                          size="sm"
+                          label={t('transcription.result.speakerOptimizationRunning')}
+                        />
+                      ) : (
+                        <WandSparklesIcon aria-hidden="true" className="size-4" />
+                      )}
+                    </IconButton>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <GlobalPlayer
+              sources={sources}
+              blocks={blocks}
+              total={totalDuration(sources, blocks, transcript.duration)}
+              onTime={onTime}
+              onPlayingChange={setPlaying}
+              ref={player}
+            />
+          </CardContent>
+        </Card>
+      </div>
       {resultTab === 'export' ? (
         <ExportView />
       ) : (
         <>
-          <Card>
-            <CardContent className="flex flex-col gap-stack-md pt-6">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="m-0">
-                  {`${t('transcription.result.aiTranscriptLabel')} | ${
-                    corrections
-                      ? t('transcription.result.correctionMode')
-                      : t('transcription.common.preview')
-                  }`}
-                </p>
-                {corrections ? (
-                  <div className="ml-auto flex items-center gap-1">
-                    <IconButton
-                      label={t('transcription.result.undoAction')}
-                      disabled={state.undo.length === 0}
-                      onClick={() => session.undo()}
-                    >
-                      <Undo2Icon aria-hidden="true" className="size-4" />
-                    </IconButton>
-                    {capabilities?.speakerOptimization ? (
-                      <IconButton
-                        label={
-                          state.optimizing
-                            ? t('transcription.result.speakerOptimizationRunning')
-                            : t('transcription.result.optimizeSpeakersAI')
-                        }
-                        disabled={state.optimizing || state.segments.length === 0}
-                        aria-busy={state.optimizing || undefined}
-                        onClick={() => void optimize()}
-                      >
-                        {state.optimizing ? (
-                          <Spinner
-                            size="sm"
-                            label={t('transcription.result.speakerOptimizationRunning')}
-                          />
-                        ) : (
-                          <WandSparklesIcon aria-hidden="true" className="size-4" />
-                        )}
-                      </IconButton>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-              <GlobalPlayer
-                sources={sources}
-                blocks={blocks}
-                total={totalDuration(sources, blocks, transcript.duration)}
-                onTime={onTime}
-                onPlayingChange={setPlaying}
-                ref={player}
-              />
-            </CardContent>
-          </Card>
           <Transcript
             key={corrections ? 'corrections' : 'preview'}
             session={session}

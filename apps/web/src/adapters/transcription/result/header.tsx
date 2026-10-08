@@ -1,12 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  CheckIcon,
-  DownloadIcon,
-  PencilIcon,
-  RotateCcwIcon,
-  SaveIcon,
-  SparklesIcon
-} from 'lucide-react'
+import { CheckIcon, PencilIcon, RotateCcwIcon, SaveIcon, SparklesIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, Input, PageHeader, SegmentedControl, Spinner } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_SUBTITLE_MAX, TRANSCRIPTION_TITLE_MAX } from '@justcampus/shared'
@@ -20,23 +13,20 @@ interface ResultHeaderProps {
   state: ResultState
   tab: ResultTab
   onTab: (tab: ResultTab) => void
-  /** Downloads the shown transcript as text; absent in the Export tab, which has its own. */
-  onDownload: (() => void) | null
   /** Whether the module's chat model can write a subtitle. */
   canGenerateSubtitle: boolean
 }
 
 /**
  * The head of a saved transcript (T-22, T-23, T-35): its title and subtitle, both edited in place
- * (Enter or leaving the field saves, Escape cancels), the save control, the text download and the
- * switch between Corrections, Preview and Export.
+ * (Enter or leaving the field saves, Escape cancels), the save control (kiChat's only header action)
+ * and the switch between Corrections, Preview and Export.
  */
 export function ResultHeader({
   session,
   state,
   tab,
   onTab,
-  onDownload,
   canGenerateSubtitle
 }: ResultHeaderProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -97,17 +87,7 @@ export function ResultHeader({
           ) : null}
         </span>
       }
-      actions={
-        <>
-          <SaveControl session={session} state={state} />
-          {onDownload ? (
-            <Button type="button" variant="outline" onClick={onDownload}>
-              <DownloadIcon aria-hidden="true" className="size-4" />
-              {t('transcription.common.saveFile')}
-            </Button>
-          ) : null}
-        </>
-      }
+      actions={<SaveControl session={session} state={state} />}
     >
       <SegmentedControl
         aria-label={t('transcription.common.views.label')}
@@ -216,9 +196,10 @@ function InlineEdit({
 }
 
 /**
- * The save state of the edits (T-35), after kiChat's save button: "Speichern..." while a save
- * runs (pressing it waits for it), "Gespeichert" for two seconds after a save, then "Änderungen
- * speichern"; a failed save stays visible with a retry. Screen readers hear the changes.
+ * The save state of the edits (T-35), after kiChat's save button: "Datei speichern" until the
+ * first save, "Speichern..." while a save runs (pressing it waits for it), "Gespeichert" for two
+ * seconds after a save or a press, then "Änderungen speichern"; a failed save stays visible with
+ * a retry. Screen readers hear the changes.
  */
 function SaveControl({
   session,
@@ -243,7 +224,7 @@ function SaveControl({
   let control: React.JSX.Element
   if (status === 'pending') {
     control = (
-      <Button type="button" variant="outline" onClick={() => void session.flush()}>
+      <Button type="button" variant="outline" onClick={() => void session.save()}>
         <Spinner size="sm" label={t('transcription.common.saving')} />
         {t('transcription.common.saving')}
       </Button>
@@ -275,7 +256,10 @@ function SaveControl({
   )
 }
 
-/** "Gespeichert" for two seconds after a save, then "Änderungen speichern". */
+/**
+ * "Datei speichern" before the first save of the session, else "Gespeichert" for two seconds
+ * after a save, then "Änderungen speichern".
+ */
 function SavedButton({
   saved,
   session
@@ -291,13 +275,17 @@ function SavedButton({
     return () => clearTimeout(timer)
   }, [saved])
   return (
-    <Button type="button" variant="outline" onClick={() => void session.flush()}>
+    <Button type="button" variant="outline" onClick={() => void session.save()}>
       {fresh ? (
         <CheckIcon aria-hidden="true" className="size-4" />
       ) : (
         <SaveIcon aria-hidden="true" className="size-4" />
       )}
-      {fresh ? t('transcription.common.saved') : t('transcription.result.saveChanges')}
+      {fresh
+        ? t('transcription.common.saved')
+        : saved
+          ? t('transcription.result.saveChanges')
+          : t('transcription.common.saveFile')}
     </Button>
   )
 }

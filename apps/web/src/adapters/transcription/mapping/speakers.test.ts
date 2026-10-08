@@ -36,6 +36,7 @@ function voice(change: Partial<VoiceDraft> = {}): VoiceDraft {
     colorId: null,
     start: 0,
     end: 5,
+    fallback: { start: 0, end: 5 },
     samples: [],
     ...change
   }
@@ -96,6 +97,7 @@ describe('voicesFromSpeakers', () => {
       colorId: 7,
       start: null,
       end: null,
+      fallback: null,
       samples: [{ key: 'local-1', label: 'Sample 1', start: 5, end: 10 }]
     })
     const kept = voicesFromSpeakers([speaker('SPEAKER_00', 0, 2)], labels, [
@@ -112,7 +114,7 @@ describe('voicesFromSpeakers', () => {
   })
 
   it('puts voices added by hand last (T-18, T-20)', () => {
-    const manual = voice({ id: 'manual_1', manual: true, start: null, end: null })
+    const manual = voice({ id: 'manual_1', manual: true, start: null, end: null, fallback: null })
     const ordered = orderVoices([
       manual,
       voice({ id: 'b', start: 3 }),
@@ -211,7 +213,15 @@ describe('voiceDispatch (T-18 to T-20)', () => {
           { key: 'b', label: 'Sample 2', start: 9, end: 11 }
         ]
       }),
-      voice({ id: 'manual_1', manual: true, name: '', start: null, end: null, samples: [] })
+      voice({
+        id: 'manual_1',
+        manual: true,
+        name: '',
+        start: null,
+        end: null,
+        fallback: null,
+        samples: []
+      })
     ]
     expect(voiceDispatch(voices, 60, autoLabel)).toEqual({
       mapping: { SPEAKER_00: 'Ada', manual_1: 'Voice 2' },
@@ -223,9 +233,9 @@ describe('voiceDispatch (T-18 to T-20)', () => {
     })
   })
 
-  it('falls back to the analysed range and drops windows outside the audio', () => {
+  it('falls back to the first analysed window and drops windows outside the audio', () => {
     const voices = [
-      voice({ name: 'Stimme 1', start: 0.5, end: 4 }),
+      voice({ name: 'Stimme 1', start: 0.5, end: 18, fallback: { start: 0.5, end: 4 } }),
       voice({
         id: 'b',
         name: 'Bo',
@@ -235,5 +245,41 @@ describe('voiceDispatch (T-18 to T-20)', () => {
     const dispatch = voiceDispatch(voices, 20, autoLabel)
     expect(dispatch.mapping).toEqual({ SPEAKER_00: 'Voice 1', b: 'Bo' })
     expect(dispatch.snippets).toEqual([{ id: 'SPEAKER_00', name: 'Voice 1', start: 0.5, end: 4 }])
+  })
+
+  it('sends a voice whose samples were deleted with its first analysis window only', () => {
+    // dialog-de: the first voice speaks from 0.03 to 23.81, its first sample is 0.03 to 5.03.
+    const analysed: TranscriptionSpeaker = {
+      id: 'SPEAKER_00',
+      index: 0,
+      label: null,
+      start: 0.03,
+      end: 23.81,
+      samples: [
+        { id: 's1', start: 0.03, end: 5.03 },
+        { id: 's2', start: 17, end: 22 }
+      ]
+    }
+    const [found] = voicesFromSpeakers([analysed], labels)
+    expect(found?.fallback).toEqual({ start: 0.03, end: 5.03 })
+    const deleted = { ...found!, name: 'Ada', samples: [] }
+    expect(voiceDispatch([deleted], 28.7, autoLabel).snippets).toEqual([
+      { id: 'SPEAKER_00', name: 'Ada', start: 0.03, end: 5.03 }
+    ])
+    // A repeat analysis keeping the voice takes the new first window.
+    const again = voicesFromSpeakers(
+      [{ ...analysed, samples: [{ id: 's1', start: 1, end: 6 }] }],
+      labels,
+      [deleted]
+    )
+    expect(again[0]).toMatchObject({ name: 'Ada', samples: [], fallback: { start: 1, end: 6 } })
+    // The automatic voice has no samples: it keeps the whole file.
+    const [automatic] = voicesFromSpeakers(
+      [{ ...analysed, start: 0, end: 28.7, samples: [] }],
+      labels
+    )
+    expect(automatic?.fallback).toEqual({ start: 0, end: 28.7 })
+    // An added voice without samples sends nothing.
+    expect(voiceDispatch([manualVoice([], autoLabel, 1)], 28.7, autoLabel).snippets).toEqual([])
   })
 })
