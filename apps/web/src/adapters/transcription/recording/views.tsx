@@ -18,7 +18,6 @@ import {
   CardContent,
   CardDescription,
   CardTitle,
-  PanelSection,
   Spinner,
   Tabs,
   TabsContent,
@@ -364,23 +363,5 @@ export function RecordView(): React.JSX.Element {
       <RecordingControls kind="record" />
       <TakeList />
     </RecordingTabs>
-  )
-}
-
-/** The side column of the `record` view: the status; the microphone sits in the main card. */
-export function RecordingSettings(): React.JSX.Element {
-  const { t } = useTranslation()
-  const texts = useRecordingStatusTexts()
-  return (
-    <PanelSection title={t('transcription.common.statusLabel')}>
-      <p className="m-0">{texts.title}</p>
-      {texts.error ? (
-        <Notice tone="error" inline>
-          {texts.text}
-        </Notice>
-      ) : (
-        <p className="m-0">{texts.text}</p>
-      )}
-    </PanelSection>
   )
 }
