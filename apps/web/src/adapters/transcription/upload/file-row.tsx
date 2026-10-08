@@ -7,8 +7,8 @@ import { useJobAudioUrl } from '../api'
 import { WaveformPlayer } from '../audio'
 import { unidentifiedVoiceCount } from '../mapping/speakers'
 import { useTranscriptionWorkspace } from '../use-workspace'
+import { FileSteps } from './file-steps'
 import { serverWaveform, type FilePosition, type QueueFile } from './queue'
-import { errorText, percentText, statusText, TONE } from './texts'
 import { useUpload } from './use-upload'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
@@ -36,16 +36,16 @@ export interface FileRowProps {
 
 /**
  * One file of the queue (kiChat's `multi-upload-item`): a handle to drag it (T-07), its player with
- * name, size and length (T-12), the voices to name (T-17), removal (T-08), and its progress and
- * status (T-11), with the reason when it failed (T-16) or what it did without (one automatic voice,
- * no AI correction). The handle takes its own column over the row's full height, so the row reads
- * as indented by it and can be grabbed beside any of its lines. As kiChat's it is compact otherwise:
- * the actions sit on the player's line, and percentage, status and notice share one line below it,
- * with a progress bar beside the percentage while the file processes.
+ * name, size and length (T-12), the voices to name (T-17), removal (T-08), and its steps with
+ * their progress (T-11), with the reason when it failed (T-16) or what it did without (one
+ * automatic voice, no AI correction). The handle takes its own column over the row's full height,
+ * so the row reads as indented by it and can be grabbed beside any of its lines. As kiChat's it is
+ * compact otherwise: the actions sit on the player's line, and the steps take one line below it,
+ * gone once the file is completed.
  */
 export function FileRow(props: FileRowProps): React.JSX.Element {
   const { file, position, saved, locked, saving, processing } = props
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { queue, dialogs, start } = useUpload()
   const { capabilities } = useTranscriptionWorkspace()
   const unnamed = unidentifiedVoiceCount(file.voices)
@@ -55,10 +55,7 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
     !saved &&
     ((file.phase === 'analysisFailed' && (file.uploaded || file.file !== null)) ||
       file.phase === 'failed')
-  const status = statusText(t, file.status)
   const waveform = serverWaveform(file)
-  // The bar shows that the file is being worked on; the badge beside it names the percentage.
-  const progress = file.tone === 'processing' ? Math.min(Math.max(file.progress, 0), 100) : null
 
   const remove = async (): Promise<void> => {
     if (queue.removalDeletesJob(file.id)) {
@@ -180,47 +177,13 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
         ) : (
           <RestoredPlayer file={file} trailing={actions} />
         )}
-        {/*
-         * Percentage, progress bar, status and what the file did without or why it failed share one
-         * line, wrapping where it is too narrow. The bar carries the progressbar role; the status
-         * beside it is announced as it changes.
-         */}
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <Badge appearance="filled" tone={TONE[file.tone]}>
-            {percentText(i18n.language, file.progress)}
+        <FileSteps file={file} />
+        {/* What the file did without stays after its steps are gone. */}
+        {file.notice && !file.error ? (
+          <Badge appearance="text" tone="warning">
+            {t(`transcription.upload.notice.${file.notice}`)}
           </Badge>
-          {progress !== null ? (
-            // DS gap: no Progress; a track in the waveform's unplayed colour, filled in the primary.
-            <div
-              role="progressbar"
-              aria-label={t('transcription.upload.progressOf', { name: file.name })}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(progress)}
-              className="h-1.5 w-32 overflow-hidden rounded-full bg-outline-variant"
-            >
-              <div
-                className="h-full bg-primary transition-[width] motion-reduce:transition-none"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          ) : null}
-          <span aria-live="polite" className="min-w-0">
-            <Badge appearance="text" tone={TONE[file.tone]}>
-              {status}
-            </Badge>
-          </span>
-          {file.error ? (
-            <Badge appearance="text" tone="error">
-              {errorText(t, file.error)}
-            </Badge>
-          ) : null}
-          {file.notice && !file.error ? (
-            <Badge appearance="text" tone="warning">
-              {t(`transcription.upload.notice.${file.notice}`)}
-            </Badge>
-          ) : null}
-        </div>
+        ) : null}
       </div>
     </li>
   )

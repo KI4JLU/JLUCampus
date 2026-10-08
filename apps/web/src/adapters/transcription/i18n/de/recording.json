@@ -116,8 +116,6 @@
   },
   "tracks": {
     "count": "{{count}} Audiospuren",
-    "show": "Spuren anzeigen",
-    "hide": "Spuren ausblenden",
     "listLabel": "Audiospuren von {{name}}",
     "from": "ab {{time}}",
     "download": "Spur {{number}} herunterladen: {{name}}"

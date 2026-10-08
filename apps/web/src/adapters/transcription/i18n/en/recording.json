@@ -116,8 +116,6 @@
   },
   "tracks": {
     "count": "{{count}} audio tracks",
-    "show": "Show tracks",
-    "hide": "Hide tracks",
     "listLabel": "Audio tracks of {{name}}",
     "from": "from {{time}}",
     "download": "Download track {{number}}: {{name}}"

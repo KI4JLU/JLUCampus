@@ -351,25 +351,22 @@ function TrackList({
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon
   return (
     <div className="flex flex-col gap-stack-sm">
-      <div className="flex flex-wrap items-center gap-stack-sm">
-        <Badge tone="info">
-          {t('transcription.recording.tracks.count', { count: tracks.length })}
-        </Badge>
-        {/* DS gap: no Collapsible or Accordion; a button with `aria-expanded` shows the tracks. */}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-expanded={open}
-          aria-controls={open ? id : undefined}
-          onClick={() => setOpen(!open)}
-        >
-          <Chevron {...ICON} />
-          {open
-            ? t('transcription.recording.tracks.hide')
-            : t('transcription.recording.tracks.show')}
-        </Button>
-      </div>
+      {/*
+       * DS gap: no Collapsible or Accordion; the count is the button that shows the tracks, its
+       * chevron and `aria-expanded` tell whether they are shown.
+       */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="self-start"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={() => setOpen(!open)}
+      >
+        <Chevron {...ICON} />
+        {t('transcription.recording.tracks.count', { count: tracks.length })}
+      </Button>
       {open ? (
         <ul
           id={id}
