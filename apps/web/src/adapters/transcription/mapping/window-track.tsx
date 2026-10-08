@@ -35,6 +35,8 @@ interface Drag {
   window: TimeWindow
   scale: TrackScale
   moved: boolean
+  /** Whether the sample played when pressed. */
+  playing: boolean
 }
 
 function cssColor(element: Element, name: string): string {
@@ -53,8 +55,11 @@ export interface WindowTrackProps {
   onChange: (window: TimeWindow) => void
   /** A click without dragging: play from there, or stop (kiChat's editor). */
   onClick: (time: number) => void
-  /** Dragging beside the window scrubs: the pointer's time, at every move. */
-  onScrub: (time: number) => void
+  /**
+   * Dragging beside the window scrubs: the pointer's time, at every move, and whether the sample
+   * played when the drag began.
+   */
+  onScrub: (time: number, startedPlaying: boolean) => void
   /** Where a scrub was let go. */
   onScrubEnd: (time: number) => void
 }
@@ -153,7 +158,8 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
       at: timeAt(event.clientX, scale),
       window,
       scale,
-      moved: false
+      moved: false,
+      playing: playhead !== null
     }
     setFrozen(scale)
   }
@@ -174,7 +180,7 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
       onChange(slideWindow(current.window, current.window.start + time - current.time, duration))
     } else {
       setScrub(time)
-      onScrub(time)
+      onScrub(time, current.playing)
     }
   }
 

@@ -98,15 +98,19 @@ describe('addableMicrophones', () => {
   const choices = [choice('laptop', 1), choice('headset', 2), choice('usb', 3)]
 
   it('offers the default input first, then the devices not in use', () => {
-    expect(addableMicrophones(choices, 'laptop', [headset, tab])).toEqual([
+    expect(addableMicrophones('ready', choices, 'laptop', [headset, tab])).toEqual([
       DEFAULT_DEVICE_ID,
       'usb'
     ])
-    expect(addableMicrophones(choices, DEFAULT_DEVICE_ID, [])).toEqual(['laptop', 'headset', 'usb'])
+    expect(addableMicrophones('ready', choices, DEFAULT_DEVICE_ID, [])).toEqual([
+      'laptop',
+      'headset',
+      'usb'
+    ])
   })
 
   it('offers every microphone without a main one', () => {
-    expect(addableMicrophones(choices, null, [tab])).toEqual([
+    expect(addableMicrophones('ready', choices, null, [tab])).toEqual([
       DEFAULT_DEVICE_ID,
       'laptop',
       'headset',
@@ -116,7 +120,19 @@ describe('addableMicrophones', () => {
 
   it('leaves out the default input once it is added', () => {
     const fallback: RecordingSource = { ...headset, id: 's3', deviceId: DEFAULT_DEVICE_ID }
-    expect(addableMicrophones(choices, 'laptop', [fallback])).toEqual(['headset', 'usb'])
+    expect(addableMicrophones('ready', choices, 'laptop', [fallback])).toEqual(['headset', 'usb'])
+  })
+
+  it('offers the default input without the device list, also with nothing chosen', () => {
+    expect(addableMicrophones('failed', choices, null, [])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('ready', [], null, [])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('failed', [], 'laptop', [tab])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('failed', [], DEFAULT_DEVICE_ID, [])).toEqual([])
+  })
+
+  it('offers nothing while the list loads or without media devices', () => {
+    expect(addableMicrophones('loading', [], null, [])).toEqual([])
+    expect(addableMicrophones('unsupported', [], null, [])).toEqual([])
   })
 })
 

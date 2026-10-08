@@ -15,7 +15,7 @@
   "microphonePermissionDenied": "Microphone permission denied: ",
   "microphonePermissionHint": "Please allow microphone access in the browser prompt.",
   "microphoneReady": "Microphone ready",
-  "microphonesUnavailable": "Microphones unavailable",
+  "microphonesUnavailable": "Microphone list unavailable, only the default microphone can be chosen",
   "minimizeTextView": "Minimize text view",
   "modeLabel": "Mode",
   "modeLocal": "Local (default)",

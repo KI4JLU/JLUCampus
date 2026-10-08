@@ -47,6 +47,22 @@ export function useSampleSource(file: QueueFile): {
   return { resolve }
 }
 
+/**
+ * What one move of a scrub does to the sound: it follows the pointer while it plays. A scrub begun
+ * playing whose sound stopped at an end meanwhile starts it again from the pointer, unless that is
+ * the file's end, where it would stop at once.
+ */
+export function scrubPlayback(move: {
+  time: number
+  playing: boolean
+  startedPlaying: boolean
+  duration: number | null
+}): 'seek' | 'play' | 'none' {
+  if (move.playing) return 'seek'
+  if (!move.startedPlaying) return 'none'
+  return move.duration === null || move.time < move.duration ? 'play' : 'none'
+}
+
 /** What plays: a sample's key and where it stops. */
 interface Playing {
   key: string

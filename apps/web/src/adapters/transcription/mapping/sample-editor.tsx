@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import { CheckIcon, PauseIcon, PlayIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge, Button, Input, Label } from '@ki4jlu/design-system'
+import { scrubPlayback } from './sample-audio'
 import {
   formatWindowTime,
   moveWindowEdge,
@@ -73,10 +74,13 @@ export function SampleEditor(props: SampleEditorProps): React.JSX.Element {
           describedBy={`${id}-hint`}
           onChange={setWindow}
           onClick={(time) => (playing ? props.onStop() : props.onPlay(time, playEnd(time)))}
-          // A scrub moves the sound playing along; without one it plays from where it was let go,
-          // as a click there would.
-          onScrub={(time) => {
-            if (playing) props.onSeek(time, playEnd(time))
+          // A scrub moves the sound playing along, and starts it again when it stopped at an end
+          // during the scrub; without one it plays from where it was let go, as a click there
+          // would.
+          onScrub={(time, startedPlaying) => {
+            const action = scrubPlayback({ time, playing, startedPlaying, duration })
+            if (action === 'seek') props.onSeek(time, playEnd(time))
+            else if (action === 'play') props.onPlay(time, playEnd(time))
           }}
           onScrubEnd={(time) => {
             if (!playing) props.onPlay(time, playEnd(time))

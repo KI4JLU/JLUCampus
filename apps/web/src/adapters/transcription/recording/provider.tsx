@@ -1500,16 +1500,22 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     [microphoneLabel]
   )
   const addable = useMemo(
-    () => addableMicrophones(microphones.choices, microphones.selected, sources.list).map(option),
-    [microphones.choices, microphones.selected, option, sources.list]
+    () =>
+      addableMicrophones(
+        microphones.list,
+        microphones.choices,
+        microphones.selected,
+        sources.list
+      ).map(option),
+    [microphones.list, microphones.choices, microphones.selected, option, sources.list]
   )
   const liveMicrophone = useMemo<LiveMicrophone>(() => {
     const current = microphones.selected
     return {
       current: current === null ? null : option(current),
-      others: addableMicrophones(microphones.choices, current, []).map(option)
+      others: addableMicrophones(microphones.list, microphones.choices, current, []).map(option)
     }
-  }, [microphones.choices, microphones.selected, option])
+  }, [microphones.list, microphones.choices, microphones.selected, option])
   const streams = useMemo<ReadonlyMap<string, MediaStream>>(
     () => (liveStream ? new Map([...heldStreams, [MAIN_SOURCE_ID, liveStream]]) : heldStreams),
     [heldStreams, liveStream]

@@ -424,18 +424,22 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
     <Card>
       <CardContent className="flex flex-col gap-stack-md pt-6">
         {/* The label over the name only; colour, name and removal share one row, centred on the
-        field. */}
+        field. Each sits in its cell explicitly: auto-placement would put the colour beside the
+        label. */}
         <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
-          <Label htmlFor={`${id}-name`} className="col-start-2">
+          <Label htmlFor={`${id}-name`} className="col-start-2 row-start-1">
             {placeLabel}
           </Label>
-          <ColorPicker
-            value={voiceColor(voice, index)}
-            label={t('transcription.upload.mapping.colorOf', { voice: voiceName })}
-            onChange={props.onColor}
-          />
+          <div className="col-start-1 row-start-2 flex">
+            <ColorPicker
+              value={voiceColor(voice, index)}
+              label={t('transcription.upload.mapping.colorOf', { voice: voiceName })}
+              onChange={props.onColor}
+            />
+          </div>
           <Input
             id={`${id}-name`}
+            className="col-start-2 row-start-2"
             value={props.name}
             maxLength={TRANSCRIPTION_SPEAKER_NAME_MAX}
             placeholder={t('transcription.upload.enterNamePlaceholder')}
@@ -444,7 +448,7 @@ function VoiceCard(props: VoiceCardProps): React.JSX.Element {
             disabled={props.disabled}
             onChange={(event) => props.onName(event.target.value)}
           />
-          <div className="flex gap-1">
+          <div className="col-start-3 row-start-2 flex gap-1">
             {props.removing ? (
               <>
                 <Button

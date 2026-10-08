@@ -15,7 +15,7 @@
   "microphonePermissionDenied": "Mikrofonberechtigung verweigert: ",
   "microphonePermissionHint": "Bitte erlaube den Mikrofonzugriff in der Browser-Abfrage.",
   "microphoneReady": "Mikrofon bereit",
-  "microphonesUnavailable": "Mikrofone nicht verfügbar",
+  "microphonesUnavailable": "Mikrofonliste nicht verfügbar, nur das Standardmikrofon ist wählbar",
   "minimizeTextView": "Textansicht minimieren",
   "modeLabel": "Modus",
   "modeLocal": "Lokal (Standard)",

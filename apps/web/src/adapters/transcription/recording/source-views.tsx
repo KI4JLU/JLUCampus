@@ -97,9 +97,10 @@ export function SourceControls({
  * The "+" beside the sources. Regular recording adds a microphone not in use, or a tab, window or
  * screen, before and while recording; the tab picker opens straight from the item's click. Live
  * transcription hears one microphone and chooses or switches it instead; the "+" names the current
- * one, so a switch is heard where the focus returns. Without the device list only the microphones
- * are out of reach. With the microphone permission each microphone's icon lights up while it picks
- * up sound, from a stream opened for as long as the menu is.
+ * one, so a switch is heard where the focus returns. Without the device list only the browser's
+ * default microphone is offered, and why the list is missing shows below it. With the microphone
+ * permission each microphone's icon lights up while it picks up sound, from a stream opened for as
+ * long as the menu is.
  */
 function AddSourceMenu({
   kind,
@@ -147,25 +148,21 @@ function AddSourceMenu({
             {t('transcription.recording.sources.addMicrophone')}
           </DropdownMenuLabel>
         )}
+        {microphones.map((microphone) => (
+          <DropdownMenuItem key={microphone.deviceId} onSelect={() => choose(microphone.deviceId)}>
+            <ActivityIcon
+              icon={MicIcon}
+              stream={null}
+              deviceId={devices.granted ? microphone.deviceId : null}
+            />
+            {microphone.label}
+          </DropdownMenuItem>
+        ))}
         {problem || microphones.length === 0 ? (
           <DropdownMenuItem disabled>
             {problem ?? t('transcription.recording.sources.noMoreMicrophones')}
           </DropdownMenuItem>
-        ) : (
-          microphones.map((microphone) => (
-            <DropdownMenuItem
-              key={microphone.deviceId}
-              onSelect={() => choose(microphone.deviceId)}
-            >
-              <ActivityIcon
-                icon={MicIcon}
-                stream={null}
-                deviceId={devices.granted ? microphone.deviceId : null}
-              />
-              {microphone.label}
-            </DropdownMenuItem>
-          ))
-        )}
+        ) : null}
         {live ? null : (
           <>
             <DropdownMenuSeparator />

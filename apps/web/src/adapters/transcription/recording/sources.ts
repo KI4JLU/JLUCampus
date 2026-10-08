@@ -1,5 +1,6 @@
 import { DEFAULT_DEVICE_ID, type MicrophoneChoice } from './devices'
 import type { RecordingKind } from './state'
+import type { MicrophoneListState } from './use-microphones'
 
 /**
  * The sources a take mixes besides the main microphone: more microphones, and tabs, windows or
@@ -91,17 +92,20 @@ export function sourcesReducer(state: SourcesState, action: SourcesAction): Sour
 
 /**
  * The input devices that can be added, by device id: the browser's default input first, then
- * every device, leaving out the main microphone (`null`: none) and those added already.
+ * every device, leaving out the main microphone (`null`: none) and those added already. Without the
+ * device list (`devices`) only the default input, which opens without it; none while it loads or
+ * without `navigator.mediaDevices`.
  */
 export function addableMicrophones(
+  devices: MicrophoneListState,
   choices: readonly MicrophoneChoice[],
   main: string | null,
   list: readonly RecordingSource[]
 ): string[] {
+  if (devices === 'loading' || devices === 'unsupported') return []
   const used = new Set([main, ...list.map((source) => source.deviceId)])
-  return [DEFAULT_DEVICE_ID, ...choices.map((choice) => choice.deviceId)].filter(
-    (deviceId) => !used.has(deviceId)
-  )
+  const listed = devices === 'ready' ? choices.map((choice) => choice.deviceId) : []
+  return [DEFAULT_DEVICE_ID, ...listed].filter((deviceId) => !used.has(deviceId))
 }
 
 /**

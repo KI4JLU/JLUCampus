@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { PlayRequests, startSample, type SampleMedia } from './sample-audio'
+import { PlayRequests, scrubPlayback, startSample, type SampleMedia } from './sample-audio'
 
 /** An `<audio>` stand-in whose metadata arrives when the test says so. */
 function media(): SampleMedia & { loadMetadata: () => void; play: ReturnType<typeof vi.fn> } {
@@ -122,5 +122,34 @@ describe('sample playback (T-19, T-21)', () => {
       onStart: () => undefined
     })
     expect(outcome).toBe('stale')
+  })
+})
+
+describe('scrubbing the sample (T-19)', () => {
+  it('moves the sound along while it plays', () => {
+    expect(scrubPlayback({ time: 4, playing: true, startedPlaying: true, duration: 10 })).toBe(
+      'seek'
+    )
+  })
+
+  it('starts the sound again when it stopped at an end during a scrub begun playing', () => {
+    expect(scrubPlayback({ time: 4, playing: false, startedPlaying: true, duration: 10 })).toBe(
+      'play'
+    )
+    expect(scrubPlayback({ time: 4, playing: false, startedPlaying: true, duration: null })).toBe(
+      'play'
+    )
+  })
+
+  it('stays silent at the end of the file', () => {
+    expect(scrubPlayback({ time: 10, playing: false, startedPlaying: true, duration: 10 })).toBe(
+      'none'
+    )
+  })
+
+  it('leaves a scrub begun silent silent until it is let go', () => {
+    expect(scrubPlayback({ time: 4, playing: false, startedPlaying: false, duration: 10 })).toBe(
+      'none'
+    )
   })
 })
