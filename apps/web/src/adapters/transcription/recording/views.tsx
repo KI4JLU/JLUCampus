@@ -17,7 +17,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardHeader,
   CardTitle,
   Label,
   PanelSection,
@@ -159,21 +158,12 @@ function ElapsedBadge(): React.JSX.Element | null {
  * The main microphone (T-55): default input first. Regular recording swaps it while it runs; it is
  * locked while a take starts or ends, and while live transcription runs.
  */
-export function DeviceSelect({
-  id,
-  compact = false
-}: {
-  id: string
-  /** The side column's wording while devices load. */
-  compact?: boolean
-}): React.JSX.Element {
+export function DeviceSelect({ id }: { id: string }): React.JSX.Element {
   const { t } = useTranslation()
   const { state, microphones, selectMicrophone } = useRecording()
   const unavailable =
     microphones.list === 'loading'
-      ? compact
-        ? t('transcription.recording.searchingDevices')
-        : t('transcription.recording.loadingMicrophones')
+      ? t('transcription.recording.loadingMicrophones')
       : microphones.list === 'unsupported'
         ? t('transcription.recording.microphoneAccessUnsupported')
         : microphones.list === 'failed'
@@ -305,14 +295,11 @@ export function TakeList(): React.JSX.Element | null {
   if (takes.length === 0) return null
   return (
     <Card>
-      <CardHeader>
-        <CardTitle asChild>
-          <h2>{t('transcription.recording.takesTitle')}</h2>
-        </CardTitle>
-        <CardDescription>{t('transcription.recording.takesHint')}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="m-0 flex list-none flex-col gap-stack-md p-0">
+      <CardContent className="pt-6">
+        <ul
+          aria-label={t('transcription.recording.takesTitle')}
+          className="m-0 flex list-none flex-col gap-stack-md p-0"
+        >
           {takes.map((take) => (
             <TakeItem key={take.id} take={take} />
           ))}
@@ -381,7 +368,7 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
             <IconButton
               ref={confirmRef}
               label={confirmLabel}
-              variant="ghost-destructive"
+              variant="destructive"
               onClick={() => deleteTake(take.id)}
             >
               <CheckIcon {...ICON} />
@@ -391,7 +378,7 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
             </IconButton>
           </div>
         ) : (
-          <IconButton ref={trashRef} label={deleteLabel} variant="ghost-destructive" onClick={arm}>
+          <IconButton ref={trashRef} label={deleteLabel} onClick={arm}>
             <Trash2Icon {...ICON} />
           </IconButton>
         )}
@@ -402,13 +389,13 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
 
 function IconButton({
   label,
-  variant = 'ghost',
+  variant = 'secondary',
   onClick,
   children,
   ref
 }: {
   label: string
-  variant?: 'ghost' | 'ghost-destructive'
+  variant?: 'secondary' | 'destructive'
   onClick: () => void
   children: ReactNode
   ref?: React.Ref<HTMLButtonElement>
@@ -448,37 +435,20 @@ export function RecordView(): React.JSX.Element {
   )
 }
 
-/**
- * The side column of the `record` view: the status and the microphone, as in kiChat, with the
- * other sources.
- */
+/** The side column of the `record` view: the status; the microphone sits in the main card. */
 export function RecordingSettings(): React.JSX.Element {
   const { t } = useTranslation()
-  const id = useId()
   const texts = useRecordingStatusTexts()
   return (
-    <>
-      <PanelSection title={t('transcription.common.statusLabel')}>
-        <p className="m-0">{texts.title}</p>
-        {texts.error ? (
-          <Notice tone="error" inline>
-            {texts.text}
-          </Notice>
-        ) : (
-          <p className="m-0">{texts.text}</p>
-        )}
-      </PanelSection>
-      <PanelSection
-        title={<Label htmlFor={`${id}-device`}>{t('transcription.recording.microphone')}</Label>}
-      >
-        <div className="flex items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <DeviceSelect id={`${id}-device`} compact />
-          </div>
-          <AddSourceMenu />
-        </div>
-        <SourceList />
-      </PanelSection>
-    </>
+    <PanelSection title={t('transcription.common.statusLabel')}>
+      <p className="m-0">{texts.title}</p>
+      {texts.error ? (
+        <Notice tone="error" inline>
+          {texts.text}
+        </Notice>
+      ) : (
+        <p className="m-0">{texts.text}</p>
+      )}
+    </PanelSection>
   )
 }

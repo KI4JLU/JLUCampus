@@ -412,7 +412,7 @@ export function WaveformPlayer({
       <div className="flex min-w-0 items-center gap-3">
         <Button
           type="button"
-          variant="outline"
+          variant="default"
           size="icon"
           aria-label={playLabel}
           title={playLabel}
