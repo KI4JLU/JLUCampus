@@ -23,6 +23,7 @@ import {
   type WidgetRef
 } from '@justcampus/shared'
 import { externalUrlOf } from '@/adapters/registry'
+import { useComponentName } from '@/lib/component-name'
 import { hostnameOf } from '@/lib/links'
 import type { ComponentWidget } from '@/lib/widgets'
 import { ComponentIcon } from './component-icon'
@@ -51,6 +52,7 @@ export function FolderEditorDialog({
   onSave
 }: FolderEditorDialogProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const [title, setTitle] = useState(tile.title)
   const [icon, setIcon] = useState<string | null>(tile.icon ?? null)
   const [items, setItems] = useState<FolderItem[]>(tile.items)
@@ -136,7 +138,7 @@ export function FolderEditorDialog({
                           iconUrl={component.iconUrl}
                           siteUrl={externalUrlOf(component)}
                         />
-                        <span className="truncate">{component.name}</span>
+                        <span className="truncate">{componentName(component)}</span>
                       </Label>
                     </li>
                   )

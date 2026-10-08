@@ -19,6 +19,7 @@ import {
 import { arrayMove, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useTranslation } from 'react-i18next'
 import type { Component } from '@justcampus/shared'
+import { useComponentName } from './component-name'
 
 export type SidebarList = 'sidebar' | 'available'
 export type SidebarLists = Record<SidebarList, string[]>
@@ -84,6 +85,7 @@ export function useSidebarArrangement({
   onSave
 }: SidebarArrangementOptions): SidebarArrangement {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const listRef = useRef<HTMLUListElement | null>(null)
   const availableRef = useRef<HTMLUListElement | null>(null)
   const dragging = useRef(false)
@@ -141,7 +143,10 @@ export function useSidebarArrangement({
     next?.focus()
   }, [lists])
 
-  const nameOf = (id: UniqueIdentifier): string => byId.get(String(id))?.name ?? ''
+  const nameOf = (id: UniqueIdentifier): string => {
+    const component = byId.get(String(id))
+    return component ? componentName(component) : ''
+  }
 
   const add = (id: string): void => {
     pendingFocus.current = { list: 'available', index: renderedIndex(availableRef, id) }

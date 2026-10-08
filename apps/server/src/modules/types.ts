@@ -1,4 +1,9 @@
-import type { Component, SecretKey, SingletonComponentType } from '@justcampus/shared'
+import type {
+  Component,
+  ComponentNameTranslations,
+  SecretKey,
+  SingletonComponentType
+} from '@justcampus/shared'
 import type { Hono } from 'hono'
 import type { ZodType } from 'zod'
 
@@ -34,6 +39,8 @@ export type AppEnvironment = {
 export interface ServerModule<T extends SingletonComponentType> {
   type: T
   defaultName: string
+  /** The default name in the languages it differs in. */
+  defaultNameTranslations: ComponentNameTranslations
   defaultIcon: string
   defaultConfig: ModuleConfigMap[T]
   configSchema: ZodType<ModuleConfigMap[T]>

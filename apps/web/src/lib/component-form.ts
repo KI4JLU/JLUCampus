@@ -3,11 +3,14 @@ import {
   COMPONENT_TYPES,
   componentInputSchema,
   isBuiltInType,
+  LANGUAGES,
   SECRET_VALUE_MAX,
   TRANSLATOR_LLM_MODELS_MAX,
   type AdminComponent,
   type ComponentInput,
-  type ComponentType
+  type ComponentNameTranslations,
+  type ComponentType,
+  type Language
 } from '@justcampus/shared'
 import { componentAdapters } from '@/adapters/registry'
 import { ApiRequestError } from './api'
@@ -16,6 +19,8 @@ import { secretKeysOf, secretsPatch, type SecretDrafts } from './component-secre
 export interface ComponentFormState {
   type: ComponentType
   name: string
+  /** The name per interface language; an empty field means none, so `name` shows there. */
+  nameTranslations: Record<Language, string>
   icon: string | null
   iconUrl: string
   enabled: boolean
@@ -43,6 +48,7 @@ export function initialFormState(component: AdminComponent | null): ComponentFor
     return {
       type: 'iframe',
       name: '',
+      nameTranslations: translationFields({}),
       icon: null,
       iconUrl: '',
       enabled: true,
@@ -53,12 +59,29 @@ export function initialFormState(component: AdminComponent | null): ComponentFor
   return {
     type: component.type,
     name: component.name,
+    nameTranslations: translationFields(component.nameTranslations),
     icon: component.icon,
     iconUrl: component.iconUrl ?? '',
     enabled: component.enabled,
     config: component.config,
     secrets: {}
   }
+}
+
+/** One field per interface language, empty where the component has no translation. */
+function translationFields(translations: ComponentNameTranslations): Record<Language, string> {
+  return Object.fromEntries(
+    LANGUAGES.map((language) => [language, translations[language] ?? ''])
+  ) as Record<Language, string>
+}
+
+/** The filled-in translations; a blank field removes its language's translation. */
+function filledTranslations(fields: Record<Language, string>): ComponentNameTranslations {
+  return Object.fromEntries(
+    LANGUAGES.flatMap((language) =>
+      fields[language].trim() ? [[language, fields[language]] as const] : []
+    )
+  )
 }
 
 /**
@@ -95,6 +118,10 @@ function toFieldErrors(issues: readonly Issue[], type: ComponentType, t: TFuncti
   const messages: Partial<Record<string, string>> = {
     type: t('admin.form.errors.type'),
     name: t('admin.form.errors.name'),
+    // The translations are names too, with the same limits.
+    ...Object.fromEntries(
+      LANGUAGES.map((language) => [`nameTranslations.${language}`, t('admin.form.errors.name')])
+    ),
     icon: t('admin.form.errors.icon'),
     iconUrl: t('admin.form.errors.url'),
     'config.url': t(type === 'iframe' ? 'admin.form.errors.url' : 'admin.form.errors.externalUrl'),
@@ -132,6 +159,7 @@ export function validateComponentForm(state: ComponentFormState, t: TFunction): 
   const result = componentInputSchema.safeParse({
     type: state.type,
     name: state.name,
+    nameTranslations: filledTranslations(state.nameTranslations),
     icon: state.icon,
     iconUrl: iconUrl ? iconUrl : null,
     enabled: state.enabled,

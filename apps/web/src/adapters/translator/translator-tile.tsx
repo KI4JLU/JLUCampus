@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Button, Label, Textarea } from '@ki4jlu/design-system'
 import { TRANSLATE_TEXT_MAX, toTranslatorLanguage } from '@justcampus/shared'
 import { ComponentIcon } from '@/components/component-icon'
+import { useComponentName } from '@/lib/component-name'
 import type { ComponentViewProps } from '../types'
 import { CopyButton } from './copy-button'
 import { LanguageSelect } from './language-select'
@@ -18,6 +19,7 @@ import { useTranslator } from './use-translator'
  */
 export function TranslatorTile({ component }: ComponentViewProps<'translator'>): React.JSX.Element {
   const { t } = useTranslation()
+  const name = useComponentName()(component)
   const id = useId()
   const [text, setText] = useState('')
   const translator = useTranslator({
@@ -47,10 +49,10 @@ export function TranslatorTile({ component }: ComponentViewProps<'translator'>):
           <Link
             to="/c/$componentId"
             params={{ componentId: component.id }}
-            aria-label={t('dashboard.openPage', { name: component.name })}
+            aria-label={t('dashboard.openPage', { name })}
             className="truncate text-on-surface no-underline hover:underline"
           >
-            {component.name}
+            {name}
           </Link>
         </h2>
         <CopyButton

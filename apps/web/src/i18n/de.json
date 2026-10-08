@@ -697,6 +697,8 @@
       "description": "Name und Symbol erscheinen in der Seitenleiste und auf den Widgets der Komponente.",
       "back": "Alle Komponenten",
       "general": "Allgemein",
+      "nameTranslations": "Übersetzte Namen",
+      "nameTranslationsDescription": "Erscheint statt des Namens, wenn die Oberfläche in dieser Sprache angezeigt wird. Leer lassen, um den Namen zu verwenden.",
       "credentials": "Zugangsdaten",
       "credentialsDescription": "Schlüssel werden verschlüsselt gespeichert und nie wieder angezeigt.",
       "configuration": "Konfiguration",

@@ -55,6 +55,7 @@ function startTranscription(): () => void {
 export const transcriptionModule: ServerModule<'transcription'> = {
   type: 'transcription',
   defaultName: 'Transkription',
+  defaultNameTranslations: { en: 'Transcription' },
   defaultIcon: 'mic',
   defaultConfig: transcriptionDefaultConfig,
   configSchema: transcriptionConfigSchema,

@@ -16,6 +16,7 @@ const t = ((key: string) => key) as unknown as TFunction
 const translator: AdminComponent = {
   id: '00000000-0000-4000-8000-000000000001',
   name: 'Übersetzer',
+  nameTranslations: { en: 'Translator' },
   icon: null,
   iconUrl: null,
   enabled: false,
@@ -59,12 +60,25 @@ describe('selectableTypes', () => {
   })
 })
 
+describe('initialFormState', () => {
+  it('has a field per language, empty where the component has no translation', () => {
+    expect(initialFormState(translator).nameTranslations).toEqual({ de: '', en: 'Translator' })
+    expect(initialFormState(null).nameTranslations).toEqual({ de: '', en: '' })
+  })
+})
+
 describe('isFormDirty', () => {
   const baseline = initialFormState(translator)
 
   it('sees a changed field, deep inside the config too', () => {
     expect(isFormDirty(baseline, baseline)).toBe(false)
     expect(isFormDirty({ ...baseline, name: 'Translator' }, baseline)).toBe(true)
+    expect(
+      isFormDirty(
+        { ...baseline, nameTranslations: { de: 'Übersetzer', en: 'Translator' } },
+        baseline
+      )
+    ).toBe(true)
     expect(
       isFormDirty(
         {
@@ -111,6 +125,25 @@ describe('validateComponentForm', () => {
       t
     )
     expect(changed).toMatchObject({ ok: true, input: { secrets: { deeplApiKey: 'key' } } })
+  })
+
+  it('sends only the translations that were filled in', () => {
+    const result = validateComponentForm(
+      { ...initialFormState(translator), nameTranslations: { de: ' Übersetzer ', en: '  ' } },
+      t
+    )
+    expect(result.ok && result.input.nameTranslations).toEqual({ de: 'Übersetzer' })
+  })
+
+  it('reports an overlong translation on its field', () => {
+    const result = validateComponentForm(
+      { ...initialFormState(translator), nameTranslations: { de: '', en: 'x'.repeat(81) } },
+      t
+    )
+    expect(result).toEqual({
+      ok: false,
+      errors: { 'nameTranslations.en': 'admin.form.errors.name' }
+    })
   })
 
   it('reports an overlong secret on its field', () => {

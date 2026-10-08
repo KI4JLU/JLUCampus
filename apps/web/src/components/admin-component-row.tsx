@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Badge, Button, Switch, TableCell, TableRow } from '@ki4jlu/design-system'
 import { isBuiltInType, isDesktopComponentType, type AdminComponent } from '@justcampus/shared'
 import { externalUrlOf, sourceUrlOf } from '@/adapters/registry'
+import { useComponentName } from '@/lib/component-name'
 import { ComponentIcon } from './component-icon'
 
 interface AdminComponentRowProps {
@@ -26,7 +27,7 @@ export function AdminComponentRow({
   onDelete
 }: AdminComponentRowProps): React.JSX.Element {
   const { t } = useTranslation()
-  const { name } = component
+  const name = useComponentName()(component)
   // Built in (modules, desktop components): created by the server, so they cannot be deleted.
   const isBuiltIn = isBuiltInType(component.type)
   const isDesktop = isDesktopComponentType(component.type)

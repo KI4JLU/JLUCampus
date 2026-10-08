@@ -43,6 +43,7 @@ function component(id: string, type: Component['type']): Component {
   const base = {
     id,
     name: id,
+    nameTranslations: {},
     icon: null,
     iconUrl: null,
     enabled: true,

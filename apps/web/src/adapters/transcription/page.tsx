@@ -4,6 +4,7 @@ import { Button, Card, CardContent, Container } from '@ki4jlu/design-system'
 import { ComponentIcon } from '@/components/component-icon'
 import { PageHeader } from '@/components/page-header'
 import { PageSidePanel } from '@/components/page-side-panel'
+import { useComponentName } from '@/lib/component-name'
 import type { ComponentViewProps } from '../types'
 import { useTranscriptionCapabilities } from './api'
 import { ChoiceView } from './choice'
@@ -40,6 +41,7 @@ export function TranscriptionPage({
 function TranscriptionLayout(): React.JSX.Element {
   const { t } = useTranslation()
   const { component, capabilities, view, newTranscription } = useTranscriptionWorkspace()
+  const componentName = useComponentName()
   const capabilitiesQuery = useTranscriptionCapabilities()
   const notSetUp = capabilities && !capabilities.batch && capabilities.realtimeModes.length === 0
 
@@ -52,7 +54,7 @@ function TranscriptionLayout(): React.JSX.Element {
           title={
             <>
               <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} />
-              <span className="truncate">{component.name}</span>
+              <span className="truncate">{componentName(component)}</span>
             </>
           }
           actions={

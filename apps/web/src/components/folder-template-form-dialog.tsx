@@ -25,6 +25,7 @@ import {
 } from '@justcampus/shared'
 import { externalUrlOf } from '@/adapters/registry'
 import type { FieldErrors } from '@/lib/component-form'
+import { useComponentName } from '@/lib/component-name'
 import {
   folderTemplateServerErrors,
   initialFolderTemplateState,
@@ -65,6 +66,7 @@ export function FolderTemplateFormDialog({
   template
 }: FolderTemplateFormDialogProps): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const formId = useId()
   const catalogue = useQuery(adminComponentsQuery)
   const [state, setState] = useState<FolderTemplateFormState>(() =>
@@ -238,7 +240,7 @@ export function FolderTemplateFormDialog({
                 {chosen.map((ref, index) => {
                   const key = widgetRefKey(ref)
                   const widget = widgetsByKey.get(key)
-                  const name = widget?.component.name ?? key
+                  const name = widget ? componentName(widget.component) : key
                   return (
                     <li key={key} className="flex items-center gap-2 rounded-md py-0.5 pl-2">
                       <span className="w-6 shrink-0 text-right text-sm text-on-surface-variant tabular-nums">
@@ -312,6 +314,7 @@ export function FolderTemplateFormDialog({
  */
 function WidgetLabel({ widget }: { widget: ComponentWidget }): React.JSX.Element {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const { component } = widget
   return (
     <>
@@ -320,7 +323,7 @@ function WidgetLabel({ widget }: { widget: ComponentWidget }): React.JSX.Element
         iconUrl={component.iconUrl}
         siteUrl={externalUrlOf(component)}
       />
-      <span className="truncate">{component.name}</span>
+      <span className="truncate">{componentName(component)}</span>
       {component.enabled ? null : (
         <Badge tone="neutral" appearance="filled" className="shrink-0">
           {t('admin.folders.form.widgetDisabled')}
