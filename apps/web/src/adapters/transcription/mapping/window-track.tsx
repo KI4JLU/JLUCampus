@@ -15,8 +15,10 @@ import { formatWindowTime, moveWindowEdge, slideWindow, type TimeWindow } from '
 import { trackBarPeaks, trackScale, type TrackScale } from './track-scale'
 import type { TimePeaks } from './window-peaks'
 
-/** How close to an edge, in pixels, a press grabs it rather than the window. */
-const EDGE_PX = 8
+/** Width in pixels of the grip at each edge (`w-3`), which sits just outside the window. */
+const HANDLE_PX = 12
+/** Pixels beyond its grip a press still grabs an edge. */
+const GRACE_PX = 4
 /** Pixels the pointer moves before a press counts as a drag (kiChat: 3). */
 const DRAG_PX = 3
 /** Seconds the arrow keys move the window, and with Shift. */
@@ -69,13 +71,17 @@ export interface WindowTrackProps {
  * takes a tenth of the track, the audio before and after it the rest (`trackScale`). Dragging an
  * edge changes the window between 0.2 and 5 seconds and pushes it along beyond that, dragging the
  * window moves it, dragging beside it scrubs (the playhead follows the pointer), a click plays from
- * there. The window shows as a light tint behind the bars with a grip at each edge. The arrow keys
- * move it too; the start and end fields beside it set it exactly.
+ * there. The window shows as a light tint behind the bars between two grips, one just outside each
+ * edge; the bars stay neutral and the playhead is a line. The arrow keys move it too; the start and
+ * end fields beside it set it exactly.
  */
 export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
   const { window, duration, peaks, playhead, onChange, onClick, onScrub, onScrubEnd } = props
   const { t } = useTranslation()
   const barRef = useRef<HTMLDivElement>(null)
+  // The track proper, inset by a grip's width on both sides, so the grips fit beside a window at
+  // the file's start or end.
+  const trackRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drag = useRef<Drag | null>(null)
   // While dragging the scale stays put, so the track does not shift under the pointer (kiChat's
@@ -93,7 +99,7 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
-    const bar = barRef.current
+    const bar = trackRef.current
     const context = canvas?.getContext('2d')
     if (!canvas || !bar || !context) return
     const width = bar.clientWidth
@@ -109,23 +115,24 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
       region: '',
       speakers: TRANSCRIPTION_SPEAKER_COLORS
     }
-    // Drawn on the track's own scale, from 0 to 1: one peak per bar and the playhead where the
-    // scale puts them. The window is no solid region here but the tint and grips below.
+    // Drawn on the track's own scale, from 0 to 1, one peak per bar, all in the neutral colour: no
+    // played part, so no primary bars beside the window. The window is the tint and grips below,
+    // the playhead a line of its own.
     drawWaveform(context, {
       width,
       height,
       peaks: trackBarPeaks(scale, peaks, width, BAR_STEP),
       duration: 1,
-      time: shownPlayhead === null ? 0 : scale.toFraction(shownPlayhead),
+      time: 0,
       segments: [],
       region: null,
       colors
     })
-  }, [peaks, shownPlayhead, scale])
+  }, [peaks, scale])
 
   useEffect(() => {
     draw()
-    const bar = barRef.current
+    const bar = trackRef.current
     if (!bar) return
     const observer = new ResizeObserver(() => draw())
     observer.observe(bar)
@@ -133,18 +140,21 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
   }, [draw])
 
   const timeAt = (clientX: number, on: TrackScale): number => {
-    const rect = barRef.current?.getBoundingClientRect()
+    const rect = trackRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0) return on.start
     return on.toTime((clientX - rect.left) / rect.width)
   }
 
   const modeAt = (clientX: number): DragMode => {
-    const rect = barRef.current?.getBoundingClientRect()
+    const rect = trackRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0) return 'outside'
     const toX = (seconds: number): number => scale.toFraction(seconds) * rect.width
     const x = clientX - rect.left
-    if (Math.abs(x - toX(window.start)) <= EDGE_PX) return 'start'
-    if (Math.abs(x - toX(window.end)) <= EDGE_PX) return 'end'
+    // Each grip lies outside its edge: the start's left of it, the end's right of it.
+    const start = toX(window.start)
+    const end = toX(window.end)
+    if (x >= start - HANDLE_PX - GRACE_PX && x <= start + GRACE_PX) return 'start'
+    if (x >= end - GRACE_PX && x <= end + HANDLE_PX + GRACE_PX) return 'end'
     const time = timeAt(clientX, scale)
     return time >= window.start && time <= window.end ? 'window' : 'outside'
   }
@@ -213,9 +223,10 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
     onChange(slideWindow(window, target, duration))
   }
 
-  // Where the window lies on the track, in percent, for its tint and grips.
+  // Where the window and the playhead lie on the track, in percent.
   const windowLeft = scale.toFraction(window.start) * 100
   const windowRight = scale.toFraction(window.end) * 100
+  const playheadAt = shownPlayhead === null ? null : scale.toFraction(shownPlayhead) * 100
 
   const cursor =
     hover === 'start' || hover === 'end'
@@ -254,21 +265,37 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
       }}
     >
       {/* DS gap: no range slider with two thumbs, as above; the window is a light primary tint
-      behind the bars, with a grip at each edge, from the tokens. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 bg-primary/10"
-        style={{ left: `${windowLeft}%`, width: `${windowRight - windowLeft}%` }}
-      />
-      <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" />
-      {[windowLeft, windowRight].map((at, index) => (
+      behind the bars between two grips, primary brackets just outside its edges with grip lines,
+      and the playhead a primary line over the track, all from the tokens. */}
+      <div ref={trackRef} className="pointer-events-none absolute inset-y-0 inset-x-3">
         <div
-          key={index}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-y-1 w-1.5 -translate-x-1/2 rounded-full bg-primary"
-          style={{ left: `${at}%` }}
+          className="absolute inset-y-0 bg-primary/10"
+          style={{ left: `${windowLeft}%`, width: `${windowRight - windowLeft}%` }}
         />
-      ))}
+        <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" />
+        {[windowLeft, windowRight].map((at, index) => (
+          <div
+            key={index}
+            aria-hidden="true"
+            className={cn(
+              'absolute inset-y-0 flex w-3 items-center justify-center gap-0.5 bg-primary',
+              index === 0 ? '-translate-x-full rounded-l-md' : 'rounded-r-md'
+            )}
+            style={{ left: `${at}%` }}
+          >
+            <span className="h-4 w-px rounded-full bg-on-primary" />
+            <span className="h-4 w-px rounded-full bg-on-primary" />
+          </div>
+        ))}
+        {playheadAt !== null && (
+          <div
+            aria-hidden="true"
+            className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-primary"
+            style={{ left: `${playheadAt}%` }}
+          />
+        )}
+      </div>
     </div>
   )
 }

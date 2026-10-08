@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { MicIcon, MonitorUpIcon, PlusIcon, XIcon, type LucideIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -12,27 +12,26 @@ import {
 import { cn } from '@/lib/utils'
 import { Notice } from '../notice'
 import { IconButton } from '../result/icon-button'
-import { useRecording } from './context'
+import { useRecording, type MicrophoneOption } from './context'
 import { MAIN_SOURCE_ID, type RecordingSource } from './sources'
 import { areSourcesLocked, isRecordingBusy, type RecordingKind } from './state'
 import { useAudioActivity } from './use-audio-activity'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
+/** How long the "+" menu waits on a highlighted microphone before opening it for its icon. */
+const PREVIEW_DELAY_MS = 150
 
 /**
- * A source's icon, lit while the source picks up sound (`useAudioActivity`). Decorative only: the
+ * A source's icon, lit while `active`, i.e. while the source picks up sound. Decorative only: the
  * name beside it says what the source is, and nothing is announced.
  */
-function ActivityIcon({
+function LevelIcon({
   icon: Icon,
-  stream,
-  deviceId
+  active
 }: {
   icon: LucideIcon
-  stream: MediaStream | null
-  deviceId: string | null
+  active: boolean
 }): React.JSX.Element {
-  const active = useAudioActivity(stream, deviceId)
   return (
     <Icon
       aria-hidden="true"
@@ -43,6 +42,19 @@ function ActivityIcon({
       )}
     />
   )
+}
+
+/** A source's icon, lit while the source picks up sound (`useAudioActivity`). */
+function ActivityIcon({
+  icon,
+  stream,
+  deviceId
+}: {
+  icon: LucideIcon
+  stream: MediaStream | null
+  deviceId: string | null
+}): React.JSX.Element {
+  return <LevelIcon icon={icon} active={useAudioActivity(stream, deviceId)} />
 }
 
 /** Why the device list is not there, or `null` once it is. */
@@ -99,8 +111,8 @@ export function SourceControls({
  * transcription hears one microphone and chooses or switches it instead; the "+" names the current
  * one, so a switch is heard where the focus returns. Without the device list only the browser's
  * default microphone is offered, and why the list is missing shows below it. With the microphone
- * permission each microphone's icon lights up while it picks up sound, from a stream opened for as
- * long as the menu is.
+ * permission the highlighted microphone's icon lights up while it picks up sound
+ * (`MicrophoneItems`).
  */
 function AddSourceMenu({
   kind,
@@ -110,7 +122,7 @@ function AddSourceMenu({
   triggerRef: React.Ref<HTMLButtonElement>
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const { state, sources, liveMicrophone, selectMicrophone, microphones: devices } = useRecording()
+  const { state, sources, liveMicrophone, selectMicrophone } = useRecording()
   const problem = useMicrophoneListProblem()
   const live = kind === 'live'
   const microphones = live ? liveMicrophone.others : sources.addableMicrophones
@@ -148,16 +160,7 @@ function AddSourceMenu({
             {t('transcription.recording.sources.addMicrophone')}
           </DropdownMenuLabel>
         )}
-        {microphones.map((microphone) => (
-          <DropdownMenuItem key={microphone.deviceId} onSelect={() => choose(microphone.deviceId)}>
-            <ActivityIcon
-              icon={MicIcon}
-              stream={null}
-              deviceId={devices.granted ? microphone.deviceId : null}
-            />
-            {microphone.label}
-          </DropdownMenuItem>
-        ))}
+        <MicrophoneItems microphones={microphones} onChoose={choose} />
         {problem || microphones.length === 0 ? (
           <DropdownMenuItem disabled>
             {problem ?? t('transcription.recording.sources.noMoreMicrophones')}
@@ -177,6 +180,39 @@ function AddSourceMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/**
+ * The "+" menu's microphones. With the microphone permission the one highlighted by pointer or
+ * keyboard is opened for its icon, shortly after it is, so passing over the others opens nothing;
+ * the stream closes when the highlight moves on or the menu closes.
+ */
+function MicrophoneItems({
+  microphones,
+  onChoose
+}: {
+  microphones: readonly MicrophoneOption[]
+  onChoose: (deviceId: string) => void
+}): React.JSX.Element {
+  const { microphones: devices } = useRecording()
+  const [highlighted, setHighlighted] = useState<string | null>(null)
+  const active = useAudioActivity(null, devices.granted ? highlighted : null, PREVIEW_DELAY_MS)
+  return (
+    <>
+      {microphones.map(({ deviceId, label }) => (
+        <DropdownMenuItem
+          key={deviceId}
+          onSelect={() => onChoose(deviceId)}
+          // Radix focuses the item under the pointer as well as the keyboard's.
+          onFocus={() => setHighlighted(deviceId)}
+          onBlur={() => setHighlighted((current) => (current === deviceId ? null : current))}
+        >
+          <LevelIcon icon={MicIcon} active={active && highlighted === deviceId} />
+          {label}
+        </DropdownMenuItem>
+      ))}
+    </>
   )
 }
 
