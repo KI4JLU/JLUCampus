@@ -1,10 +1,10 @@
-import type { MicrophoneChoice } from './devices'
+import { DEFAULT_DEVICE_ID, type MicrophoneChoice } from './devices'
 
 /**
- * The sources a take mixes besides the main microphone, which the microphone select chooses:
- * more microphones, and tabs, windows or screens. They can be added and removed before and while
- * recording. Microphones stay listed for the next take and open with it; a tab, window or screen
- * is shared once, held from then on and let go when its take ends.
+ * The sources a take mixes besides the main microphone: more microphones, and tabs, windows or
+ * screens. They can be added and removed before and while recording, as can the main microphone,
+ * as long as one source remains. Microphones stay listed for the next take and open with it; a
+ * tab, window or screen is shared once, held from then on and let go when its take ends.
  */
 
 /** The main microphone's id in the mix. */
@@ -41,8 +41,8 @@ export type SourcesAction =
   | { type: 'add'; source: RecordingSource }
   | { type: 'remove'; id: string }
   | { type: 'ended'; id: string }
-  /** The main microphone ended; it is not in the list. */
-  | { type: 'mainEnded'; label: string }
+  /** The main microphone was added, removed or ended; it is not in the list. */
+  | { type: 'mainChanged'; change: SourceChange; label: string }
   /** The main microphone is now this device: it is no added source any more. */
   | { type: 'mainSelected'; deviceId: string }
   /** A take ended: its tabs, windows and screens are let go. */
@@ -72,8 +72,8 @@ export function sourcesReducer(state: SourcesState, action: SourcesAction): Sour
         announcement: announce(state, action.type === 'ended' ? 'ended' : 'removed', source.label)
       }
     }
-    case 'mainEnded':
-      return { ...state, announcement: announce(state, 'ended', action.label) }
+    case 'mainChanged':
+      return { ...state, announcement: announce(state, action.change, action.label) }
     case 'mainSelected': {
       const list = state.list.filter((source) => source.deviceId !== action.deviceId)
       return list.length === state.list.length ? state : { ...state, list }
@@ -87,22 +87,43 @@ export function sourcesReducer(state: SourcesState, action: SourcesAction): Sour
   }
 }
 
-/** The input devices that can be added: neither the main microphone nor added already. */
+/**
+ * The input devices that can be added, by device id: the browser's default input first, then
+ * every device, leaving out the main microphone (`null`: none) and those added already.
+ */
 export function addableMicrophones(
   choices: readonly MicrophoneChoice[],
-  main: string,
+  main: string | null,
   list: readonly RecordingSource[]
-): MicrophoneChoice[] {
+): string[] {
   const used = new Set([main, ...list.map((source) => source.deviceId)])
-  return choices.filter((choice) => !used.has(choice.deviceId))
+  return [DEFAULT_DEVICE_ID, ...choices.map((choice) => choice.deviceId)].filter(
+    (deviceId) => !used.has(deviceId)
+  )
 }
 
-/** Added microphones whose device is no longer among `choices`, e.g. unplugged. */
+/** Whether a source may be removed: one always remains. */
+export function canRemoveSource(main: string | null, list: readonly RecordingSource[]): boolean {
+  return (main === null ? 0 : 1) + list.length > 1
+}
+
+/**
+ * The device that follows a removed or ended main microphone: the first added microphone, else
+ * none, and the take goes on with its tabs, windows and screens.
+ */
+export function mainSuccessor(list: readonly RecordingSource[]): string | null {
+  return list.find((source) => source.kind === 'microphone')?.deviceId ?? null
+}
+
+/**
+ * Microphones whose device is no longer among `choices`, e.g. unplugged. The browser's default
+ * input is never gone.
+ */
 export function goneMicrophones(
   list: readonly RecordingSource[],
   choices: readonly MicrophoneChoice[]
 ): RecordingSource[] {
-  const present = new Set(choices.map((choice) => choice.deviceId))
+  const present = new Set([DEFAULT_DEVICE_ID, ...choices.map((choice) => choice.deviceId)])
   return list.filter(
     (source) => source.kind === 'microphone' && !present.has(source.deviceId ?? '')
   )

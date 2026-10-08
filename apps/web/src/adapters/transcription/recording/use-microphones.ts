@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  DEFAULT_DEVICE_ID,
-  keepSelectedDevice,
-  microphoneChoices,
-  type MicrophoneChoice
-} from './devices'
+import { DEFAULT_DEVICE_ID, microphoneChoices, type MicrophoneChoice } from './devices'
 
 /**
  * The state of the device list: `loading` until the first enumeration, `unsupported` without
@@ -15,9 +10,12 @@ export type MicrophoneListState = 'loading' | 'ready' | 'unsupported' | 'failed'
 export interface Microphones {
   list: MicrophoneListState
   choices: MicrophoneChoice[]
-  /** `DEFAULT_DEVICE_ID` for the browser's default input. */
-  selected: string
-  select: (deviceId: string) => void
+  /**
+   * The main microphone: `DEFAULT_DEVICE_ID` for the browser's default input, `null` for none, when
+   * regular recording takes only other sources.
+   */
+  selected: string | null
+  select: (deviceId: string | null) => void
   /** Whether the browser reports the microphone permission as granted. */
   granted: boolean
   /** After a successful `getUserMedia`: the permission is there and devices have labels now. */
@@ -30,16 +28,16 @@ function mediaDevices(): MediaDevices | undefined {
 
 /**
  * Microphone permission and input devices after kiChat (T-55): checks the permission without
- * prompting, enumerates the inputs, follows permission changes and plugged or unplugged devices
- * (a selected device that disappears falls back to the default input). One selection serves
- * regular recording and live transcription.
+ * prompting, enumerates the inputs, follows permission changes and plugged or unplugged devices.
+ * One selection serves regular recording and live transcription; the provider lets a selected
+ * device that disappears go, as any other source.
  */
 export function useMicrophones(): Microphones {
   const [list, setList] = useState<MicrophoneListState>(() =>
     mediaDevices()?.enumerateDevices ? 'loading' : 'unsupported'
   )
   const [choices, setChoices] = useState<MicrophoneChoice[]>([])
-  const [selected, setSelected] = useState(DEFAULT_DEVICE_ID)
+  const [selected, setSelected] = useState<string | null>(DEFAULT_DEVICE_ID)
   const [granted, setGranted] = useState(false)
   const mounted = useRef(true)
 
@@ -51,7 +49,6 @@ export function useMicrophones(): Microphones {
         if (!mounted.current) return
         const next = microphoneChoices(found)
         setChoices(next)
-        setSelected((current) => keepSelectedDevice(current, next))
         setList('ready')
       },
       () => {

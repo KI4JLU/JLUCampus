@@ -11,17 +11,39 @@ import {
 import { Notice } from '../notice'
 import { IconButton } from '../result/icon-button'
 import { useRecording } from './context'
-import { areSourcesLocked } from './state'
+import { MAIN_SOURCE_ID, type RecordingSource } from './sources'
+import { areSourcesLocked, type RecordingKind } from './state'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 
-/**
- * The "+" beside the microphone select: another microphone, or a tab, window or screen, before
- * and while recording. The tab picker opens straight from the item's click.
- */
-export function AddSourceMenu(): React.JSX.Element {
+/** Why the device list is not there, or `null` once it is. */
+function useMicrophoneListProblem(): string | null {
   const { t } = useTranslation()
-  const { state, sources } = useRecording()
+  const { microphones } = useRecording()
+  switch (microphones.list) {
+    case 'loading':
+      return t('transcription.recording.loadingMicrophones')
+    case 'unsupported':
+      return t('transcription.recording.microphoneAccessUnsupported')
+    case 'failed':
+      return t('transcription.recording.microphonesUnavailable')
+    case 'ready':
+      return null
+  }
+}
+
+/**
+ * The "+" beside the sources. Regular recording adds a microphone not in use, or a tab, window or
+ * screen, before and while recording; the tab picker opens straight from the item's click. Live
+ * transcription hears one microphone and switches to another instead.
+ */
+export function AddSourceMenu({ kind }: { kind: RecordingKind }): React.JSX.Element {
+  const { t } = useTranslation()
+  const { state, sources, liveMicrophone, selectMicrophone } = useRecording()
+  const problem = useMicrophoneListProblem()
+  const live = kind === 'live'
+  const microphones = live ? liveMicrophone.others : sources.addableMicrophones
+  const choose = live ? selectMicrophone : sources.addMicrophone
   const reason =
     sources.displaySupport === 'desktop'
       ? t('transcription.recording.sources.displayUnsupportedDesktop')
@@ -32,67 +54,97 @@ export function AddSourceMenu(): React.JSX.Element {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <IconButton
-          label={t('transcription.recording.sources.add')}
+          label={
+            live
+              ? t('transcription.recording.sources.switchMicrophone')
+              : t('transcription.recording.sources.add')
+          }
           variant="outline"
-          disabled={areSourcesLocked(state)}
+          disabled={problem !== null || areSourcesLocked(state)}
         >
           <PlusIcon {...ICON} />
         </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {/* DS gap: no DropdownMenuSub; the microphones are a labelled group instead. */}
-        <DropdownMenuLabel>{t('transcription.recording.sources.addMicrophone')}</DropdownMenuLabel>
-        {sources.addableMicrophones.length === 0 ? (
+        {live ? null : (
+          <DropdownMenuLabel>
+            {t('transcription.recording.sources.addMicrophone')}
+          </DropdownMenuLabel>
+        )}
+        {microphones.length === 0 ? (
           <DropdownMenuItem disabled>
             {t('transcription.recording.sources.noMoreMicrophones')}
           </DropdownMenuItem>
         ) : (
-          sources.addableMicrophones.map((choice) => (
-            <DropdownMenuItem key={choice.deviceId} onSelect={() => sources.addMicrophone(choice)}>
+          microphones.map((microphone) => (
+            <DropdownMenuItem
+              key={microphone.deviceId}
+              onSelect={() => choose(microphone.deviceId)}
+            >
               <MicIcon {...ICON} />
-              {choice.label ?? t('transcription.recording.microphoneN', { n: choice.number })}
+              {microphone.label}
             </DropdownMenuItem>
           ))
         )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem disabled={reason !== null} onSelect={sources.addDisplay}>
-          <MonitorUpIcon {...ICON} />
-          <span className="flex flex-col">
-            {t('transcription.recording.sources.addDisplay')}
-            {reason ? <span>{reason}</span> : null}
-          </span>
-        </DropdownMenuItem>
+        {live ? null : (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={reason !== null} onSelect={sources.addDisplay}>
+              <MonitorUpIcon {...ICON} />
+              <span className="flex flex-col">
+                {t('transcription.recording.sources.addDisplay')}
+                {reason ? <span>{reason}</span> : null}
+              </span>
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
 }
 
-/** The added sources, each with its remove button; nothing without any. */
-export function SourceList(): React.JSX.Element | null {
+/**
+ * The sources, the main microphone first, each with its remove button, which the last one lacks
+ * the use of. Live transcription lists its one microphone alone, without one. While the device
+ * list is not there, why.
+ */
+export function SourceList({ kind }: { kind: RecordingKind }): React.JSX.Element {
   const { t } = useTranslation()
-  const { state, sources } = useRecording()
-  if (sources.list.length === 0) return null
-  const locked = areSourcesLocked(state)
+  const { state, sources, liveMicrophone } = useRecording()
+  const problem = useMicrophoneListProblem()
+  if (problem) return <p className="m-0">{problem}</p>
+  const live = kind === 'live'
+  const list: readonly RecordingSource[] = live
+    ? [{ id: MAIN_SOURCE_ID, kind: 'microphone', ...liveMicrophone.current }]
+    : sources.list
+  const fixed = areSourcesLocked(state) || !sources.removable
   return (
     <ul
-      aria-label={t('transcription.recording.sources.listLabel')}
+      aria-label={
+        live
+          ? t('transcription.recording.microphone')
+          : t('transcription.recording.sources.listLabel')
+      }
       className="m-0 flex list-none flex-col gap-1 p-0"
     >
-      {sources.list.map((source) => {
+      {list.map((source) => {
         const Icon = source.kind === 'display' ? MonitorUpIcon : MicIcon
         return (
-          <li key={source.id} className="flex items-center gap-stack-sm">
+          <li key={source.id} className="flex min-h-9 items-center gap-stack-sm">
             <Icon {...ICON} />
             <span className="min-w-0 flex-1 truncate" title={source.label}>
               {source.label}
             </span>
-            <IconButton
-              label={t('transcription.recording.sources.remove', { name: source.label })}
-              disabled={locked}
-              onClick={() => sources.remove(source.id)}
-            >
-              <XIcon {...ICON} />
-            </IconButton>
+            {live ? null : (
+              <IconButton
+                label={t('transcription.recording.sources.remove', { name: source.label })}
+                disabled={fixed}
+                onClick={() => sources.remove(source.id)}
+              >
+                <XIcon {...ICON} />
+              </IconButton>
+            )}
           </li>
         )
       })}

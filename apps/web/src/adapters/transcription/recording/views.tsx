@@ -18,13 +18,7 @@ import {
   CardContent,
   CardDescription,
   CardTitle,
-  Label,
   PanelSection,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Spinner,
   Tabs,
   TabsContent,
@@ -39,15 +33,11 @@ import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { BackupFailedNotice, LeftoverNotices } from './backup-views'
 import { useRecording, type RecordedTake } from './context'
-import { DEFAULT_DEVICE_ID } from './devices'
 import { useElapsedSeconds, useRecordingStatusTexts } from './hooks'
 import { AddSourceMenu, SourceList, SourceNotices } from './source-views'
-import { areSourcesLocked, isRecordingBusy, type RecordingKind } from './state'
+import { isRecordingBusy, type RecordingKind } from './state'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
-
-/** Radix Select takes no empty value; this one stands for the browser's default input. */
-const DEFAULT_OPTION = '__default__'
 
 /**
  * Regular recording and live transcription as tabs of one work area, as in kiChat. While something
@@ -155,58 +145,8 @@ function ElapsedBadge(): React.JSX.Element | null {
 }
 
 /**
- * The main microphone (T-55): default input first. Regular recording swaps it while it runs; it is
- * locked while a take starts or ends, and while live transcription runs.
- */
-export function DeviceSelect({ id }: { id: string }): React.JSX.Element {
-  const { t } = useTranslation()
-  const { state, microphones, selectMicrophone } = useRecording()
-  const unavailable =
-    microphones.list === 'loading'
-      ? t('transcription.recording.loadingMicrophones')
-      : microphones.list === 'unsupported'
-        ? t('transcription.recording.microphoneAccessUnsupported')
-        : microphones.list === 'failed'
-          ? t('transcription.recording.microphonesUnavailable')
-          : null
-
-  if (unavailable)
-    return (
-      <Select disabled value="">
-        <SelectTrigger id={id}>
-          <SelectValue placeholder={unavailable} />
-        </SelectTrigger>
-        <SelectContent />
-      </Select>
-    )
-
-  const value = microphones.selected === DEFAULT_DEVICE_ID ? DEFAULT_OPTION : microphones.selected
-  return (
-    <Select
-      disabled={areSourcesLocked(state)}
-      value={value}
-      onValueChange={(next) => selectMicrophone(next === DEFAULT_OPTION ? DEFAULT_DEVICE_ID : next)}
-    >
-      <SelectTrigger id={id}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={DEFAULT_OPTION}>
-          {t('transcription.recording.defaultMicrophone')}
-        </SelectItem>
-        {microphones.choices.map((choice) => (
-          <SelectItem key={choice.deviceId} value={choice.deviceId}>
-            {choice.label ?? t('transcription.recording.microphoneN', { n: choice.number })}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-/**
- * Start and stop, uploading the takes, and the microphone (kiChat's bar under the card); regular
- * recording adds and lists its other sources beside the microphone.
+ * Start and stop, uploading the takes, and the sources with the "+" beside them (kiChat's bar under
+ * the card). Live transcription lists its one microphone, and the "+" switches it.
  */
 export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.Element {
   const { t } = useTranslation()
@@ -262,17 +202,11 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
             </Button>
           ) : null}
         </div>
-        <div className="flex min-w-56 flex-1 flex-col gap-2 sm:max-w-sm">
-          <Label htmlFor={`${id}-device`} className="sr-only">
-            {t('transcription.recording.microphone')}
-          </Label>
-          <div className="flex items-center gap-1">
-            <div className="min-w-0 flex-1">
-              <DeviceSelect id={`${id}-device`} />
-            </div>
-            {kind === 'record' ? <AddSourceMenu /> : null}
+        <div className="flex min-w-56 flex-1 items-start gap-1 sm:max-w-sm">
+          <div className="min-w-0 flex-1">
+            <SourceList kind={kind} />
           </div>
-          {kind === 'record' ? <SourceList /> : null}
+          <AddSourceMenu kind={kind} />
         </div>
         {!batch && takes.length > 0 ? (
           <p id={`${id}-upload-hint`} className="m-0 basis-full">
