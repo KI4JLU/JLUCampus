@@ -40,8 +40,8 @@ export interface FileRowProps {
  * status (T-11), with the reason when it failed (T-16) or what it did without (one automatic voice,
  * no AI correction). The handle takes its own column over the row's full height, so the row reads
  * as indented by it and can be grabbed beside any of its lines. As kiChat's it is compact otherwise:
- * the actions sit on the player's line, progress, status and notice share one line below it, and
- * while the file processes its waveform fills with the progress.
+ * the actions sit on the player's line, and percentage, status and notice share one line below it,
+ * with a progress bar beside the percentage while the file processes.
  */
 export function FileRow(props: FileRowProps): React.JSX.Element {
   const { file, position, saved, locked, saving, processing } = props
@@ -57,8 +57,8 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
       file.phase === 'failed')
   const status = statusText(t, file.status)
   const waveform = serverWaveform(file)
-  // The waveform shows that the file is being worked on; the badge below names the percentage.
-  const progress = file.tone === 'processing' ? file.progress : null
+  // The bar shows that the file is being worked on; the badge beside it names the percentage.
+  const progress = file.tone === 'processing' ? Math.min(Math.max(file.progress, 0), 100) : null
 
   const remove = async (): Promise<void> => {
     if (queue.removalDeletesJob(file.id)) {
@@ -173,32 +173,38 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
             knownDuration={file.duration ?? undefined}
             jobId={waveform?.jobId ?? null}
             jobRevision={waveform?.revision}
-            progress={progress}
             trailing={actions}
             className="gap-1"
             onDuration={(seconds) => queue.setDuration(file.id, seconds)}
           />
         ) : (
-          <RestoredPlayer file={file} progress={progress} trailing={actions} />
+          <RestoredPlayer file={file} trailing={actions} />
         )}
         {/*
-         * Progress, status and what the file did without or why it failed share one line, wrapping
-         * where it is too narrow. The DS has no Progress component and none may be made up: the
-         * percentage is a Badge, which carries the progressbar role for assistive technology, and
-         * the waveform above fills with it. The status beside it is announced as it changes.
+         * Percentage, progress bar, status and what the file did without or why it failed share one
+         * line, wrapping where it is too narrow. The bar carries the progressbar role; the status
+         * beside it is announced as it changes.
          */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <Badge
-            appearance="filled"
-            tone={TONE[file.tone]}
-            role="progressbar"
-            aria-label={t('transcription.upload.progressOf', { name: file.name })}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(file.progress)}
-          >
+          <Badge appearance="filled" tone={TONE[file.tone]}>
             {percentText(i18n.language, file.progress)}
           </Badge>
+          {progress !== null ? (
+            // DS gap: no Progress; a track in the waveform's unplayed colour, filled in the primary.
+            <div
+              role="progressbar"
+              aria-label={t('transcription.upload.progressOf', { name: file.name })}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress)}
+              className="h-1.5 w-32 overflow-hidden rounded-full bg-outline-variant"
+            >
+              <div
+                className="h-full bg-primary transition-[width] motion-reduce:transition-none"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          ) : null}
           <span aria-live="polite" className="min-w-0">
             <Badge appearance="text" tone={TONE[file.tone]}>
               {status}
@@ -223,11 +229,9 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
 /** A restored job has no local file: it plays from storage (T-15). */
 function RestoredPlayer({
   file,
-  progress,
   trailing
 }: {
   file: QueueFile
-  progress: number | null
   trailing: ReactNode
 }): React.JSX.Element {
   const audio = useJobAudioUrl(file.uploaded ? file.jobId : null)
@@ -240,7 +244,6 @@ function RestoredPlayer({
       knownDuration={file.duration ?? undefined}
       jobId={waveform?.jobId ?? null}
       jobRevision={waveform?.revision}
-      progress={progress}
       trailing={trailing}
       className="gap-1"
     />
