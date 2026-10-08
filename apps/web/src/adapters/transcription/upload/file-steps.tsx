@@ -28,7 +28,8 @@ const MARK = { 'aria-hidden': true, className: 'size-3.5', strokeWidth: 3 } as c
  * active one's bar as the progressbar, and hear when the active step or its status changes, not
  * every percent.
  *
- * DS gap: no Stepper / Progress; circles, lines and bar are composed from the DS colour tokens,
+ * DS gap: no Stepper / Progress; circles, lines and bar are composed from the DS colour tokens
+ * (the pastel `primary-fixed-dim` for the active step and its fill, as asked for over `primary`),
  * the glow of a bar without percentage eases with an arbitrary symmetric curve.
  */
 export function FileSteps({ file }: { file: QueueFile }): React.JSX.Element | null {
@@ -168,15 +169,15 @@ function ActiveStep({
           state === 'error'
             ? 'bg-error text-on-error'
             : state === 'waiting'
-              ? 'border-2 border-primary text-primary'
-              : 'bg-primary text-on-primary ring-2 ring-primary/25'
+              ? 'border-2 border-primary-fixed-dim text-on-surface'
+              : 'bg-primary-fixed-dim text-on-primary-fixed ring-2 ring-primary-fixed-dim/40'
         )}
       >
         {state === 'error' ? <XIcon {...MARK} /> : active + 1}
       </span>
       <span
         aria-hidden="true"
-        className={cn(TEXT, 'shrink-0', state === 'error' ? 'text-error' : 'text-primary')}
+        className={cn(TEXT, 'shrink-0', state === 'error' ? 'text-error' : 'text-on-surface')}
       >
         {label}
       </span>
@@ -205,19 +206,19 @@ function ActiveStep({
                 'relative h-1.5 min-w-8 flex-1 overflow-hidden rounded-full',
                 percent !== null
                   ? 'bg-outline-variant'
-                  : 'bg-primary/20 motion-reduce:bg-primary/40'
+                  : 'bg-outline-variant motion-reduce:bg-outline/40'
               )}
             >
               {percent !== null ? (
                 <div
-                  className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+                  className="h-full rounded-full bg-primary-fixed-dim transition-[width] duration-500 ease-out motion-reduce:transition-none"
                   style={{ width: `${percent}%` }}
                 />
               ) : (
-                // Without a percentage a glow with soft ends glides over the tinted bar, from just
+                // Without a percentage a grey glow with soft ends glides over the grey bar, from just
                 // left of it to just right of it, so the loop has no seam; when motion is reduced,
                 // the still bar only turns a shade stronger.
-                <div className="absolute inset-y-0 left-full w-2/5 bg-linear-to-r from-transparent via-primary to-transparent animate-in slide-in-from-left-[350%] repeat-infinite animation-duration-2000 ease-[cubic-bezier(0.45,0,0.55,1)] motion-reduce:hidden" />
+                <div className="absolute inset-y-0 left-full w-2/5 bg-linear-to-r from-transparent via-outline/50 to-transparent animate-in slide-in-from-left-[350%] repeat-infinite animation-duration-2000 ease-[cubic-bezier(0.45,0,0.55,1)] motion-reduce:hidden" />
               )}
             </div>
           ) : (
@@ -227,7 +228,10 @@ function ActiveStep({
             />
           )}
           {percent !== null ? (
-            <span aria-hidden="true" className={cn(TEXT, 'shrink-0 text-primary tabular-nums')}>
+            <span
+              aria-hidden="true"
+              className={cn(TEXT, 'shrink-0 text-on-surface-variant tabular-nums')}
+            >
               {percentText(i18n.language, percent)}
             </span>
           ) : null}
