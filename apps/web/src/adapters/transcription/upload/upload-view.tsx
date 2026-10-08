@@ -11,7 +11,7 @@ import {
   FileDropzone,
   Spinner
 } from '@ki4jlu/design-system'
-import { TRANSCRIPTION_FILE_ACCEPT, TRANSCRIPTION_MAX_FILE_BYTES } from '@justcampus/shared'
+import { TRANSCRIPTION_MAX_FILE_BYTES } from '@justcampus/shared'
 import { SpeakerMappingDialog } from '../mapping'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { GroupBlock } from './group-block'
@@ -25,7 +25,8 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
  * The work area of the `upload` view, after kiChat's file view: the drop area with the file
  * chooser (T-03), the queue of transcript groups (T-05 to T-08, T-11, T-12) and the start (T-13).
  * Rows and groups take files dragged within the queue or from outside; the move menu of each row
- * is the keyboard's way.
+ * is the keyboard's way. Files dropped anywhere else in the view go where the drop area puts them
+ * (kiChat's drop handling on the whole file view).
  */
 export function UploadView(): React.JSX.Element {
   const { t } = useTranslation()
@@ -63,6 +64,24 @@ export function UploadView(): React.JSX.Element {
     if (dropTarget !== groupIndex) setDropTarget(groupIndex)
   }
 
+  /** Files from outside dropped anywhere else in the view; ignored while a start runs (kiChat). */
+  const viewDragOver = (event: DragEvent<HTMLElement>): void => {
+    if (event.defaultPrevented || dragged.current !== null) return
+    if (!event.dataTransfer.types.includes('Files')) return
+    // Also while a start runs, so the browser does not open the file instead of the page.
+    event.preventDefault()
+    event.dataTransfer.dropEffect = state.processing ? 'none' : 'copy'
+  }
+
+  const viewDrop = (event: DragEvent<HTMLElement>): void => {
+    // The drop area, groups and rows took theirs already.
+    if (event.defaultPrevented || dragged.current !== null) return
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    if (state.processing || event.dataTransfer.files.length === 0) return
+    void addFiles(Array.from(event.dataTransfer.files), null)
+  }
+
   const drop = (
     groupIndex: number,
     fileIndex: number | null,
@@ -81,7 +100,12 @@ export function UploadView(): React.JSX.Element {
   }
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-stack-lg">
+    <section
+      aria-labelledby={headingId}
+      className="flex flex-col gap-stack-lg"
+      onDragOver={viewDragOver}
+      onDrop={viewDrop}
+    >
       <h2 id={headingId} className="sr-only">
         {t('transcription.common.choiceUploadTitle')}
       </h2>
@@ -99,13 +123,8 @@ export function UploadView(): React.JSX.Element {
                   })}
                 </CardDescription>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={state.processing}
-                onClick={() => queue.addGroup()}
-              >
+              {/* Open during a start too, as kiChat's; the start leaves the new group alone. */}
+              <Button type="button" variant="outline" size="sm" onClick={() => queue.addGroup()}>
                 <PlusIcon {...ICON} />
                 {t('transcription.upload.addTranscript')}
               </Button>
@@ -137,16 +156,19 @@ export function UploadView(): React.JSX.Element {
       ) : null}
 
       {state.processing ? null : (
+        // The whole area opens the chooser, as kiChat's; its "button" is only the look of one, so
+        // no control sits inside another.
         <FileDropzone
           icon={<FileUpIcon />}
+          onBrowse={() => choose(null)}
           onFiles={(dropped) => {
             if (dragged.current === null) void addFiles(dropped, null)
           }}
           title={
             <span className="flex flex-wrap items-center justify-center gap-2">
               {t('transcription.upload.dropZoneText')}
-              <Button type="button" onClick={() => choose(null)}>
-                {t('transcription.upload.selectFromComputer')}
+              <Button asChild>
+                <span>{t('transcription.upload.selectFromComputer')}</span>
               </Button>
             </span>
           }
@@ -176,15 +198,13 @@ export function UploadView(): React.JSX.Element {
       ) : null}
 
       {/*
-       * The chooser behind "Choose from your computer" and each group's "Add file". It offers only
-       * the supported formats; the queue still checks every file after the choice (T-04), since
-       * the system dialog lets users switch to "all files".
+       * The chooser behind the drop area and each group's "Add file". Like kiChat's it lists all
+       * files (T-03); the queue checks each file after the choice and names the refused ones (T-04).
        */}
       {/* eslint-disable-next-line design-system/no-raw-ui-elements -- a hidden file input, opened by DS buttons */}
       <input
         ref={input}
         type="file"
-        accept={TRANSCRIPTION_FILE_ACCEPT}
         multiple
         hidden
         tabIndex={-1}

@@ -24,23 +24,21 @@ const values = {
 }
 
 describe('assembleSummary', () => {
-  it('renders static blocks with every placeholder and alias filled, sections as level-2 headings', () => {
+  it('writes only the sections as level-2 headings with their content, as kiChat', () => {
     const structure: TranscriptionTemplateBlock[] = [
       { type: 'heading', level: 1, text: 'Protokoll: {{title}}' },
       { type: 'text', text: 'Am {{datum}} mit {{teilnehmer}} ({{dauer}}), {{titel}}' },
+      { type: 'section', id: 'summary', heading: 'Zusammenfassung', instruction: 'x' },
       { type: 'divider' },
-      { type: 'section', id: 'tasks', heading: 'Aufgaben für {{participants}}', instruction: 'x' },
+      { type: 'section', id: 'tasks', heading: 'Aufgaben für {{teilnehmer}}', instruction: 'x' },
       { type: 'heading', level: 3, text: '' }
     ]
-    const markdown = assembleSummary(structure, values, { tasks: '- Raum buchen' })
-    expect(markdown).toBe(
-      [
-        '# Protokoll: Teamsitzung',
-        'Am 04.10.2026 mit Anna, Ben (45 Min), Teamsitzung',
-        '---',
-        '## Aufgaben für Anna, Ben\n\n- Raum buchen'
-      ].join('\n\n')
-    )
+    const markdown = assembleSummary(structure, values, {
+      summary: 'Kurz.',
+      tasks: '- Raum buchen'
+    })
+    // `kc-files/summary.md`: no title, date or rule; one newline after each heading.
+    expect(markdown).toBe('## Zusammenfassung\nKurz.\n\n## Aufgaben für Anna, Ben\n- Raum buchen')
     expect(markdown).not.toMatch(/\{\{/)
   })
 

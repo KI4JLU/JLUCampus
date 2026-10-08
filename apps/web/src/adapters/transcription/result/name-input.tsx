@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { CheckIcon } from 'lucide-react'
+import { CheckIcon, XIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, Input } from '@ki4jlu/design-system'
 
@@ -14,12 +14,14 @@ interface NameInputProps {
   onCancel: () => void
   /** Leaving the field submits instead of cancelling. */
   submitOnBlur?: boolean
+  /** A cancel button (X) next to the check, as kiChat's history rename has. */
+  cancelButton?: boolean
 }
 
 /**
  * kiChat's inline name field (speaker rename, new speaker, history rename): Enter or the check
- * button confirms, Escape cancels, an empty name keeps the old one. It takes the focus and selects
- * its text when it appears.
+ * button confirms, Escape or the X button (where shown) cancels, an empty name keeps the old one.
+ * It takes the focus and selects its text when it appears.
  */
 export function NameInput({
   label,
@@ -28,7 +30,8 @@ export function NameInput({
   maxLength,
   onSubmit,
   onCancel,
-  submitOnBlur = false
+  submitOnBlur = false,
+  cancelButton = false
 }: NameInputProps): React.JSX.Element {
   const { t } = useTranslation()
   const ref = useRef<HTMLInputElement>(null)
@@ -87,6 +90,21 @@ export function NameInput({
       >
         <CheckIcon aria-hidden="true" className="size-4" />
       </Button>
+      {cancelButton ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={t('transcription.common.cancel')}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation()
+            finish(false)
+          }}
+        >
+          <XIcon aria-hidden="true" className="size-4" />
+        </Button>
+      ) : null}
     </span>
   )
 }

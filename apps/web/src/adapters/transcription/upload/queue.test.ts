@@ -7,6 +7,7 @@ import {
   dropTargetIndex,
   duplicateKey,
   findFile,
+  handoverGroupIndex,
   moveFile,
   newGroup,
   queueFileFrom,
@@ -132,6 +133,14 @@ describe('adding files (T-03, T-05)', () => {
     expect(dropTargetIndex([group('A', ['a']), group('B')])).toBe(1)
     expect(dropTargetIndex([group('A', ['a'], true), group('B', ['b'])])).toBe(1)
     expect(dropTargetIndex([group('A', ['a'], true)])).toBe(1)
+  })
+
+  it('puts recorded takes into the first group unless it is saved (T-58)', () => {
+    expect(handoverGroupIndex([group('A', ['a']), group('B')], 'first')).toBe(0)
+    expect(handoverGroupIndex([group('A')], 'first')).toBe(0)
+    expect(handoverGroupIndex([group('A', ['a'], true), group('B')], 'first')).toBeNull()
+    expect(handoverGroupIndex([], 'first')).toBeNull()
+    expect(handoverGroupIndex([group('A', ['a'])], 'own')).toBeNull()
   })
 
   it('sums the sizes', () => {

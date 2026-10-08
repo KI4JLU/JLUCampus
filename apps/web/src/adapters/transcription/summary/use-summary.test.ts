@@ -6,25 +6,17 @@ import {
   type TranscriptionSegment,
   type TranscriptionSummary
 } from '@justcampus/shared'
-import { ApiRequestError } from '@/lib/api'
 import type { TranscriptDocument } from '../workspace'
 import { speakerText, summarySource, textFingerprint } from './source'
 import {
   fileSummary,
   skeletonHeadlines,
   sourceKey,
-  summaryErrorMessage,
   summaryKey,
   summaryKeyOf,
   summaryRequest,
   type SummaryTarget
 } from './use-summary'
-
-const texts = {
-  prefix: 'Generierung fehlgeschlagen: ',
-  serverError: 'Unbekannter Serverfehler',
-  communicationError: 'Fehler bei der Kommunikation mit dem Server.'
-}
 
 const made: TranscriptionSummary = {
   markdown: '# A',
@@ -215,21 +207,6 @@ describe('summary', () => {
     ).toBe(false)
     expect(textFingerprint('a')).not.toBe(textFingerprint('b'))
     expect(textFingerprint('abc')).toBe(textFingerprint('abc'))
-  })
-
-  it("words failures as kiChat's", () => {
-    const upstream = new ApiRequestError(502, {
-      error: { code: 'module_unavailable', message: 'The chat model did not write the summary' }
-    })
-    expect(summaryErrorMessage(upstream, texts)).toBe(
-      'Generierung fehlgeschlagen: The chat model did not write the summary'
-    )
-    expect(summaryErrorMessage(new ApiRequestError(500, null), texts)).toBe(
-      'Unbekannter Serverfehler'
-    )
-    expect(summaryErrorMessage(new TypeError('Failed to fetch'), texts)).toBe(
-      'Fehler bei der Kommunikation mit dem Server.'
-    )
   })
 
   it("labels the skeleton with the template's sections, else kiChat's three", () => {

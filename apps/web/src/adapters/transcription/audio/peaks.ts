@@ -2,7 +2,7 @@ import {
   TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES,
   type TranscriptionJobPeaks
 } from '@justcampus/shared'
-import { getJobPeaks } from '../api'
+import { getJobAudioUrl, getJobPeaks } from '../api'
 
 /**
  * Waveform data for the players, after kiChat's `WaveformAudioPlayer`: a fixed number of
@@ -180,6 +180,73 @@ export function jobTimePeaks(jobId: string): Promise<JobTimePeaks | null> {
 export async function jobWaveform(jobId: string): Promise<DecodedWaveform | null> {
   const time = await jobTimePeaks(jobId)
   return time ? { peaks: overviewPeaks(time.peaks), duration: time.duration } : null
+}
+
+/** Peaks of the result's global waveform, kiChat's `WAVEFORM_PEAK_RESOLUTION`. */
+export const GLOBAL_PEAK_RESOLUTION = 400
+
+/** A source file's range on the transcript's time line. */
+export interface TimelineRange {
+  startTime: number
+  endTime: number
+}
+
+/**
+ * One waveform over the time line of several source files, after kiChat's global
+ * `computeWaveformPeaks`: each bucket takes the peak of the file whose `[startTime, endTime)` holds
+ * its middle, at the same fraction of that file's peaks, and the whole is scaled so the loudest is
+ * 1. `null` while no file has peaks; files without peaks stay silent.
+ */
+export function globalPeaks(
+  sources: readonly TimelineRange[],
+  perSource: ReadonlyArray<readonly number[] | null>,
+  total: number,
+  resolution = GLOBAL_PEAK_RESOLUTION
+): number[] | null {
+  if (total <= 0 || sources.length === 0 || perSource.every((peaks) => !peaks)) return null
+  const peaks = new Array<number>(resolution).fill(0)
+  for (let bucket = 0; bucket < resolution; bucket++) {
+    const time = ((bucket + 0.5) / resolution) * total
+    const index = sources.findIndex((source) => time >= source.startTime && time < source.endTime)
+    const source = sources[index]
+    const filePeaks = perSource[index]
+    if (!source || !filePeaks || filePeaks.length === 0) continue
+    const length = source.endTime - source.startTime
+    if (length <= 0) continue
+    const fraction = (time - source.startTime) / length
+    peaks[bucket] =
+      filePeaks[Math.min(filePeaks.length - 1, Math.floor(fraction * filePeaks.length))] ?? 0
+  }
+  const loudest = Math.max(...peaks, 0.01)
+  return peaks.map((peak) => peak / loudest)
+}
+
+// By job: a transcript's files are decoded once per page, not every time it opens.
+const sourceCache = new Map<string, Promise<DecodedWaveform | null>>()
+
+/**
+ * The waveform of one source file of a transcript, for the global waveform: its audio decoded here
+ * up to `TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES`, else (or when that fails) the one the analysis
+ * computed; `null` without either. A missing one is asked for again later.
+ */
+export function sourceWaveform(jobId: string, size: number): Promise<DecodedWaveform | null> {
+  let pending = sourceCache.get(jobId)
+  if (!pending) {
+    const decoded =
+      size > TRANSCRIPTION_WAVEFORM_DECODE_MAX_BYTES
+        ? Promise.resolve(null)
+        : getJobAudioUrl(jobId)
+            .then((media) => urlWaveform(media.url))
+            .catch(() => null)
+    pending = decoded
+      .then((result) => result ?? jobWaveform(jobId))
+      .then((result) => {
+        if (!result) sourceCache.delete(jobId)
+        return result
+      })
+    sourceCache.set(jobId, pending)
+  }
+  return pending
 }
 
 /** `mm:ss`, or `hh:mm:ss` from an hour on; anything not a time shows `00:00`. */

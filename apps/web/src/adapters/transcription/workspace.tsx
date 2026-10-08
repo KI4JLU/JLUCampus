@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   TranscriptionCapabilities,
   TranscriptionJobSettings,
@@ -37,7 +37,14 @@ export interface PendingUpload {
   files: File[]
   /** Name of the group they form; `null`: the queue's next `Transcript n`. */
   title: string | null
+  /**
+   * `'first'`: they join the first group, as kiChat's `uploadLiveRecording` does with the takes,
+   * unless it is saved; `'own'`: a group of their own.
+   */
+  target: PendingUploadTarget
 }
+
+export type PendingUploadTarget = 'own' | 'first'
 
 /**
  * The transcript open in the result workspace with the edits made to it, so the export and the
@@ -84,8 +91,12 @@ export interface TranscriptionWorkspace {
   setBeforeLeave: (check: BeforeLeave | null) => void
   /** Files waiting for the upload queue, oldest first. */
   pendingUploads: readonly PendingUpload[]
-  /** Hands files to the upload queue as one group and shows it. */
-  enqueueUpload: (files: File[], title?: string | null) => void
+  /** Hands files to the upload queue, as one group unless `target` says otherwise, and shows it. */
+  enqueueUpload: (
+    files: File[],
+    title?: string | null,
+    options?: { target?: PendingUploadTarget }
+  ) => void
   /** Takes the waiting files out; the upload queue calls it when it adds them. */
   takePendingUploads: () => PendingUpload[]
 }
@@ -132,7 +143,11 @@ export function TranscriptionWorkspaceProvider({
 
   const openTranscript = useCallback(
     async (id: string): Promise<void> => {
-      if (id === transcriptId && view === 'result') return
+      // kiChat's click on the open entry: back to the preview; the session keeps its edits.
+      if (id === transcriptId && view === 'result') {
+        setResultTab('preview')
+        return
+      }
       if (!(await mayLeave())) return
       setCurrentDocument(null)
       setTranscriptId(id)
@@ -151,10 +166,23 @@ export function TranscriptionWorkspaceProvider({
     setView('choice')
   }, [mayLeave, setHistorySearch, setResultTab, setTranscriptId, setView])
 
+  // kiChat empties the history search whenever the entry choice shows (T-01).
+  useEffect(() => {
+    if (view === 'choice') setHistorySearch('')
+  }, [view, setHistorySearch])
+
   const enqueueUpload = useCallback(
-    (files: File[], title: string | null = null) => {
+    (
+      files: File[],
+      title: string | null = null,
+      options: { target?: PendingUploadTarget } = {}
+    ) => {
       if (files.length === 0) return
-      setPendingUploads((current) => [...current, { id: crypto.randomUUID(), files, title }])
+      const target = options.target ?? 'own'
+      setPendingUploads((current) => [
+        ...current,
+        { id: crypto.randomUUID(), files, title, target }
+      ])
       setView('upload')
     },
     [setPendingUploads, setView]

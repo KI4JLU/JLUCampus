@@ -58,9 +58,11 @@ const GROUP_LABELS = {
  * The user's saved transcripts in the side column (T-37 to T-40), after kiChat's history: newest
  * change first in date groups, a title search, and per entry rename and delete. The server's list
  * is authoritative; while it cannot be loaded the titles this browser kept stand in, and
- * transcripts only this browser has are listed too.
+ * transcripts only this browser has are listed too. As in kiChat it shows at the entry choice and
+ * beside a transcript, not while uploading or recording; it stays mounted there all the same, as
+ * it keeps the saves that fail meanwhile (T-39).
  */
-export function HistorySection(): React.JSX.Element {
+export function HistorySection(): React.JSX.Element | null {
   const { t } = useTranslation()
   const client = useQueryClient()
   const headingId = useId()
@@ -104,6 +106,7 @@ export function HistorySection(): React.JSX.Element {
     if (key && server) changeLocalHistory(key, (stored) => syncLocalHistory(stored, server))
   }, [key, list.data])
 
+  const shown = view === 'choice' || view === 'result'
   const entries = mergeHistory(list.data, records)
   const groups = groupHistory(entries, historySearch, new Date(now))
 
@@ -181,6 +184,7 @@ export function HistorySection(): React.JSX.Element {
     })
   }
 
+  if (!shown) return null
   return (
     <PanelSection title={t('transcription.result.history')} titleId={headingId}>
       <Input
@@ -232,6 +236,7 @@ export function HistorySection(): React.JSX.Element {
                       maxLength={TRANSCRIPTION_HISTORY_TITLE_MAX}
                       onSubmit={(title) => void rename(entry, title)}
                       onCancel={() => setRenaming(null)}
+                      cancelButton
                     />
                   </li>
                 ) : (
@@ -245,13 +250,13 @@ export function HistorySection(): React.JSX.Element {
                     actionsLabel={t('transcription.result.actionsFor')}
                     actions={[
                       {
-                        label: t('transcription.result.rename'),
+                        label: t('transcription.result.renameTranscription'),
                         icon: <PencilIcon aria-hidden="true" className="size-4" />,
                         // After the menu has closed and given the focus back.
                         onSelect: () => requestAnimationFrame(() => setRenaming(entry.id))
                       },
                       {
-                        label: t('transcription.common.delete'),
+                        label: t('transcription.result.deleteTranscription'),
                         icon: <Trash2Icon aria-hidden="true" className="size-4" />,
                         destructive: true,
                         onSelect: () => requestAnimationFrame(() => setDeleting(entry))
@@ -277,7 +282,7 @@ export function HistorySection(): React.JSX.Element {
           <DialogFooter>
             <DialogClose asChild>
               <Button type="button" variant="secondary" disabled={remove.isPending}>
-                {t('transcription.common.cancel')}
+                {t('transcription.common.decline')}
               </Button>
             </DialogClose>
             <Button

@@ -77,7 +77,12 @@ export const TRANSCRIPTION_REDACTIONS_PER_SEGMENT_MAX = 500
 /** Longest time any offset may name: a week, far beyond any recording. */
 export const TRANSCRIPTION_SECONDS_MAX = 7 * 24 * 60 * 60
 export const TRANSCRIPTION_SPEAKERS_MAX = 50
-export const TRANSCRIPTION_SAMPLES_PER_SPEAKER_MAX = 20
+/**
+ * Samples one voice may carry at most. kiChat has no such limit; this generous bound only guards
+ * the analysis and dispatch payloads against abuse (the final diarisation hears at most 15 seconds
+ * per name anyway), and the mapping dialog says why its add button stops there.
+ */
+export const TRANSCRIPTION_SAMPLES_PER_SPEAKER_MAX = 50
 /**
  * Files one transcript (an upload group) may combine at most. kiChat has no such limit, and the
  * admin's optional `maxFilesPerGroup` is the only product limit (unset: none, T-04, T-13); this

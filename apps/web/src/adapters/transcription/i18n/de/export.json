@@ -100,6 +100,7 @@
   "newHeading": "Neue Überschrift",
   "newTemplate": "Neue Vorlage",
   "newTemplateName": "Meine neue Vorlage",
+  "newTemplateSectionInstruction": "Fasse das Gespräch in 3-4 Sätzen zusammen",
   "newText": "Neuer Text",
   "noAiContentYet": "Noch kein KI-Inhalt generiert. Klicke oben auf „Vorschau testen“.",
   "noSegments": "Das Transkript enthält noch keinen Text.",
@@ -143,6 +144,7 @@
   "saveFailed": "Fehler beim Speichern: ",
   "saveTemplate": "Vorlage speichern",
   "searchTemplate": "Vorlage suchen",
+  "searchTemplatePlaceholder": "Suchen...",
   "section": "Abschnitt",
   "sectionConnectionError": "Verbindungsfehler beim Generieren.",
   "sectionNamePlaceholder": "Abschnittsname (z.B. Zusammenfassung)",
@@ -150,35 +152,35 @@
   "shortcuts": {
     "summary": {
       "heading": "Zusammenfassung",
-      "instruction": "Fasse das Gespräch in 3-4 Sätzen zusammen"
+      "instruction": "Fasse das Gespräch in 3–4 Sätzen zusammen"
     },
     "todos": {
-      "heading": "To-dos",
-      "instruction": "Erstelle eine To-do-Liste mit Aufgaben, Zuständigkeiten und Fristen."
+      "heading": "To-Dos",
+      "instruction": "Erstelle eine To-do-Liste mit Aufgaben, Zuständigkeiten und Fristen"
     },
     "decisions": {
       "heading": "Entscheidungen",
-      "instruction": "Liste alle getroffenen Entscheidungen als Stichpunkte."
+      "instruction": "Liste alle getroffenen Entscheidungen und Beschlüsse als Stichpunkte"
     },
     "results": {
       "heading": "Ergebnisse",
-      "instruction": "Fasse die wichtigsten Ergebnisse des Gesprächs zusammen."
+      "instruction": "Fasse die wichtigsten Ergebnisse zusammen"
     },
     "keyPoints": {
       "heading": "Kernaussagen",
-      "instruction": "Fasse die wichtigsten Kernaussagen als Stichpunkte zusammen."
+      "instruction": "Fasse die Hauptthemen und wichtigsten Kernaussagen zusammen"
     },
     "quotes": {
       "heading": "Zitate",
-      "instruction": "Extrahiere besonders prägnante und repräsentative Zitate aus dem Gespräch."
+      "instruction": "Extrahiere besonders prägnante und repräsentative Zitate"
     },
     "topics": {
       "heading": "Themen",
-      "instruction": "Gliedere das Gespräch in die behandelten Themenschwerpunkte."
+      "instruction": "Gliedere das Gespräch in die behandelten Themenschwerpunkte"
     },
     "free": {
-      "heading": "Abschnitt",
-      "instruction": ""
+      "heading": "Freier KI-Abschnitt",
+      "instruction": "Anweisung für die KI eingeben"
     }
   },
   "showSpeakers": "Sprecher anzeigen",

@@ -31,6 +31,9 @@ import { IconButton } from './icon-button'
 import { NameInput } from './name-input'
 import type { GlobalPlayerHandle } from './player'
 import {
+  blockOf,
+  caretAt,
+  domPoint,
   isSelectionHandle,
   measureSelection,
   readSelection,
@@ -89,10 +92,51 @@ export function Transcript({
   /** The concealed range the toolbar offers to show again, for placing the toolbar. */
   const redactionElement = useRef<HTMLElement | null>(null)
   const [editing, setEditing] = useState<number | null>(null)
+  /** Where the caret goes when the editor opens: the clicked character, as in kiChat. */
+  const caret = useRef(0)
   const [renaming, setRenaming] = useState<number | null>(null)
   const [selection, setSelection] = useState<BlockSelection | null>(null)
   const [redaction, setRedaction] = useState<RedactionTarget | null>(null)
   const { segments, hidden, focused } = state
+
+  // A selection stays in the block it started in, on screen as well, in both tabs (kiChat's
+  // `selectionchange` handler): dragged out of it, it ends at that block's edge.
+  useEffect(() => {
+    const onChange = (): void => {
+      const holder = area.current
+      const current = window.getSelection()
+      if (!holder || !current || current.isCollapsed) return
+      const { anchorNode, anchorOffset, focusNode, focusOffset } = current
+      if (!anchorNode || !focusNode || !holder.contains(anchorNode)) return
+      const block = blockOf(anchorNode)
+      if (block === null || blockOf(focusNode) === block) return
+      const text = holder.querySelector(`[data-block="${block}"]`)
+      if (!text) return
+      const probe = document.createRange()
+      probe.setStart(anchorNode, anchorOffset)
+      const down = probe.comparePoint(focusNode, focusOffset) > 0
+      const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT)
+      let first: Text | null = null
+      let last: Text | null = null
+      while (walker.nextNode()) {
+        last = walker.currentNode as Text
+        first ??= last
+      }
+      if (!first || !last) return
+      if (down) current.setBaseAndExtent(anchorNode, anchorOffset, last, last.length)
+      else current.setBaseAndExtent(anchorNode, anchorOffset, first, 0)
+    }
+    document.addEventListener('selectionchange', onChange)
+    return () => document.removeEventListener('selectionchange', onChange)
+  }, [])
+
+  // The open editor takes the caret where the text was clicked.
+  useEffect(() => {
+    const field = editor.current
+    if (editing === null || !field) return
+    const offset = Math.min(caret.current, field.value.length)
+    field.setSelectionRange(offset, offset)
+  }, [editing])
 
   // The document's selection in the transcript, as segment offsets (mouse and touch handles).
   useEffect(() => {
@@ -121,7 +165,8 @@ export function Transcript({
     }
   }, [corrections, segments, blocks])
 
-  const startEditing = (index: number): void => {
+  const startEditing = (index: number, offset = 0): void => {
+    caret.current = offset
     editorDone.current = false
     setSelection(null)
     setRedaction(null)
@@ -309,7 +354,6 @@ export function Transcript({
                       disabled={!hasAudio}
                       onClick={() => {
                         if (isPlaying) player.current?.pause()
-                        else if (corrections) player.current?.play(block.start, block.end)
                         else player.current?.play(block.start)
                       }}
                     >
@@ -402,6 +446,7 @@ export function Transcript({
                             placeholder={t('transcription.result.emptySpeakerHint')}
                             maxLength={TRANSCRIPTION_SEGMENT_TEXT_MAX}
                             rows={Math.max(2, Math.ceil(segment.text.length / 80))}
+                            spellCheck={false}
                             autoFocus
                             onKeyDown={(event) => {
                               if (event.key === 'Enter') {
@@ -436,11 +481,12 @@ export function Transcript({
                           <SegmentText
                             segment={segment}
                             index={index}
+                            segments={segments}
                             corrections={corrections}
                             placeholder={t('transcription.result.emptySpeakerHint')}
                             redactionLabel={t('transcription.result.redactionLabel')}
                             editLabel={t('transcription.result.editText')}
-                            onEdit={() => startEditing(index)}
+                            onEdit={(offset) => startEditing(index, offset)}
                             onRedaction={(redactionIndex, element) => {
                               window.getSelection()?.removeAllRanges()
                               setSelection(null)
@@ -556,22 +602,27 @@ function sameSelection(a: BlockSelection | null, b: BlockSelection | null): bool
 interface SegmentTextProps {
   segment: TranscriptionSegment
   index: number
+  /** All segments, to map the clicked point into the text. */
+  segments: readonly TranscriptionSegment[]
   corrections: boolean
   placeholder: string
   redactionLabel: string
   editLabel: string
-  onEdit: () => void
+  /** Opens the editor, its caret at `offset` into the text. */
+  onEdit: (offset: number) => void
   onRedaction: (redaction: number, element: HTMLElement) => void
 }
 
 /**
  * One segment's text: concealed ranges as a badge (T-33), the placeholder as its hint (T-30). In
- * correction mode a click that is not the end of a selection, or Enter, opens it for editing; a
- * click on a concealed range offers to show it again.
+ * correction mode a click that is not the end of a selection, or Enter, opens it for editing,
+ * with the caret where it was clicked (kiChat's `makeSegmentEditable`); a click on a concealed
+ * range offers to show it again. Spell checking stays off, as in kiChat.
  */
 function SegmentText({
   segment,
   index,
+  segments,
   corrections,
   placeholder,
   redactionLabel,
@@ -629,15 +680,18 @@ function SegmentText({
       role="button"
       tabIndex={0}
       title={editLabel}
-      onClick={() => {
+      onClick={(event) => {
         const current = window.getSelection()
         if (current && !current.isCollapsed && current.toString().trim() !== '') return
-        onEdit()
+        // The editor shows the text as stored (the placeholder as empty), so offsets carry over.
+        const at = isPlaceholder(segment.text) ? null : caretAt(event.clientX, event.clientY)
+        const point = at ? domPoint(at.node, at.offset, 'start', segments) : null
+        onEdit(point && point.segment === index ? point.offset : 0)
       }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
-          onEdit()
+          onEdit(0)
         }
       }}
     >

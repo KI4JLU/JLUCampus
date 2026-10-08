@@ -72,7 +72,7 @@ export function TemplateLibraryDialog({
       newTemplateDraft({
         name: t('transcription.export.newTemplateName'),
         sectionHeading: t('transcription.export.shortcuts.summary.heading'),
-        sectionInstruction: t('transcription.export.shortcuts.summary.instruction')
+        sectionInstruction: t('transcription.export.newTemplateSectionInstruction')
       })
     )
 
@@ -110,7 +110,7 @@ export function TemplateLibraryDialog({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             leadingIcon={<SearchIcon {...ICON} />}
-            placeholder={t('transcription.export.searchTemplate')}
+            placeholder={t('transcription.export.searchTemplatePlaceholder')}
             aria-label={t('transcription.export.searchTemplate')}
           />
           {templates.isPending ? (
@@ -260,17 +260,18 @@ function DeleteTemplateDialog({
     <Dialog open={template !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent closeLabel={t('transcription.common.close')}>
         <DialogHeader>
-          <DialogTitle>{t('transcription.export.deleteTemplateTitle')}</DialogTitle>
+          {/* The history's delete dialog's words, as kiChat's one warning dialog serves both. */}
+          <DialogTitle>{t('transcription.result.deleteTitle')}</DialogTitle>
           <DialogDescription>{t('transcription.export.confirmDeleteTemplate')}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <DialogClose asChild>
             <Button type="button" variant="secondary">
-              {t('transcription.common.cancel')}
+              {t('transcription.common.decline')}
             </Button>
           </DialogClose>
           <Button type="button" variant="destructive" disabled={remove.isPending} onClick={confirm}>
-            {t('transcription.common.delete')}
+            {t('transcription.common.confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>

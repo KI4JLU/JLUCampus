@@ -6,8 +6,8 @@ import type { SelectionBounds, SpeakerBlock, TextPoint } from '../segments'
  * transcript marks its elements: `data-block` on a block's text, `data-seg` on everything of a
  * segment, `data-start` on a shown piece (its offset into the segment's text), `data-start` and
  * `data-end` with `data-redacted` on a concealed piece, `data-placeholder` on the placeholder
- * hint and `data-gap` on the blank between two segments. A selection is kept within the block it
- * starts in, as kiChat locks it to one speaker.
+ * hint and `data-gap` on the blank between two segments. A selection is kept within the block its
+ * anchor lies in, as kiChat locks it to one speaker.
  */
 
 export interface BlockSelection {
@@ -89,8 +89,9 @@ export function blockOf(node: Node): number | null {
 }
 
 /**
- * The selection inside `area` as segment offsets, kept to the block it starts in; `null` when it
- * is empty, blank or outside.
+ * The selection inside `area` as segment offsets, kept to the block its anchor (where the drag
+ * began) lies in, the one the transcript keeps it to on screen; `null` when it is empty, blank or
+ * outside.
  */
 export function readSelection(
   selection: Selection | null,
@@ -102,11 +103,17 @@ export function readSelection(
   if (selection.toString().trim() === '') return null
   const range = selection.getRangeAt(0)
   if (!area.contains(range.startContainer) || !area.contains(range.endContainer)) return null
-  const startBlock = blockOf(range.startContainer)
+  const anchorBlock = selection.anchorNode ? blockOf(selection.anchorNode) : null
+  const startBlock = anchorBlock ?? blockOf(range.startContainer)
   if (startBlock === null) return null
   const block = blocks[startBlock]
   if (!block) return null
-  const start = domPoint(range.startContainer, range.startOffset, 'start', segments)
+  // An edge outside the block (a drag not yet cut back) is the block's own edge.
+  let start =
+    blockOf(range.startContainer) === startBlock
+      ? domPoint(range.startContainer, range.startOffset, 'start', segments)
+      : null
+  start ??= { segment: block.segmentIndices[0]!, offset: 0 }
   let end =
     blockOf(range.endContainer) === startBlock
       ? domPoint(range.endContainer, range.endOffset, 'end', segments)
@@ -115,7 +122,6 @@ export function readSelection(
     const last = block.segmentIndices[block.segmentIndices.length - 1]!
     end = { segment: last, offset: segments[last]?.text.length ?? 0 }
   }
-  if (!start) return null
   return { block: startBlock, bounds: { start, end } }
 }
 
