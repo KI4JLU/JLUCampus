@@ -1,16 +1,7 @@
 import { useId, useRef, useState, type DragEvent } from 'react'
-import { FileUpIcon, PlayIcon, PlusIcon } from 'lucide-react'
+import { PlayIcon, PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  FileDropzone,
-  Spinner
-} from '@ki4jlu/design-system'
+import { Badge, Button, FileDropzone, PageHeader, Spinner } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_MAX_FILE_BYTES } from '@justcampus/shared'
 import { SpeakerMappingDialog } from '../mapping'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -24,9 +15,8 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 /**
  * The work area of the `upload` view, after kiChat's file view: the drop area with the file
  * chooser (T-03), the queue of transcript groups (T-05 to T-08, T-11, T-12) and the start (T-13).
- * Rows and groups take files dragged within the queue or from outside; the move menu of each row
- * is the keyboard's way. Files dropped anywhere else in the view go where the drop area puts them
- * (kiChat's drop handling on the whole file view).
+ * Rows and groups take files dragged within the queue or from outside. Files dropped anywhere else
+ * in the view go where the drop area puts them (kiChat's drop handling on the whole file view).
  */
 export function UploadView(): React.JSX.Element {
   const { t } = useTranslation()
@@ -102,7 +92,7 @@ export function UploadView(): React.JSX.Element {
   return (
     <section
       aria-labelledby={headingId}
-      className="flex flex-col gap-stack-lg"
+      className="flex flex-col gap-stack-md"
       onDragOver={viewDragOver}
       onDrop={viewDrop}
     >
@@ -110,56 +100,60 @@ export function UploadView(): React.JSX.Element {
         {t('transcription.common.choiceUploadTitle')}
       </h2>
       {files.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-stack-sm">
-              <div className="flex min-w-0 flex-col gap-1">
-                <CardTitle asChild>
-                  <h3>{`${t('transcription.upload.fileListTitle')} (${files.length})`}</h3>
-                </CardTitle>
-                <CardDescription>
+        <>
+          {/*
+           * The list is the page's own content, no card around it: a section header with the
+           * total size and adding a group on the title's line, then the groups.
+           */}
+          <PageHeader
+            headingLevel={3}
+            title={`${t('transcription.upload.fileListTitle')} (${files.length})`}
+            actions={
+              <>
+                <Badge appearance="text" tone="neutral">
                   {t('transcription.upload.totalFileSize', {
                     size: (totalBytes(state.groups) / (1024 * 1024)).toFixed(1)
                   })}
-                </CardDescription>
-              </div>
-              {/* Open during a start too, as kiChat's; the start leaves the new group alone. */}
-              <Button type="button" variant="outline" size="sm" onClick={() => queue.addGroup()}>
-                <PlusIcon {...ICON} />
-                {t('transcription.upload.addTranscript')}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-stack-md">
-            {state.groups.map((group, index) => (
-              <GroupBlock
-                key={group.id}
-                group={group}
-                index={index}
-                state={state}
-                dropTarget={dropTarget === index}
-                onAddFile={choose}
-                onOpenMapping={setMappingFile}
-                onDragStart={(position) => {
-                  dragged.current = position
-                }}
-                onDragEnd={() => {
-                  dragged.current = null
-                  setDropTarget(null)
-                }}
-                onDragOver={(groupIndex, _fileIndex, event) => dragOver(groupIndex, event)}
-                onDrop={drop}
-              />
-            ))}
-          </CardContent>
-        </Card>
+                </Badge>
+                {/* Open during a start too, as kiChat's; the start leaves the new group alone. */}
+                <Button type="button" variant="outline" size="sm" onClick={() => queue.addGroup()}>
+                  <PlusIcon {...ICON} />
+                  {t('transcription.upload.addTranscript')}
+                </Button>
+              </>
+            }
+          />
+          {state.groups.map((group, index) => (
+            <GroupBlock
+              key={group.id}
+              group={group}
+              index={index}
+              state={state}
+              dropTarget={dropTarget === index}
+              onAddFile={choose}
+              onOpenMapping={setMappingFile}
+              onDragStart={(position) => {
+                dragged.current = position
+              }}
+              onDragEnd={() => {
+                dragged.current = null
+                setDropTarget(null)
+              }}
+              onDragOver={(groupIndex, _fileIndex, event) => dragOver(groupIndex, event)}
+              onDrop={drop}
+            />
+          ))}
+        </>
       ) : null}
 
       {state.processing ? null : (
         // The whole area opens the chooser, as kiChat's; its "button" is only the look of one, so
-        // no control sits inside another.
+        // no control sits inside another. Slim as kiChat's: no icon, the hint on one line.
+        // DS gap: FileDropzone has no way to leave out its icon (`null` gives the default cloud);
+        // `false` renders nothing in the slot.
         <FileDropzone
-          icon={<FileUpIcon />}
+          icon={false}
+          className="py-3"
           onBrowse={() => choose(null)}
           onFiles={(dropped) => {
             if (dragged.current === null) void addFiles(dropped, null)
@@ -167,18 +161,12 @@ export function UploadView(): React.JSX.Element {
           title={
             <span className="flex flex-wrap items-center justify-center gap-2">
               {t('transcription.upload.dropZoneText')}
-              <Button asChild>
+              <Button asChild size="sm">
                 <span>{t('transcription.upload.selectFromComputer')}</span>
               </Button>
             </span>
           }
-          hint={
-            <>
-              {t('transcription.upload.supportedFormats')}
-              <br />
-              {maxHint}
-            </>
-          }
+          hint={`${t('transcription.upload.supportedFormats')} ${maxHint}`}
         />
       )}
 

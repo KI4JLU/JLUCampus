@@ -83,11 +83,13 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
       {/*
        * The header names the folder: its name takes the card title's type (CardTitle hands its type
        * tokens to the inline field), and the band is tinted, so it reads apart from the files below.
+       * The band is slim, as kiChat's: its height is that of the icon buttons, which the title's
+       * line does not exceed.
        * DS gap: CardHeader has no tone; the tint is the primary/10 of a pressed outline button, the
        * card clips it to its corners.
        */}
-      <CardHeader className="flex-row flex-wrap items-center gap-2 bg-primary/10 py-4">
-        <FolderIcon aria-hidden className="size-6 shrink-0 text-primary" />
+      <CardHeader className="flex-row flex-wrap items-center gap-2 bg-primary/10 px-4 py-2">
+        <FolderIcon aria-hidden className="size-5 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           <CardTitle asChild>
             <Input
@@ -146,7 +148,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
         )}
       </CardHeader>
       {hasBody ? (
-        <CardContent className="flex flex-col gap-stack-md pt-6">
+        <CardContent className="flex flex-col gap-stack-sm p-4">
           {group.saveConflict ? (
             <Notice tone="warning" title={t('transcription.upload.saveFailed')}>
               {t(`transcription.upload.saveConflict.${group.saveConflict}`)}
@@ -170,13 +172,13 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
             />
           ) : null}
           {group.files.length > 0 ? (
-            <ul className="m-0 flex list-none flex-col gap-stack-md p-0">
+            <ul className="m-0 flex list-none flex-col gap-3 p-0">
               {group.files.map((file, fileIndex) => (
                 <FileRow
                   key={file.id}
                   file={file}
                   position={{ groupIndex: index, fileIndex }}
-                  groups={state.groups}
+                  saved={group.saved !== null}
                   locked={locked}
                   saving={saving}
                   processing={state.processing}
