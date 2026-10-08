@@ -296,7 +296,6 @@ export function ComponentEditor({ component }: ComponentEditorProps): React.JSX.
                     lang={language}
                     value={state.nameTranslations[language]}
                     maxLength={COMPONENT_NAME_MAX}
-                    placeholder={state.name}
                     onChange={(event) => {
                       const { value } = event.target
                       setState((current) => ({
