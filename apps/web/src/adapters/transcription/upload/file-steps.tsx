@@ -28,7 +28,8 @@ const MARK = { 'aria-hidden': true, className: 'size-3.5', strokeWidth: 3 } as c
  * active one's bar as the progressbar, and hear when the active step or its status changes, not
  * every percent.
  *
- * DS gap: no Stepper / Progress; circles, lines and bar are composed from the DS colour tokens.
+ * DS gap: no Stepper / Progress; circles, lines and bar are composed from the DS colour tokens,
+ * the glow of a bar without percentage eases with an arbitrary symmetric curve.
  */
 export function FileSteps({ file }: { file: QueueFile }): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -200,7 +201,12 @@ function ActiveStep({
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={percent ?? undefined}
-              className="relative h-1.5 min-w-8 flex-1 overflow-hidden rounded-full bg-outline-variant"
+              className={cn(
+                'relative h-1.5 min-w-8 flex-1 overflow-hidden rounded-full',
+                percent !== null
+                  ? 'bg-outline-variant'
+                  : 'bg-primary/20 motion-reduce:bg-primary/40'
+              )}
             >
               {percent !== null ? (
                 <div
@@ -208,9 +214,10 @@ function ActiveStep({
                   style={{ width: `${percent}%` }}
                 />
               ) : (
-                // Without a percentage a third of the bar sweeps across it; a still, paler bar
-                // when motion is reduced.
-                <div className="absolute inset-y-0 left-full w-1/3 rounded-full bg-primary animate-in slide-in-from-left-[400%] repeat-infinite animation-duration-1400 ease-in-out motion-reduce:left-0 motion-reduce:w-full motion-reduce:animate-none motion-reduce:opacity-40" />
+                // Without a percentage a glow with soft ends glides over the tinted bar, from just
+                // left of it to just right of it, so the loop has no seam; when motion is reduced,
+                // the still bar only turns a shade stronger.
+                <div className="absolute inset-y-0 left-full w-2/5 bg-linear-to-r from-transparent via-primary to-transparent animate-in slide-in-from-left-[350%] repeat-infinite animation-duration-2000 ease-[cubic-bezier(0.45,0,0.55,1)] motion-reduce:hidden" />
               )}
             </div>
           ) : (
