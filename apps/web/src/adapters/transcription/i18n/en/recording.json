@@ -111,6 +111,14 @@
       "other": "Shared content"
     }
   },
+  "tracks": {
+    "count": "{{count}} audio tracks",
+    "show": "Show tracks",
+    "hide": "Hide tracks",
+    "listLabel": "Audio tracks of {{name}}",
+    "from": "from {{time}}",
+    "download": "Download track {{number}}: {{name}}"
+  },
   "backup": {
     "failed": "The backup in your browser failed. The recording goes on, but a browser crash would lose it.",
     "leftoverTitle": "Recording found that was not uploaded",

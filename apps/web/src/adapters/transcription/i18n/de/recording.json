@@ -111,6 +111,14 @@
       "other": "Geteilter Inhalt"
     }
   },
+  "tracks": {
+    "count": "{{count}} Audiospuren",
+    "show": "Spuren anzeigen",
+    "hide": "Spuren ausblenden",
+    "listLabel": "Audiospuren von {{name}}",
+    "from": "ab {{time}}",
+    "download": "Spur {{number}} herunterladen: {{name}}"
+  },
   "backup": {
     "failed": "Die Sicherung im Browser ist ausgefallen. Die Aufnahme läuft weiter, geht bei einem Absturz des Browsers aber verloren.",
     "leftoverTitle": "Nicht hochgeladene Aufnahme gefunden",

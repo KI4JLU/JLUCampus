@@ -1,9 +1,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleIcon,
   DownloadIcon,
   MicIcon,
+  MonitorUpIcon,
   RadioIcon,
   SquareIcon,
   Trash2Icon,
@@ -31,7 +34,7 @@ import { decodesLocally, formatTime, WaveformPlayer } from '../audio'
 import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { BackupFailedNotice, LeftoverNotices } from './backup-views'
-import { useRecording, type RecordedTake } from './context'
+import { useRecording, type RecordedTake, type RecordedTrack } from './context'
 import { useElapsedSeconds, useRecordingStatusTexts } from './hooks'
 import { SourceControls, SourceNotices } from './source-views'
 import { isRecordingBusy, type RecordingKind } from './state'
@@ -240,6 +243,23 @@ export function TakeList(): React.JSX.Element | null {
   )
 }
 
+/** Saves `file` under its own name through the browser's download. */
+function download(file: File): void {
+  const url = URL.createObjectURL(file)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = file.name
+  document.body.append(link)
+  link.click()
+  link.remove()
+  // Some browsers read the URL after the click returned.
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/**
+ * A take: the mix, which is what is uploaded, and below it each source's own track when it had
+ * several at once.
+ */
 function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   const { t } = useTranslation()
   const { deleteTake } = useRecording()
@@ -254,17 +274,6 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   // WebM over 20 minutes is not decoded, however small its file.
   const decoded = decodesLocally(take.file, take.duration)
 
-  const download = (): void => {
-    const url = URL.createObjectURL(take.file)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = name
-    document.body.append(link)
-    link.click()
-    link.remove()
-    // Some browsers read the URL after the click returned.
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  }
   const arm = (): void => {
     setArmed(true)
     requestAnimationFrame(() => confirmRef.current?.focus())
@@ -275,45 +284,126 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   }
 
   return (
+    <li className="flex flex-col gap-stack-sm">
+      <div className="flex flex-wrap items-center gap-stack-sm">
+        <div className="flex min-w-64 flex-1 flex-col gap-1">
+          <WaveformPlayer source={take.file} name={name} knownDuration={take.duration} />
+          {decoded ? null : <p className="m-0">{t('transcription.recording.waveformSkipped')}</p>}
+        </div>
+        <div className="flex items-center gap-1">
+          <IconButton label={downloadLabel} onClick={() => download(take.file)}>
+            <DownloadIcon {...ICON} />
+          </IconButton>
+          {armed ? (
+            <div
+              role="group"
+              aria-label={deleteLabel}
+              className="flex items-center gap-1"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.stopPropagation()
+                  disarm()
+                }
+              }}
+            >
+              <IconButton
+                ref={confirmRef}
+                label={confirmLabel}
+                variant="destructive"
+                onClick={() => deleteTake(take.id)}
+              >
+                <CheckIcon {...ICON} />
+              </IconButton>
+              <IconButton label={cancelLabel} onClick={disarm}>
+                <XIcon {...ICON} />
+              </IconButton>
+            </div>
+          ) : (
+            <IconButton ref={trashRef} label={deleteLabel} onClick={arm}>
+              <Trash2Icon {...ICON} />
+            </IconButton>
+          )}
+        </div>
+      </div>
+      {take.tracks ? <TrackList name={name} tracks={take.tracks} /> : null}
+    </li>
+  )
+}
+
+/**
+ * The tracks of a take, one per source, open from the start and closable; the mix above is what
+ * they make together.
+ */
+function TrackList({
+  name,
+  tracks
+}: {
+  name: string
+  tracks: readonly RecordedTrack[]
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(true)
+  const id = useId()
+  const Chevron = open ? ChevronDownIcon : ChevronRightIcon
+  return (
+    <div className="flex flex-col gap-stack-sm">
+      <div className="flex flex-wrap items-center gap-stack-sm">
+        <Badge tone="info">
+          {t('transcription.recording.tracks.count', { count: tracks.length })}
+        </Badge>
+        {/* DS gap: no Collapsible or Accordion; a button with `aria-expanded` shows the tracks. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={open ? id : undefined}
+          onClick={() => setOpen(!open)}
+        >
+          <Chevron {...ICON} />
+          {open
+            ? t('transcription.recording.tracks.hide')
+            : t('transcription.recording.tracks.show')}
+        </Button>
+      </div>
+      {open ? (
+        <ul
+          id={id}
+          aria-label={t('transcription.recording.tracks.listLabel', { name })}
+          className="m-0 flex list-none flex-col gap-stack-sm p-0"
+        >
+          {tracks.map((track, index) => (
+            <TrackItem key={track.id} track={track} number={index + 1} />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
+/** One source's track: what it is, where it starts in the take, its player and its download. */
+function TrackItem({ track, number }: { track: RecordedTrack; number: number }): React.JSX.Element {
+  const { t } = useTranslation()
+  const Icon = track.kind === 'display' ? MonitorUpIcon : MicIcon
+  const decoded = decodesLocally(track.file, track.duration)
+  return (
     <li className="flex flex-wrap items-center gap-stack-sm">
+      <Icon {...ICON} />
       <div className="flex min-w-64 flex-1 flex-col gap-1">
-        <WaveformPlayer source={take.file} name={name} knownDuration={take.duration} />
+        <WaveformPlayer source={track.file} name={track.label} knownDuration={track.duration} />
+        {track.offset >= 1 ? (
+          <p className="m-0">
+            {t('transcription.recording.tracks.from', { time: formatTime(track.offset) })}
+          </p>
+        ) : null}
         {decoded ? null : <p className="m-0">{t('transcription.recording.waveformSkipped')}</p>}
       </div>
-      <div className="flex items-center gap-1">
-        <IconButton label={downloadLabel} onClick={download}>
-          <DownloadIcon {...ICON} />
-        </IconButton>
-        {armed ? (
-          <div
-            role="group"
-            aria-label={deleteLabel}
-            className="flex items-center gap-1"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.stopPropagation()
-                disarm()
-              }
-            }}
-          >
-            <IconButton
-              ref={confirmRef}
-              label={confirmLabel}
-              variant="destructive"
-              onClick={() => deleteTake(take.id)}
-            >
-              <CheckIcon {...ICON} />
-            </IconButton>
-            <IconButton label={cancelLabel} onClick={disarm}>
-              <XIcon {...ICON} />
-            </IconButton>
-          </div>
-        ) : (
-          <IconButton ref={trashRef} label={deleteLabel} onClick={arm}>
-            <Trash2Icon {...ICON} />
-          </IconButton>
-        )}
-      </div>
+      <IconButton
+        label={t('transcription.recording.tracks.download', { number, name: track.label })}
+        onClick={() => download(track.file)}
+      >
+        <DownloadIcon {...ICON} />
+      </IconButton>
     </li>
   )
 }

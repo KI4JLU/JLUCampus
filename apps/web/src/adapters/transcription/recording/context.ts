@@ -3,7 +3,7 @@ import type { TranscriptionRealtimeConfig, TranscriptionRealtimeMode } from '@ju
 import type { LiveTranscriptWindow } from '../live/lines'
 import type { StoredRecording } from './backup-store'
 import type { DisplaySupport } from './display-capture'
-import type { RecordingSource, SourceAnnouncement } from './sources'
+import type { RecordingSource, SourceAnnouncement, SourceKind } from './sources'
 import type { RecordingKind, RecordingState } from './state'
 import type { Microphones } from './use-microphones'
 
@@ -18,6 +18,24 @@ export interface RecordedTake {
   duration?: number
   /** The take's backup in the browser (`backup-store.ts`); none for a take that failed it. */
   backupId?: string
+  /**
+   * Each source on its own beside the mix (`tracks.ts`), by start; none when the take had one
+   * source at a time. Only the mix is uploaded.
+   */
+  tracks?: readonly RecordedTrack[]
+}
+
+/** One source of a take, recorded on its own. */
+export interface RecordedTrack {
+  id: string
+  file: File
+  /** The source's name. */
+  label: string
+  kind: SourceKind
+  /** Seconds into the take where the track starts. */
+  offset: number
+  /** Seconds. */
+  duration: number
 }
 
 /** The crash backup of the takes (`backup-store.ts`). */
