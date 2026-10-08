@@ -55,8 +55,8 @@ interface SourceWaveforms {
 
 /**
  * The result's global player (T-24), after kiChat's `initGlobalAudioPlayer` and its global
- * `CustomAudioPlayer`: one waveform over the merged time line of all source files, with the
- * speakers' time line (hover names a speaker's stretch), play and pause, and seeking anywhere on
+ * `CustomAudioPlayer`: one waveform over the merged time line of all source files, its bars in the
+ * speakers' colours (hover names a speaker's stretch), play and pause, and seeking anywhere on
  * it by pointer or keys, which changes files on its own. Each file's audio comes from a fresh
  * audio URL of its job, fetched again before it expires and when playback fails. Playback keeps to
  * the saved ranges (`playbackStep`): at a file's saved end the next one plays on, also when its
@@ -116,7 +116,7 @@ export function GlobalPlayer({
     [sources, waveforms, total]
   )
 
-  // The speakers' time line over all files, global like the bar.
+  // The speakers' stretches over all files, global like the bar, colouring its bars.
   const segments = useMemo<WaveformSegment[]>(
     () =>
       blocks.map((block) => ({

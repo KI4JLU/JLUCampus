@@ -91,7 +91,6 @@ export function WindowTrack(props: WindowTrackProps): React.JSX.Element {
       played: cssColor(bar, '--color-primary'),
       unplayed: cssColor(bar, '--color-outline-variant'),
       region: cssColor(bar, '--color-primary-container'),
-      neutral: cssColor(bar, '--color-outline'),
       speakers: TRANSCRIPTION_SPEAKER_COLORS
     }
     // Drawn on the track's own scale, from 0 to 1: one peak per bar, the window and the playhead

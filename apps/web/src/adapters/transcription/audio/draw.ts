@@ -6,9 +6,15 @@ export interface WaveformColors {
   played: string
   unplayed: string
   region: string
-  /** Speaker timeline stretches without a speaker colour. */
-  neutral: string
+  /** The bars of a speaker's stretch, played at full strength and dimmed ahead of the playhead. */
   speakers: Record<TranscriptionSpeakerColorId, string>
+}
+
+/** A stretch of the audio one speaker talks in; its bars are drawn in the speaker's colour. */
+export interface WaveformSpeakerStretch {
+  start: number
+  end: number
+  colorId: TranscriptionSpeakerColorId | null
 }
 
 export interface WaveformDrawing {
@@ -18,11 +24,8 @@ export interface WaveformDrawing {
   /** Seconds; 0 while unknown, which draws everything unplayed. */
   duration: number
   time: number
-  segments: ReadonlyArray<{
-    start: number
-    end: number
-    colorId: TranscriptionSpeakerColorId | null
-  }>
+  /** Speakers' stretches, in seconds; `colorId: null` and the gaps keep the neutral bars. */
+  segments: readonly WaveformSpeakerStretch[]
   region: { start: number; end: number } | null
   colors: WaveformColors
   /** A file's processing progress over the bars; `null` or left out draws none. */
@@ -46,10 +49,10 @@ const BAR = 3
 const GAP = 3
 /** Pixels from one bar to the next; one peak per bar is drawn as is. */
 export const BAR_STEP = BAR + GAP
-/** Height of the speaker timeline under the bars. */
-const TIMELINE = 4
 /** Strength of the bars filled by the progress, below the played ones. */
 export const PROGRESS_ALPHA = 0.55
+/** Strength of a speaker's bars ahead of the playhead, so the played ones still stand out. */
+export const UNPLAYED_SPEAKER_ALPHA = 0.4
 /** Half width in pixels of the glow running over the filled bars. */
 const GLOW_RADIUS = 36
 /** Milliseconds for the shown progress to cover about two thirds of a jump. */
@@ -100,7 +103,54 @@ export function timeToX(seconds: number, duration: number, width: number): numbe
 }
 
 /**
- * The hover text of the speaker timeline at a time, kiChat's global player title:
+ * Each bar's speaker colour: that of the stretch at the bar's centre, `null` where no stretch with
+ * a colour is, which keeps the bar neutral; all `null` while the duration is unknown.
+ */
+export function barSpeakerColors(
+  segments: readonly WaveformSpeakerStretch[],
+  duration: number,
+  width: number,
+  speakers: Record<TranscriptionSpeakerColorId, string>
+): (string | null)[] {
+  const count = barCount(width)
+  const colors = Array<string | null>(count).fill(null)
+  if (duration <= 0 || segments.length === 0) return colors
+  // One sweep over the stretches by start, as the bars go left to right: a long transcript has
+  // many stretches, and this runs on every frame while playing.
+  const sorted = [...segments].sort((a, b) => a.start - b.start)
+  let next = 0
+  for (let index = 0; index < count; index++) {
+    const time = ((index * BAR_STEP + BAR / 2) / width) * duration
+    while (next < sorted.length && sorted[next]!.end <= time) next++
+    const stretch = sorted[next]
+    if (stretch && stretch.start <= time && stretch.colorId !== null) {
+      colors[index] = speakers[stretch.colorId]
+    }
+  }
+  return colors
+}
+
+/**
+ * How one bar is filled: played in the speaker's colour or the played colour at full strength;
+ * filled by a processing progress in the same colour at the progress' strength (`filled`, `null`
+ * for a bar it has not reached); ahead of the playhead the speaker's colour dimmed, or the
+ * unplayed colour for a bar without a speaker.
+ */
+export function barFill(
+  speaker: string | null,
+  played: boolean,
+  filled: number | null,
+  colors: Pick<WaveformColors, 'played' | 'unplayed'>
+): { color: string; alpha: number } {
+  if (played) return { color: speaker ?? colors.played, alpha: 1 }
+  if (filled !== null) return { color: speaker ?? colors.played, alpha: filled }
+  return speaker
+    ? { color: speaker, alpha: UNPLAYED_SPEAKER_ALPHA }
+    : { color: colors.unplayed, alpha: 1 }
+}
+
+/**
+ * The hover text of a speaker's stretch at a time, kiChat's global player title:
  * `<speaker>: mm:ss - mm:ss` of the stretch under the pointer, `''` where there is none or it has
  * no label.
  */
@@ -116,62 +166,49 @@ export function segmentTitle(
 
 /**
  * Draws bars resampled from the peaks, the played part in the primary colour, a highlighted region
- * behind them, the speaker timeline at the bottom and a thin playhead. A processing progress fills
- * the bars up to it below the played part (`WaveformProgress`).
+ * behind them and a thin playhead. A speaker's stretch draws its bars in the speaker's colour
+ * (`barFill`). A processing progress fills the bars up to it below the played part
+ * (`WaveformProgress`).
  */
 export function drawWaveform(context: CanvasRenderingContext2D, drawing: WaveformDrawing): void {
   const { width, height, peaks, duration, time, segments, region, colors } = drawing
   context.clearRect(0, 0, width, height)
-  const timeline = segments.length > 0 ? TIMELINE + 2 : 0
-  const barArea = height - timeline
 
   if (region && duration > 0) {
     const start = timeToX(region.start, duration, width)
     context.fillStyle = colors.region
-    context.fillRect(start, 0, Math.max(1, timeToX(region.end, duration, width) - start), barArea)
+    context.fillRect(start, 0, Math.max(1, timeToX(region.end, duration, width) - start), height)
   }
 
   const progressX = timeToX(time, duration, width)
   const count = barCount(width)
   const filled = drawing.progress ? filledBars(width, drawing.progress.percent) : 0
-  const center = barArea / 2
+  const speakers = barSpeakerColors(segments, duration, width, colors.speakers)
+  const center = height / 2
   for (let index = 0; index < count; index++) {
     const peak = peaks[Math.floor((index / count) * peaks.length)] ?? 0
-    const barHeight = Math.max(2, peak * (barArea - 2))
+    const barHeight = Math.max(2, peak * (height - 2))
     const x = index * BAR_STEP
     // Played before filled: the playhead's part stays at full strength while the file processes.
     const played = x + BAR / 2 <= progressX
-    context.fillStyle = played || index < filled ? colors.played : colors.unplayed
-    if (!played && index < filled) {
-      context.globalAlpha = progressAlpha(
-        x,
-        filled * BAR_STEP,
-        drawing.progress?.glow ?? null,
-        index === filled - 1
-      )
-    }
+    const fill = barFill(
+      speakers[index] ?? null,
+      played,
+      !played && index < filled
+        ? progressAlpha(x, filled * BAR_STEP, drawing.progress?.glow ?? null, index === filled - 1)
+        : null,
+      colors
+    )
+    context.fillStyle = fill.color
+    context.globalAlpha = fill.alpha
     context.beginPath()
     context.roundRect(x, center - barHeight / 2, BAR, barHeight, BAR / 2)
     context.fill()
     context.globalAlpha = 1
   }
 
-  if (duration > 0) {
-    for (const segment of segments) {
-      const start = timeToX(segment.start, duration, width)
-      context.fillStyle =
-        segment.colorId === null ? colors.neutral : colors.speakers[segment.colorId]
-      context.fillRect(
-        start,
-        height - TIMELINE,
-        Math.max(1, timeToX(segment.end, duration, width) - start),
-        TIMELINE
-      )
-    }
-  }
-
   if (progressX > 0) {
     context.fillStyle = colors.played
-    context.fillRect(progressX - 0.5, 0, 1, barArea)
+    context.fillRect(progressX - 0.5, 0, 1, height)
   }
 }

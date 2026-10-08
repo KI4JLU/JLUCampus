@@ -35,11 +35,11 @@ import {
   type DecodedWaveform
 } from './peaks'
 
-/** A stretch of the speaker timeline under the waveform (T-24). */
+/** A speaker's stretch of the waveform (T-24): its bars are drawn in the speaker's colour. */
 export interface WaveformSegment {
   start: number
   end: number
-  /** `null` draws it in the neutral colour. */
+  /** `null` keeps its bars neutral. */
   colorId: TranscriptionSpeakerColorId | null
   /** The speaker, shown with the stretch's times when the pointer rests on it. */
   label?: string
@@ -104,7 +104,7 @@ export interface WaveformPlayerProps {
    * waveform not found before is not remembered.
    */
   jobRevision?: string
-  /** The speaker timeline, coloured per speaker. */
+  /** The speakers' stretches, which colour the bars per speaker. */
   segments?: readonly WaveformSegment[]
   region?: WaveformRegion | null
   /** Shows and seeks another time line than the audio's own; nothing is decoded here then. */
@@ -156,10 +156,10 @@ function cssColor(element: Element, name: string): string {
 /**
  * The audio player the transcription page uses everywhere, after kiChat's `WaveformAudioPlayer`
  * and its global player: play/pause, a waveform that is the seek bar (pointer and keyboard), the
- * time, an optional speaker timeline and a highlighted region. Local files play from an object
- * URL; remote audio from the job's audio URL. Audio `decodesLocally` refuses (too large, or WebM
- * of unknown or long duration) is not decoded here: the waveform the analysis computed is drawn
- * (`jobId`), and the audio plays either way.
+ * time, bars in the speakers' colours where `segments` are given, and a highlighted region. Local
+ * files play from an object URL; remote audio from the job's audio URL. Audio `decodesLocally`
+ * refuses (too large, or WebM of unknown or long duration) is not decoded here: the waveform the
+ * analysis computed is drawn (`jobId`), and the audio plays either way.
  */
 export function WaveformPlayer({
   source,
@@ -285,7 +285,6 @@ export function WaveformPlayer({
       played: cssColor(bar, '--color-primary'),
       unplayed: cssColor(bar, '--color-outline-variant'),
       region: cssColor(bar, '--color-primary-container'),
-      neutral: cssColor(bar, '--color-outline'),
       speakers: TRANSCRIPTION_SPEAKER_COLORS
     }
     const shown = shownTimeline.current
@@ -538,26 +537,37 @@ export function WaveformPlayer({
           )}
           onKeyDown={onKeyDown}
           onPointerDown={(event) => {
-            if (!barDuration) return
+            // Only the primary button seeks: a right-click's release can go to its menu instead.
+            if (!barDuration || event.button !== 0) return
             seeking.current = true
             event.currentTarget.setPointerCapture(event.pointerId)
             seekToPointer(event)
           }}
           onPointerMove={(event) => {
             if (seeking.current) {
-              seekToPointer(event)
-              return
+              if (event.buttons & 1) {
+                seekToPointer(event)
+                return
+              }
+              // A release the bar never saw (a menu, another window took it) ends the drag here,
+              // or merely hovering would seek, and the transcript scroll to each block it passed.
+              seeking.current = false
             }
-            // The speaker under the pointer, as kiChat's global player shows it.
+            // The speaker under the pointer, as kiChat's global player shows it; a native tooltip,
+            // which moves nothing on the page.
             if (!segments?.some((segment) => segment.label)) return
             const at = pointerTime(event)
-            event.currentTarget.title = at === null ? '' : segmentTitle(segments, at)
+            const title = at === null ? '' : segmentTitle(segments, at)
+            if (event.currentTarget.title !== title) event.currentTarget.title = title
           }}
           onPointerUp={(event) => {
             seeking.current = false
             event.currentTarget.releasePointerCapture(event.pointerId)
           }}
           onPointerCancel={() => {
+            seeking.current = false
+          }}
+          onLostPointerCapture={() => {
             seeking.current = false
           }}
         >
