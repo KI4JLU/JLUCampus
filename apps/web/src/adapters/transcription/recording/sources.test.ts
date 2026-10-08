@@ -4,6 +4,7 @@ import {
   addableMicrophones,
   canRemoveSource,
   goneMicrophones,
+  hasRecordingSource,
   INITIAL_SOURCES,
   mainSuccessor,
   sourcesReducer,
@@ -97,15 +98,19 @@ describe('addableMicrophones', () => {
   const choices = [choice('laptop', 1), choice('headset', 2), choice('usb', 3)]
 
   it('offers the default input first, then the devices not in use', () => {
-    expect(addableMicrophones(choices, 'laptop', [headset, tab])).toEqual([
+    expect(addableMicrophones('ready', choices, 'laptop', [headset, tab])).toEqual([
       DEFAULT_DEVICE_ID,
       'usb'
     ])
-    expect(addableMicrophones(choices, DEFAULT_DEVICE_ID, [])).toEqual(['laptop', 'headset', 'usb'])
+    expect(addableMicrophones('ready', choices, DEFAULT_DEVICE_ID, [])).toEqual([
+      'laptop',
+      'headset',
+      'usb'
+    ])
   })
 
   it('offers every microphone without a main one', () => {
-    expect(addableMicrophones(choices, null, [tab])).toEqual([
+    expect(addableMicrophones('ready', choices, null, [tab])).toEqual([
       DEFAULT_DEVICE_ID,
       'laptop',
       'headset',
@@ -115,16 +120,49 @@ describe('addableMicrophones', () => {
 
   it('leaves out the default input once it is added', () => {
     const fallback: RecordingSource = { ...headset, id: 's3', deviceId: DEFAULT_DEVICE_ID }
-    expect(addableMicrophones(choices, 'laptop', [fallback])).toEqual(['headset', 'usb'])
+    expect(addableMicrophones('ready', choices, 'laptop', [fallback])).toEqual(['headset', 'usb'])
+  })
+
+  it('offers the default input without the device list, also with nothing chosen', () => {
+    expect(addableMicrophones('failed', choices, null, [])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('ready', [], null, [])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('failed', [], 'laptop', [tab])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('failed', [], DEFAULT_DEVICE_ID, [])).toEqual([])
+  })
+
+  it('offers nothing while the list loads or without media devices', () => {
+    expect(addableMicrophones('loading', [], null, [])).toEqual([])
+    expect(addableMicrophones('unsupported', [], null, [])).toEqual([])
   })
 })
 
 describe('canRemoveSource', () => {
-  it('keeps the last source, be it the main microphone or another', () => {
-    expect(canRemoveSource(DEFAULT_DEVICE_ID, [])).toBe(false)
-    expect(canRemoveSource(null, [tab])).toBe(false)
-    expect(canRemoveSource(DEFAULT_DEVICE_ID, [tab])).toBe(true)
-    expect(canRemoveSource(null, [headset, tab])).toBe(true)
+  it('lets every source go before a take, down to none', () => {
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [], false)).toBe(true)
+    expect(canRemoveSource(null, [tab], false)).toBe(true)
+    expect(canRemoveSource(null, [], false)).toBe(false)
+  })
+
+  it('keeps the last source of a take, be it the main microphone or another', () => {
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [], true)).toBe(false)
+    expect(canRemoveSource(null, [tab], true)).toBe(false)
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [tab], true)).toBe(true)
+    expect(canRemoveSource(null, [headset, tab], true)).toBe(true)
+  })
+})
+
+describe('hasRecordingSource', () => {
+  it('has nothing to record before a source is chosen', () => {
+    expect(INITIAL_SOURCES.list).toEqual([])
+    expect(hasRecordingSource('record', null, INITIAL_SOURCES.list)).toBe(false)
+    expect(hasRecordingSource('live', null, INITIAL_SOURCES.list)).toBe(false)
+  })
+
+  it('records any source, and transcribes live only a chosen microphone', () => {
+    expect(hasRecordingSource('record', null, [tab])).toBe(true)
+    expect(hasRecordingSource('record', 'headset', [])).toBe(true)
+    expect(hasRecordingSource('live', null, [tab, headset])).toBe(false)
+    expect(hasRecordingSource('live', DEFAULT_DEVICE_ID, [])).toBe(true)
   })
 })
 

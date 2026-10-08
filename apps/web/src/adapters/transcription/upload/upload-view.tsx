@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type DragEvent } from 'react'
-import { PlayIcon } from 'lucide-react'
+import { FolderPlusIcon, PlayIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button, FileDropzone, Spinner } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_MAX_FILE_BYTES } from '@justcampus/shared'
@@ -14,14 +14,15 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 
 /**
  * The work area of the `upload` view, after kiChat's file view: the drop area with the file
- * chooser (T-03), the queue of transcript groups (T-05 to T-08, T-11, T-12) and the start (T-13).
+ * chooser (T-03), the queue of transcript groups with the button for another one at its end (T-05
+ * to T-08, T-11, T-12) and the start (T-13).
  * Rows and groups take files dragged within the queue or from outside. Files dropped anywhere else
  * in the view go where the drop area puts them (kiChat's drop handling on the whole file view).
  */
 export function UploadView(): React.JSX.Element {
   const { t } = useTranslation()
   const headingId = useId()
-  const { addFiles, moveFile, start } = useUpload()
+  const { queue, addFiles, moveFile, start } = useUpload()
   const state = useQueueState()
   const { capabilities } = useTranscriptionWorkspace()
   const input = useRef<HTMLInputElement>(null)
@@ -121,6 +122,20 @@ export function UploadView(): React.JSX.Element {
               onDrop={drop}
             />
           ))}
+          {/*
+           * A new transcript is one more folder, so its button closes the list of folders, as wide
+           * as they are and led by the folder's icon, as theirs. Open during a start too, as
+           * kiChat's; the start leaves the new group alone.
+           */}
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full justify-start"
+            onClick={() => queue.addGroup()}
+          >
+            <FolderPlusIcon aria-hidden className="size-5" />
+            {t('transcription.upload.addTranscript')}
+          </Button>
         </>
       ) : null}
 

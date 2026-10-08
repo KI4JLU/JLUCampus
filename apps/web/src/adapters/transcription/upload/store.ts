@@ -212,6 +212,11 @@ export class UploadQueue {
    */
   private readonly removals = new Map<string, Promise<boolean>>()
   /**
+   * Jobs this queue deleted on the server. A listing sent before a deletion may still name the
+   * job; the restore it feeds must not bring the file back (T-08, T-15).
+   */
+  private readonly deletedJobs = new Set<string>()
+  /**
    * Groups whose transcript is being saved, with the save's outcome. Neither they nor their files
    * are removed or moved meanwhile: deleting a job deletes its audio, a saved one's too.
    */
@@ -491,7 +496,7 @@ export class UploadQueue {
     this.options.onJobsChanged?.()
     if (!this.file(fileId)) {
       // Removed while the job was made: it goes too.
-      void this.options.api.deleteJob(jobId).catch(() => undefined)
+      void this.deleteJob(jobId)
       return
     }
     this.patchFile(fileId, { jobId, jobStatus: created.job.status })
@@ -794,7 +799,7 @@ export class UploadQueue {
       return
     }
     if (!file.file) return
-    if (file.jobId) void this.options.api.deleteJob(file.jobId).catch(() => undefined)
+    if (file.jobId) void this.deleteJob(file.jobId)
     this.patchFile(fileId, {
       jobId: null,
       jobStatus: null,
@@ -837,6 +842,7 @@ export class UploadQueue {
       for (const job of jobs) {
         if (signal.aborted) return
         if (job.transcriptId !== null || job.status === 'cancelled') continue
+        if (this.deletedJobs.has(job.id)) continue
         if (findFileByJob(this.state.groups, job.id)) continue
         this.restoreJob(job)
       }
@@ -1474,12 +1480,15 @@ export class UploadQueue {
 
   /** Deletes a job on the server; one already gone (`404`) counts as deleted. */
   private async deleteJob(jobId: string): Promise<boolean> {
+    let deleted: boolean
     try {
       await this.options.api.deleteJob(jobId)
-      return true
+      deleted = true
     } catch (error) {
-      return isGone(error)
+      deleted = isGone(error)
     }
+    if (deleted) this.deletedJobs.add(jobId)
+    return deleted
   }
 
   /** Deletes the job of a file being removed, noted in `removals` until the answer is there. */

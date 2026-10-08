@@ -7,8 +7,8 @@ import { useJobAudioUrl } from '../api'
 import { WaveformPlayer } from '../audio'
 import { unidentifiedVoiceCount } from '../mapping/speakers'
 import { useTranscriptionWorkspace } from '../use-workspace'
+import { FileSteps } from './file-steps'
 import { serverWaveform, type FilePosition, type QueueFile } from './queue'
-import { errorText, percentText, statusText, TONE } from './texts'
 import { useUpload } from './use-upload'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
@@ -36,15 +36,16 @@ export interface FileRowProps {
 
 /**
  * One file of the queue (kiChat's `multi-upload-item`): a handle to drag it (T-07), its player with
- * name, size and length (T-12), the voices to name (T-17), removal (T-08), and its progress and
- * status (T-11), with the reason when it failed (T-16) or what it did without (one automatic voice,
- * no AI correction). As kiChat's it is compact: the handle and actions sit on the player's line,
- * progress, status and notice share one line below it, and while the file processes its waveform
- * fills with the progress.
+ * name, size and length (T-12), the voices to name (T-17), removal (T-08), and its steps with
+ * their progress (T-11), with the reason when it failed (T-16) or what it did without (one
+ * automatic voice, no AI correction). The handle takes its own column over the row's full height,
+ * so the row reads as indented by it and can be grabbed beside any of its lines. As kiChat's it is
+ * compact otherwise: the actions sit on the player's line, and the steps take one line below it,
+ * gone once the file is completed.
  */
 export function FileRow(props: FileRowProps): React.JSX.Element {
   const { file, position, saved, locked, saving, processing } = props
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { queue, dialogs, start } = useUpload()
   const { capabilities } = useTranscriptionWorkspace()
   const unnamed = unidentifiedVoiceCount(file.voices)
@@ -54,10 +55,7 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
     !saved &&
     ((file.phase === 'analysisFailed' && (file.uploaded || file.file !== null)) ||
       file.phase === 'failed')
-  const status = statusText(t, file.status)
   const waveform = serverWaveform(file)
-  // The waveform shows that the file is being worked on; the badge below names the percentage.
-  const progress = file.tone === 'processing' ? file.progress : null
 
   const remove = async (): Promise<void> => {
     if (queue.removalDeletesJob(file.id)) {
@@ -82,17 +80,17 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
     else void queue.retry(file.id)
   }
 
-  // A locked row keeps the handle's place empty, so its player lines up with the movable rows of
+  // A locked row keeps the handle's column empty, so its lines line up with the movable rows of
   // other groups.
   const handle = locked ? (
     <span aria-hidden="true" className="w-4 shrink-0" />
   ) : (
-    // The pointer's handle, beside the play button as kiChat's.
+    // The pointer's handle, centred in its column; the whole column can be grabbed.
     <span
       draggable
       aria-hidden="true"
       title={t('transcription.upload.moveFile')}
-      className="flex w-4 shrink-0 cursor-grab touch-none items-center"
+      className="flex w-4 shrink-0 cursor-grab touch-none items-center self-stretch"
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = 'move'
         event.dataTransfer.setData('text/plain', file.id)
@@ -157,55 +155,30 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
   )
 
   return (
+    // Padded off the dividers between the rows of its group.
     <li
-      className="flex min-w-0 flex-col gap-1"
+      className="flex min-w-0 gap-3 py-3 first:pt-0 last:pb-0"
       onDragOver={(event) => props.onDragOver(position, event)}
       onDrop={(event) => props.onDrop(position, event)}
     >
-      {file.file ? (
-        <WaveformPlayer
-          source={file.file}
-          name={file.name}
-          knownDuration={file.duration ?? undefined}
-          jobId={waveform?.jobId ?? null}
-          jobRevision={waveform?.revision}
-          progress={progress}
-          leading={handle}
-          trailing={actions}
-          className="gap-1"
-          onDuration={(seconds) => queue.setDuration(file.id, seconds)}
-        />
-      ) : (
-        <RestoredPlayer file={file} progress={progress} leading={handle} trailing={actions} />
-      )}
-      {/*
-       * Progress, status and what the file did without or why it failed share one line, wrapping
-       * where it is too narrow. The DS has no Progress component and none may be made up: the
-       * percentage is a Badge, which carries the progressbar role for assistive technology, and
-       * the waveform above fills with it. The status beside it is announced as it changes.
-       */}
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <Badge
-          appearance="filled"
-          tone={TONE[file.tone]}
-          role="progressbar"
-          aria-label={t('transcription.upload.progressOf', { name: file.name })}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(file.progress)}
-        >
-          {percentText(i18n.language, file.progress)}
-        </Badge>
-        <span aria-live="polite" className="min-w-0">
-          <Badge appearance="text" tone={TONE[file.tone]}>
-            {status}
-          </Badge>
-        </span>
-        {file.error ? (
-          <Badge appearance="text" tone="error">
-            {errorText(t, file.error)}
-          </Badge>
-        ) : null}
+      {handle}
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        {file.file ? (
+          <WaveformPlayer
+            source={file.file}
+            name={file.name}
+            knownDuration={file.duration ?? undefined}
+            jobId={waveform?.jobId ?? null}
+            jobRevision={waveform?.revision}
+            trailing={actions}
+            className="gap-1"
+            onDuration={(seconds) => queue.setDuration(file.id, seconds)}
+          />
+        ) : (
+          <RestoredPlayer file={file} trailing={actions} />
+        )}
+        <FileSteps file={file} />
+        {/* What the file did without stays after its steps are gone. */}
         {file.notice && !file.error ? (
           <Badge appearance="text" tone="warning">
             {t(`transcription.upload.notice.${file.notice}`)}
@@ -219,13 +192,9 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
 /** A restored job has no local file: it plays from storage (T-15). */
 function RestoredPlayer({
   file,
-  progress,
-  leading,
   trailing
 }: {
   file: QueueFile
-  progress: number | null
-  leading: ReactNode
   trailing: ReactNode
 }): React.JSX.Element {
   const audio = useJobAudioUrl(file.uploaded ? file.jobId : null)
@@ -238,8 +207,6 @@ function RestoredPlayer({
       knownDuration={file.duration ?? undefined}
       jobId={waveform?.jobId ?? null}
       jobRevision={waveform?.revision}
-      progress={progress}
-      leading={leading}
       trailing={trailing}
       className="gap-1"
     />

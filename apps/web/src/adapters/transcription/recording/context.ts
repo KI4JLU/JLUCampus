@@ -62,10 +62,18 @@ export interface MicrophoneOption {
 
 /** What regular recording mixes, and adding to it and removing from it. */
 export interface RecordingSources {
-  /** Every source, the main microphone first (`MAIN_SOURCE_ID`) unless there is none. */
+  /**
+   * Every source, the main microphone first (`MAIN_SOURCE_ID`) unless there is none; empty until
+   * one is added.
+   */
   list: readonly RecordingSource[]
-  /** Whether a source may be removed: not the last one. */
+  /** Whether a source may be removed: any before a take, not a take's last one. */
   removable: boolean
+  /**
+   * The streams open for sources now, by source id: those of a running take, a shared tab, window
+   * or screen, and live transcription's microphone while it runs.
+   */
+  streams: ReadonlyMap<string, MediaStream>
   /** The last change, for a polite announcement; an ended source also shows a notice. */
   announcement: SourceAnnouncement | null
   dismissAnnouncement: () => void
@@ -86,9 +94,10 @@ export interface RecordingSources {
   remove: (id: string) => void
 }
 
-/** Live transcription's one microphone, and the others it can switch to. */
+/** Live transcription's one microphone, and the others it can choose or switch to. */
 export interface LiveMicrophone {
-  current: MicrophoneOption
+  /** The main microphone; `null` until one is chosen. */
+  current: MicrophoneOption | null
   others: readonly MicrophoneOption[]
 }
 
@@ -131,10 +140,10 @@ export interface Recording {
   /** Chooses the main microphone; while regular recording runs, it is swapped in the mix. */
   selectMicrophone: (deviceId: string) => void
   sources: RecordingSources
-  /** Without a main microphone, live transcription takes the browser's default input. */
+  /** The main microphone, which live transcription hears; it starts once one is chosen. */
   liveMicrophone: LiveMicrophone
   takes: readonly RecordedTake[]
-  /** Starts regular recording or live transcription; ignored while busy. */
+  /** Starts regular recording or live transcription; ignored while busy or without a source. */
   start: (kind: RecordingKind) => Promise<void>
   /** Stops what runs; repeated calls join the first. */
   stop: () => Promise<void>

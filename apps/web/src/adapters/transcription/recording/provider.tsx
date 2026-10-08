@@ -64,6 +64,7 @@ import {
   addableMicrophones,
   canRemoveSource,
   goneMicrophones,
+  hasRecordingSource,
   INITIAL_SOURCES,
   MAIN_SOURCE_ID,
   mainSuccessor,
@@ -76,6 +77,7 @@ import {
 } from './sources'
 import {
   INITIAL_RECORDING_STATE,
+  isRecordingBusy,
   recordingReducer,
   type RecordingAction,
   type RecordingKind,
@@ -127,6 +129,30 @@ function inputStreams(inputs: ReadonlyMap<string, Input>): Map<string, MediaStre
   return new Map([...inputs].map(([id, input]) => [id, input.stream]))
 }
 
+/** A map that tells each change, so the card learns which sources are open. */
+class ObservedMap<K, V> extends Map<K, V> {
+  constructor(private readonly changed: () => void) {
+    super()
+  }
+
+  override set(key: K, value: V): this {
+    super.set(key, value)
+    this.changed()
+    return this
+  }
+
+  override delete(key: K): boolean {
+    const deleted = super.delete(key)
+    if (deleted) this.changed()
+    return deleted
+  }
+
+  override clear(): void {
+    super.clear()
+    this.changed()
+  }
+}
+
 function errorName(error: unknown): string {
   return typeof error === 'object' && error !== null && 'name' in error
     ? String((error as { name: unknown }).name)
@@ -158,9 +184,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   const { t } = useTranslation()
   const { capabilities, enqueueUpload, memory } = useTranscriptionWorkspace()
   const me = useQuery(meQuery).data
-  const microphones = useMicrophones(
-    memory.cell<string | null>('recording.microphone', () => DEFAULT_DEVICE_ID)
-  )
+  // Nothing is chosen until the "+" adds a microphone.
+  const microphones = useMicrophones(memory.cell<string | null>('recording.microphone', () => null))
   const stateCell = memory.cell<RecordingState>('recording.state', () => INITIAL_RECORDING_STATE)
   const [state, setState] = useMemoryCell(stateCell)
   const dispatch = useCallback(
@@ -223,6 +248,17 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     memory.cell<LiveAppearance>('recording.appearance', () => DEFAULT_APPEARANCE)
   )
 
+  // The open sources' streams, as `inputs` holds them, for the level meters of the card.
+  const heldStreamsCell = memory.cell<ReadonlyMap<string, MediaStream>>(
+    'recording.streams',
+    () => new Map()
+  )
+  const [heldStreams] = useMemoryCell(heldStreamsCell)
+  // Live transcription's microphone while it runs: its session holds it, not `inputs`.
+  const [liveStream, setLiveStream] = useMemoryCell(
+    memory.cell<MediaStream | null>('recording.liveStream', () => null)
+  )
+
   // Boxes in the page's memory: what runs belongs to the page, not to one mount of it.
   const [
     {
@@ -241,6 +277,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
   ] = useState(
     () =>
       memory.cell('recording.boxes', () => {
+        const inputs: Map<string, Input> = new ObservedMap(() =>
+          heldStreamsCell.set(inputStreams(inputs))
+        )
         const boxes = {
           session: { current: null } as Box<RunningSession | null>,
           stopping: { current: null } as Box<Promise<void> | null>,
@@ -252,7 +291,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
            * The open sources of regular recording: the take's microphones while it runs, and the
            * shared tabs, windows and screens from their adding on.
            */
-          inputs: new Map<string, Input>(),
+          inputs,
           /**
            * The releases of the backups this page holds, by take: its takes', and an uploaded
            * take's until storage has it.
@@ -273,7 +312,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
            * The device of the running take's main microphone, `null` for none; a failed swap
            * selects it again.
            */
-          mainDevice: { current: DEFAULT_DEVICE_ID } as Box<string | null>
+          mainDevice: { current: null } as Box<string | null>
         }
         // Leaving the page drops what runs without finishing it and frees every source. The
         // take's backup stays and is offered again on the next visit.
@@ -469,6 +508,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
         } finally {
           running.mixer?.close()
           releaseStream(running.stream)
+          if (running.kind === 'live') setLiveStream(null)
           if (running.kind === 'record') {
             // Microphones open again with the next take; shared surfaces are let go.
             releaseInputs({ keepDisplays: false })
@@ -501,6 +541,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       mountedRef,
       releaseInputs,
       sessionRef,
+      setLiveStream,
       setTakes,
       stoppingRef,
       swapRef,
@@ -558,16 +599,14 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       )
         fail(t('transcription.recording.microphonePermissionDenied') + errorText(error))
       else {
-        // The chosen device is gone or busy: the next start tries the default input, which is
-        // then no added source any more. Nothing was opened yet.
-        if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-          microphones.select(DEFAULT_DEVICE_ID)
-          dispatchSources({ type: 'mainSelected', deviceId: DEFAULT_DEVICE_ID })
-        }
+        // The chosen device is gone or busy: it leaves the sources as an unplugged one would,
+        // and the first added microphone takes its place. Nothing was opened yet.
+        if (name === 'NotFoundError' || name === 'OverconstrainedError')
+          latestRef.current?.dropMain('ended')
         fail(errorText(error) || t('transcription.recording.startRecordingFailed'))
       }
     },
-    [dispatchSources, fail, microphones, t]
+    [fail, latestRef, t]
   )
 
   /** Why a microphone could not be opened. */
@@ -872,17 +911,16 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     ]
   )
 
-  /**
-   * Live transcription: the main microphone is sent and recorded alone, the default input when
-   * regular recording left none.
-   */
+  /** Live transcription: the main microphone `deviceId` is sent and recorded alone. */
   const startLive = useCallback(
-    async (devices: MediaDevices, liveMode: TranscriptionRealtimeMode): Promise<void> => {
+    async (
+      devices: MediaDevices,
+      liveMode: TranscriptionRealtimeMode,
+      deviceId: string
+    ): Promise<void> => {
       let stream: MediaStream
       try {
-        stream = await devices.getUserMedia({
-          audio: audioConstraint(microphones.latestSelected() ?? DEFAULT_DEVICE_ID)
-        })
+        stream = await devices.getUserMedia({ audio: audioConstraint(deviceId) })
       } catch (error) {
         failMicrophone(error)
         return
@@ -934,6 +972,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       await startTake({ kind: 'live', realtime, mixer: null, stream }, stream, release)
       // A lost connection leaves the take running without its realtime session.
       if (sessionRef.current?.stream !== stream) return
+      setLiveStream(stream)
       // A microphone that disappears ends the take with what it recorded (T-55).
       for (const track of stream.getAudioTracks())
         track.addEventListener('ended', () => void latestRef.current?.finish(null), { once: true })
@@ -951,6 +990,7 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       appendText,
       resetText,
       setLiveStarted,
+      setLiveStream,
       startTake,
       startingRef,
       t
@@ -959,7 +999,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
 
   const start = useCallback(
     async (kind: RecordingKind): Promise<void> => {
-      if (busyRef.current) return
+      const main = microphones.latestSelected()
+      // Without a source the start button waits for one.
+      if (busyRef.current || !hasRecordingSource(kind, main, sourcesCell.value.list)) return
       busyRef.current = true
       dispatch({ type: 'request', kind })
       setSourceError(null)
@@ -971,14 +1013,26 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       }
       try {
         if (kind === 'record') await startRecord(devices)
-        else if (mode) await startLive(devices, mode)
+        else if (mode && main !== null) await startLive(devices, mode, main)
         else fail(t('transcription.recording.liveUnavailable'))
       } finally {
         // Started, failed or given up: what runs belongs to the session now.
         startingRef.current = null
       }
     },
-    [busyRef, dispatch, fail, mode, setSourceError, startLive, startRecord, startingRef, t]
+    [
+      busyRef,
+      dispatch,
+      fail,
+      microphones,
+      mode,
+      setSourceError,
+      sourcesCell,
+      startLive,
+      startRecord,
+      startingRef,
+      t
+    ]
   )
 
   /**
@@ -1157,13 +1211,6 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       sourceEnded(source.id)
   }, [allSources, microphones.choices, microphones.list, sourceEnded])
 
-  // Nothing left to record from, e.g. after a take let go of its shared tab: the browser's default
-  // input stands in, as in kiChat.
-  useEffect(() => {
-    if (microphones.selected === null && sources.list.length === 0)
-      microphones.select(DEFAULT_DEVICE_ID)
-  }, [microphones, sources.list.length])
-
   const addMicrophone = useCallback(
     (deviceId: string) => {
       setSourceError(null)
@@ -1287,8 +1334,9 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
 
   const removeSource = useCallback(
     (id: string) => {
-      // One source always remains.
-      if (!canRemoveSource(microphones.latestSelected(), sourcesCell.value.list)) return
+      // A take keeps one source; before it, the list may empty.
+      if (!canRemoveSource(microphones.latestSelected(), sourcesCell.value.list, busyRef.current))
+        return
       if (id === MAIN_SOURCE_ID) {
         dropMain('removed')
         return
@@ -1304,7 +1352,17 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       // The last source: the take ends as if stopped.
       if (running?.mixer?.size === 0) void finish(null)
     },
-    [dispatchSources, dropMain, finish, inputs, microphones, releaseInput, sessionRef, sourcesCell]
+    [
+      busyRef,
+      dispatchSources,
+      dropMain,
+      finish,
+      inputs,
+      microphones,
+      releaseInput,
+      sessionRef,
+      sourcesCell
+    ]
   )
 
   const dismissAnnouncement = useCallback(
@@ -1442,20 +1500,32 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
     [microphoneLabel]
   )
   const addable = useMemo(
-    () => addableMicrophones(microphones.choices, microphones.selected, sources.list).map(option),
-    [microphones.choices, microphones.selected, option, sources.list]
+    () =>
+      addableMicrophones(
+        microphones.list,
+        microphones.choices,
+        microphones.selected,
+        sources.list
+      ).map(option),
+    [microphones.list, microphones.choices, microphones.selected, option, sources.list]
   )
   const liveMicrophone = useMemo<LiveMicrophone>(() => {
-    const current = microphones.selected ?? DEFAULT_DEVICE_ID
+    const current = microphones.selected
     return {
-      current: option(current),
-      others: addableMicrophones(microphones.choices, current, []).map(option)
+      current: current === null ? null : option(current),
+      others: addableMicrophones(microphones.list, microphones.choices, current, []).map(option)
     }
-  }, [microphones.choices, microphones.selected, option])
+  }, [microphones.list, microphones.choices, microphones.selected, option])
+  const streams = useMemo<ReadonlyMap<string, MediaStream>>(
+    () => (liveStream ? new Map([...heldStreams, [MAIN_SOURCE_ID, liveStream]]) : heldStreams),
+    [heldStreams, liveStream]
+  )
+  const taking = isRecordingBusy(state.status)
   const recordingSources = useMemo<RecordingSources>(
     () => ({
       list: allSources,
-      removable: canRemoveSource(microphones.selected, sources.list),
+      removable: canRemoveSource(microphones.selected, sources.list, taking),
+      streams,
       announcement: sources.announcement,
       dismissAnnouncement,
       error: sourceError,
@@ -1469,6 +1539,8 @@ export function RecordingProvider({ children }: { children: ReactNode }): React.
       allSources,
       microphones.selected,
       sources,
+      taking,
+      streams,
       dismissAnnouncement,
       sourceError,
       displaySupport,

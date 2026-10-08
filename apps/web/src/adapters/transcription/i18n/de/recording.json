@@ -15,7 +15,7 @@
   "microphonePermissionDenied": "Mikrofonberechtigung verweigert: ",
   "microphonePermissionHint": "Bitte erlaube den Mikrofonzugriff in der Browser-Abfrage.",
   "microphoneReady": "Mikrofon bereit",
-  "microphonesUnavailable": "Mikrofone nicht verfügbar",
+  "microphonesUnavailable": "Mikrofonliste nicht verfügbar, nur das Standardmikrofon ist wählbar",
   "minimizeTextView": "Textansicht minimieren",
   "modeLabel": "Modus",
   "modeLocal": "Lokal (Standard)",
@@ -92,6 +92,9 @@
     "addMicrophone": "Mikrofon hinzufügen",
     "noMoreMicrophones": "Kein weiteres Mikrofon gefunden",
     "switchMicrophone": "Mikrofon wechseln, aktuell: {{name}}",
+    "chooseMicrophone": "Mikrofon auswählen",
+    "empty": "Quelle über „+“ hinzufügen",
+    "emptyMicrophone": "Mikrofon über „+“ wählen",
     "addDisplay": "Tab, Fenster oder Bildschirm hinzufügen",
     "displayUnsupported": "Nur in Chrome oder Edge möglich",
     "displayUnsupportedDesktop": "In der Desktop-App nicht möglich",
@@ -113,8 +116,6 @@
   },
   "tracks": {
     "count": "{{count}} Audiospuren",
-    "show": "Spuren anzeigen",
-    "hide": "Spuren ausblenden",
     "listLabel": "Audiospuren von {{name}}",
     "from": "ab {{time}}",
     "download": "Spur {{number}} herunterladen: {{name}}"

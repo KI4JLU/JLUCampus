@@ -15,7 +15,7 @@
   "microphonePermissionDenied": "Microphone permission denied: ",
   "microphonePermissionHint": "Please allow microphone access in the browser prompt.",
   "microphoneReady": "Microphone ready",
-  "microphonesUnavailable": "Microphones unavailable",
+  "microphonesUnavailable": "Microphone list unavailable, only the default microphone can be chosen",
   "minimizeTextView": "Minimize text view",
   "modeLabel": "Mode",
   "modeLocal": "Local (default)",
@@ -92,6 +92,9 @@
     "addMicrophone": "Add microphone",
     "noMoreMicrophones": "No other microphone found",
     "switchMicrophone": "Switch microphone, current: {{name}}",
+    "chooseMicrophone": "Choose microphone",
+    "empty": "Add a source with “+”",
+    "emptyMicrophone": "Choose a microphone with “+”",
     "addDisplay": "Add tab, window or screen",
     "displayUnsupported": "Only in Chrome or Edge",
     "displayUnsupportedDesktop": "Not available in the desktop app",
@@ -113,8 +116,6 @@
   },
   "tracks": {
     "count": "{{count}} audio tracks",
-    "show": "Show tracks",
-    "hide": "Hide tracks",
     "listLabel": "Audio tracks of {{name}}",
     "from": "from {{time}}",
     "download": "Download track {{number}}: {{name}}"

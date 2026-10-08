@@ -185,11 +185,6 @@ export function renumberGroups(groups: readonly QueueGroup[]): QueueGroup[] {
   })
 }
 
-/** kiChat's `cleanupEmptyGroups`: drops groups without files, then renumbers. */
-export function cleanupEmptyGroups(groups: readonly QueueGroup[]): QueueGroup[] {
-  return renumberGroups(groups.filter((group) => group.files.length > 0))
-}
-
 /** The name a restored job's group gets: its filename without extension (T-15). */
 export function restoredGroupName(filename: string): string {
   return filename.replace(/\.[^.]+$/, '') || filename
@@ -353,16 +348,29 @@ export function updateGroup(
   return groups.map((group) => (group.id === groupId ? { ...group, ...change } : group))
 }
 
-/** Removes a file and then the groups left empty (kiChat's `removeFileFromGroup`). */
+/** The groups after a removal, renumbered; none once no file is left, as before the first. */
+function afterRemoval(groups: readonly QueueGroup[]): QueueGroup[] {
+  return groups.some((group) => group.files.length > 0) ? renumberGroups(groups) : []
+}
+
+/**
+ * Removes a file, and its group when that is left empty (kiChat's `removeFileFromGroup`). Other
+ * empty groups stay: one just added for the next files does not vanish with another's last file.
+ */
 export function removeFile(groups: readonly QueueGroup[], fileId: string): QueueGroup[] {
-  return cleanupEmptyGroups(
-    groups.map((group) => ({ ...group, files: group.files.filter((file) => file.id !== fileId) }))
+  const position = findFile(groups, fileId)
+  if (!position) return [...groups]
+  const files = position.group.files.filter((file) => file.id !== fileId)
+  return afterRemoval(
+    files.length > 0
+      ? updateGroup(groups, position.group.id, { files })
+      : groups.filter((group) => group.id !== position.group.id)
   )
 }
 
 /** Removes a group and renumbers the others (kiChat's `removeGroup`). */
 export function removeGroup(groups: readonly QueueGroup[], groupId: string): QueueGroup[] {
-  return renumberGroups(groups.filter((group) => group.id !== groupId))
+  return afterRemoval(groups.filter((group) => group.id !== groupId))
 }
 
 /**

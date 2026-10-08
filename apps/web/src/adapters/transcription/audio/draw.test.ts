@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { TRANSCRIPTION_SPEAKER_COLORS } from '@justcampus/shared'
 import {
-  BAR_STEP,
-  barCount,
   barFill,
   barSpeakerColors,
   drawWaveform,
-  easeProgress,
-  filledBars,
-  PROGRESS_ALPHA,
-  progressAlpha,
   segmentTitle,
   timeToX,
   UNPLAYED_SPEAKER_ALPHA,
@@ -77,27 +71,6 @@ describe('timeToX', () => {
 })
 
 describe('drawWaveform', () => {
-  it('fills the bars up to the progress below the played part', () => {
-    const { context, fills, alphas } = recordingContext()
-    drawWaveform(context, { ...base, time: 2, progress: { percent: 70, glow: null } })
-    expect(BAR_STEP * 10).toBe(base.width)
-    // 2 of 10 s played: two bars at full strength; 70 %: up to the seventh bar in the played
-    // colour at half strength, the edge bar at full; three unplayed.
-    expect(fills.slice(0, 10)).toEqual([
-      ...Array<string>(7).fill('played'),
-      ...Array<string>(3).fill('unplayed')
-    ])
-    expect(alphas.slice(0, 10)).toEqual([
-      1,
-      1,
-      ...Array<number>(4).fill(PROGRESS_ALPHA),
-      1,
-      1,
-      1,
-      1
-    ])
-  })
-
   it('draws the played half of the bars in the played colour', () => {
     const { context, fills } = recordingContext()
     drawWaveform(context, base)
@@ -218,8 +191,8 @@ describe('barFill', () => {
   const tokens = { played: 'played', unplayed: 'unplayed' }
 
   it("draws a speaker's bar at full strength once played and dimmed ahead of the playhead", () => {
-    expect(barFill('#3b82f6', true, null, tokens)).toEqual({ color: '#3b82f6', alpha: 1 })
-    expect(barFill('#3b82f6', false, null, tokens)).toEqual({
+    expect(barFill('#3b82f6', true, tokens)).toEqual({ color: '#3b82f6', alpha: 1 })
+    expect(barFill('#3b82f6', false, tokens)).toEqual({
       color: '#3b82f6',
       alpha: UNPLAYED_SPEAKER_ALPHA
     })
@@ -227,67 +200,8 @@ describe('barFill', () => {
   })
 
   it('keeps the neutral colours for a bar without a speaker', () => {
-    expect(barFill(null, true, null, tokens)).toEqual({ color: 'played', alpha: 1 })
-    expect(barFill(null, false, null, tokens)).toEqual({ color: 'unplayed', alpha: 1 })
-  })
-
-  it("fills a bar the progress reached at the progress' strength, played ones at full", () => {
-    expect(barFill(null, false, PROGRESS_ALPHA, tokens)).toEqual({
-      color: 'played',
-      alpha: PROGRESS_ALPHA
-    })
-    expect(barFill(null, true, PROGRESS_ALPHA, tokens)).toEqual({ color: 'played', alpha: 1 })
-  })
-})
-
-describe('filledBars', () => {
-  it('fills the bars whose centre the progress reached', () => {
-    // 60 px: ten bars, centres at 1.5, 7.5, ... 55.5.
-    expect(barCount(60)).toBe(10)
-    expect(filledBars(60, 0)).toBe(0)
-    expect(filledBars(60, 2)).toBe(0)
-    expect(filledBars(60, 2.5)).toBe(1)
-    expect(filledBars(60, 50)).toBe(5)
-    expect(filledBars(60, 100)).toBe(10)
-  })
-
-  it('clamps the progress to 0 to 100', () => {
-    expect(filledBars(60, -10)).toBe(0)
-    expect(filledBars(60, 140)).toBe(10)
-  })
-})
-
-describe('easeProgress', () => {
-  it('moves part of the way towards the target, more the longer the frame', () => {
-    const short = easeProgress(0, 40, 16)
-    const long = easeProgress(0, 40, 250)
-    expect(short).toBeGreaterThan(0)
-    expect(short).toBeLessThan(long)
-    expect(long).toBeCloseTo(40 * (1 - Math.exp(-1)))
-  })
-
-  it('lands on the target once close, and follows it down too', () => {
-    expect(easeProgress(39.97, 40, 16)).toBe(40)
-    expect(easeProgress(40, 40, 16)).toBe(40)
-    expect(easeProgress(40, 0, 16)).toBeLessThan(40)
-  })
-
-  it('stays put for a frame without time', () => {
-    expect(easeProgress(10, 40, 0)).toBe(10)
-    expect(easeProgress(10, 40, -5)).toBe(10)
-  })
-})
-
-describe('progressAlpha', () => {
-  it('draws filled bars at half strength without a glow, the edge bar at full', () => {
-    expect(progressAlpha(12, 60, null, false)).toBe(PROGRESS_ALPHA)
-    expect(progressAlpha(54, 60, null, true)).toBe(1)
-  })
-
-  it('brightens the bars under the glow as it runs across', () => {
-    // Halfway through its run the glow is over the middle of the filled bars.
-    expect(progressAlpha(30, 60, 0.5, false)).toBeCloseTo(1)
-    expect(progressAlpha(30, 60, 0, false)).toBeLessThan(0.7)
+    expect(barFill(null, true, tokens)).toEqual({ color: 'played', alpha: 1 })
+    expect(barFill(null, false, tokens)).toEqual({ color: 'unplayed', alpha: 1 })
   })
 })
 

@@ -1,10 +1,13 @@
 import { DEFAULT_DEVICE_ID, type MicrophoneChoice } from './devices'
+import type { RecordingKind } from './state'
+import type { MicrophoneListState } from './use-microphones'
 
 /**
  * The sources a take mixes besides the main microphone: more microphones, and tabs, windows or
- * screens. They can be added and removed before and while recording, as can the main microphone,
- * as long as one source remains. Microphones stay listed for the next take and open with it; a
- * tab, window or screen is shared once, held from then on and let go when its take ends.
+ * screens. None is chosen at first. They can be added and removed before and while recording, as
+ * can the main microphone; a running take keeps one. Microphones stay listed for the next take and
+ * open with it; a tab, window or screen is shared once, held from then on and let go when its take
+ * ends.
  */
 
 /** The main microphone's id in the mix. */
@@ -89,22 +92,44 @@ export function sourcesReducer(state: SourcesState, action: SourcesAction): Sour
 
 /**
  * The input devices that can be added, by device id: the browser's default input first, then
- * every device, leaving out the main microphone (`null`: none) and those added already.
+ * every device, leaving out the main microphone (`null`: none) and those added already. Without the
+ * device list (`devices`) only the default input, which opens without it; none while it loads or
+ * without `navigator.mediaDevices`.
  */
 export function addableMicrophones(
+  devices: MicrophoneListState,
   choices: readonly MicrophoneChoice[],
   main: string | null,
   list: readonly RecordingSource[]
 ): string[] {
+  if (devices === 'loading' || devices === 'unsupported') return []
   const used = new Set([main, ...list.map((source) => source.deviceId)])
-  return [DEFAULT_DEVICE_ID, ...choices.map((choice) => choice.deviceId)].filter(
-    (deviceId) => !used.has(deviceId)
-  )
+  const listed = devices === 'ready' ? choices.map((choice) => choice.deviceId) : []
+  return [DEFAULT_DEVICE_ID, ...listed].filter((deviceId) => !used.has(deviceId))
 }
 
-/** Whether a source may be removed: one always remains. */
-export function canRemoveSource(main: string | null, list: readonly RecordingSource[]): boolean {
-  return (main === null ? 0 : 1) + list.length > 1
+/**
+ * Whether a source may be removed: any before a take, and while one starts, runs or ends all but
+ * the last (`taking`), as the take would end without it.
+ */
+export function canRemoveSource(
+  main: string | null,
+  list: readonly RecordingSource[],
+  taking: boolean
+): boolean {
+  return (main === null ? 0 : 1) + list.length > (taking ? 1 : 0)
+}
+
+/**
+ * Whether a take of `kind` has something to record: live transcription its microphone, regular
+ * recording any source.
+ */
+export function hasRecordingSource(
+  kind: RecordingKind,
+  main: string | null,
+  list: readonly RecordingSource[]
+): boolean {
+  return main !== null || (kind === 'record' && list.length > 0)
 }
 
 /**

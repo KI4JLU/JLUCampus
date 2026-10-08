@@ -12,8 +12,8 @@ export interface Microphones {
   list: MicrophoneListState
   choices: MicrophoneChoice[]
   /**
-   * The main microphone: `DEFAULT_DEVICE_ID` for the browser's default input, `null` for none, when
-   * regular recording takes only other sources.
+   * The main microphone: `DEFAULT_DEVICE_ID` for the browser's default input, `null` for none:
+   * before one is chosen, or when regular recording takes only other sources.
    */
   selected: string | null
   /**

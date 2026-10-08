@@ -15,13 +15,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_SPEAKER_COLORS, type TranscriptionSpeakerColorId } from '@justcampus/shared'
 import { cn } from '@/lib/utils'
-import {
-  drawWaveform,
-  easeProgress,
-  segmentTitle,
-  type WaveformColors,
-  type WaveformProgress
-} from './draw'
+import { drawWaveform, segmentTitle, type WaveformColors } from './draw'
 import { playExclusively } from './exclusive'
 import { nextLoad, sourceLength, type MediaLength, type SourceLoad } from './length'
 import {
@@ -87,6 +81,8 @@ export interface WaveformPlayerProps {
    * whether it is decoded here (`decodesLocally`).
    */
   name?: string
+  /** Shown before the name on its line, e.g. the kind of source the audio came from. */
+  icon?: ReactNode
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
   /**
@@ -111,14 +107,6 @@ export interface WaveformPlayerProps {
   timeline?: WaveformTimeline
   /** Hides the line with name, size and time, for players that show them elsewhere. */
   compact?: boolean
-  /**
-   * A processing progress, 0 to 100, that fills the waveform (`WaveformProgress`): eased towards
-   * each new value, with a glow running over it, unless reduced motion is asked for. The played
-   * part stays drawn above it. `null` or left out draws none.
-   */
-  progress?: number | null
-  /** Shown before the play button on its line, e.g. a drag handle. */
-  leading?: ReactNode
   /** Shown after the waveform on its line, e.g. the row's actions; wraps below where narrow. */
   trailing?: ReactNode
   onTimeUpdate?: (seconds: number) => void
@@ -134,16 +122,6 @@ export interface WaveformPlayerProps {
 
 /** Every mounted player's audio, so starting one pauses the others. */
 const players = new Set<HTMLAudioElement>()
-
-/** Milliseconds for the glow's run over the filled bars. */
-const GLOW_PERIOD = 1800
-
-function reducedMotion(): boolean {
-  return (
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
-}
 
 /** Seconds the arrow keys move, and Page Up and Page Down. */
 const SEEK_STEP = 5
@@ -164,6 +142,7 @@ function cssColor(element: Element, name: string): string {
 export function WaveformPlayer({
   source,
   name,
+  icon,
   size,
   knownDuration: givenDuration,
   jobId = null,
@@ -172,8 +151,6 @@ export function WaveformPlayer({
   region,
   timeline,
   compact = false,
-  progress = null,
-  leading,
   trailing,
   onTimeUpdate,
   onPlayingChange,
@@ -218,8 +195,6 @@ export function WaveformPlayer({
   useLayoutEffect(() => {
     shownTimeline.current = timeline
   })
-  /** The progress as drawn, while there is one; it eases towards `progress` frame by frame. */
-  const shownProgress = useRef<WaveformProgress | null>(null)
 
   // Local audio plays from an object URL that lives as long as the source.
   useEffect(() => {
@@ -296,8 +271,7 @@ export function WaveformPlayer({
       time: shown ? shown.time : (audioRef.current?.currentTime ?? 0),
       segments: segments ?? [],
       region: region ?? null,
-      colors,
-      progress: shownProgress.current
+      colors
     })
   }, [waveform, knownDuration, segments, region])
 
@@ -314,54 +288,6 @@ export function WaveformPlayer({
   useEffect(() => {
     if (external) draw()
   }, [external, timeline?.peaks, timeline?.duration, timeline?.time, draw])
-
-  // A progress eases towards each new value under a running glow, frame by frame while the page is
-  // visible; with reduced motion it is drawn as it is, once.
-  useEffect(() => {
-    if (progress === null) {
-      if (shownProgress.current) {
-        shownProgress.current = null
-        draw()
-      }
-      return
-    }
-    const target = Math.min(Math.max(progress, 0), 100)
-    if (reducedMotion()) {
-      shownProgress.current = { percent: target, glow: null }
-      draw()
-      return
-    }
-    let frame = 0
-    let last = 0
-    const tick = (now: number): void => {
-      shownProgress.current = {
-        percent: easeProgress(shownProgress.current?.percent ?? 0, target, now - last),
-        glow: (now % GLOW_PERIOD) / GLOW_PERIOD
-      }
-      last = now
-      draw()
-      frame = requestAnimationFrame(tick)
-    }
-    const run = (): void => {
-      if (frame !== 0 || document.visibilityState !== 'visible') return
-      last = performance.now()
-      frame = requestAnimationFrame(tick)
-    }
-    const stop = (): void => {
-      cancelAnimationFrame(frame)
-      frame = 0
-    }
-    const onVisibility = (): void => {
-      if (document.visibilityState === 'visible') run()
-      else stop()
-    }
-    run()
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      stop()
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [progress, draw])
 
   // While playing, the playhead moves every frame and a range stops at its end.
   useEffect(() => {
@@ -472,6 +398,12 @@ export function WaveformPlayer({
   }
 
   const timeLabel = `${formatTime(time)} / ${formatTime(knownDuration)}`
+  const nameText = (
+    <span className="min-w-0 truncate">
+      {name}
+      {byteSize !== undefined ? ` · ${formatMegabytes(byteSize)}` : null}
+    </span>
+  )
   const playLabel = playing
     ? t('transcription.common.player.pause')
     : t('transcription.common.player.play')
@@ -479,18 +411,27 @@ export function WaveformPlayer({
   return (
     <div className={cn('flex min-w-0 flex-col gap-2', className)}>
       {compact ? null : (
-        <div className="flex min-w-0 items-baseline justify-between gap-3">
-          <span className="min-w-0 truncate">
-            {name}
-            {byteSize !== undefined ? ` · ${formatMegabytes(byteSize)}` : null}
-          </span>
+        // With an icon the texts are centred on it; they share one type, so they stay level.
+        <div
+          className={cn(
+            'flex min-w-0 justify-between gap-3',
+            icon ? 'items-center' : 'items-baseline'
+          )}
+        >
+          {icon ? (
+            <span className="flex min-w-0 items-center gap-2">
+              {icon}
+              {nameText}
+            </span>
+          ) : (
+            nameText
+          )}
           <span aria-hidden="true" className="shrink-0">
             {timeLabel}
           </span>
         </div>
       )}
       <div className={cn('flex min-w-0 items-center gap-3', trailing && 'flex-wrap')}>
-        {leading}
         <Button
           type="button"
           variant="default"
