@@ -11,7 +11,7 @@ import { ChoiceView } from './choice'
 import { ExportSettings } from './export'
 import { HistorySection } from './history'
 import { LiveSettings, LiveView } from './live'
-import { RecordingProvider, RecordingSettings, RecordView } from './recording'
+import { RecordingProvider, RecordView } from './recording'
 import { ResultTools, ResultView } from './result'
 import { Notice } from './notice'
 import { UploadProvider, UploadSettings, UploadView } from './upload'
@@ -147,12 +147,11 @@ function ViewSettings(): React.JSX.Element | null {
   switch (view) {
     case 'upload':
       return <UploadSettings />
-    case 'record':
-      return <RecordingSettings />
     case 'live':
       return <LiveSettings />
     case 'result':
       return resultTab === 'export' ? <ExportSettings /> : <ResultTools />
+    case 'record':
     case 'choice':
       return null
   }

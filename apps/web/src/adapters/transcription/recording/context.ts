@@ -2,9 +2,8 @@ import { createContext, useContext } from 'react'
 import type { TranscriptionRealtimeConfig, TranscriptionRealtimeMode } from '@justcampus/shared'
 import type { LiveTranscriptWindow } from '../live/lines'
 import type { StoredRecording } from './backup-store'
-import type { MicrophoneChoice } from './devices'
 import type { DisplaySupport } from './display-capture'
-import type { RecordingSource, SourceAnnouncement } from './sources'
+import type { RecordingSource, SourceAnnouncement, SourceKind } from './sources'
 import type { RecordingKind, RecordingState } from './state'
 import type { Microphones } from './use-microphones'
 
@@ -19,12 +18,32 @@ export interface RecordedTake {
   duration?: number
   /** The take's backup in the browser (`backup-store.ts`); none for a take that failed it. */
   backupId?: string
+  /**
+   * Each source on its own beside the mix (`tracks.ts`), by start; none when the take had one
+   * source at a time. Only the mix is uploaded.
+   */
+  tracks?: readonly RecordedTrack[]
+}
+
+/** One source of a take, recorded on its own. */
+export interface RecordedTrack {
+  id: string
+  file: File
+  /** The source's name. */
+  label: string
+  kind: SourceKind
+  /** Seconds into the take where the track starts. */
+  offset: number
+  /** Seconds. */
+  duration: number
 }
 
 /** The crash backup of the takes (`backup-store.ts`). */
 export interface RecordingBackup {
   /** The backup in the browser failed for the running or last take; the take is complete. */
   failed: boolean
+  /** Only the backup of the running or last take's separate tracks failed; the mix is safe. */
+  tracksFailed: boolean
   /** Recordings a crash, reload or leaving the page left in the backup. */
   leftovers: readonly StoredRecording[]
   /** Adds a leftover to the takes. */
@@ -35,9 +54,18 @@ export interface RecordingBackup {
   leftoverError: string | null
 }
 
-/** What regular recording mixes besides the main microphone, and adding to it. */
+/** A microphone to add or switch to, named as the card shows it. */
+export interface MicrophoneOption {
+  deviceId: string
+  label: string
+}
+
+/** What regular recording mixes, and adding to it and removing from it. */
 export interface RecordingSources {
+  /** Every source, the main microphone first (`MAIN_SOURCE_ID`) unless there is none. */
   list: readonly RecordingSource[]
+  /** Whether a source may be removed: not the last one. */
+  removable: boolean
   /** The last change, for a polite announcement; an ended source also shows a notice. */
   announcement: SourceAnnouncement | null
   dismissAnnouncement: () => void
@@ -45,12 +73,23 @@ export interface RecordingSources {
   error: string | null
   /** Whether a tab, window or screen can be shared here. */
   displaySupport: DisplaySupport
-  /** Input devices that are neither the main microphone nor added. */
-  addableMicrophones: readonly MicrophoneChoice[]
-  addMicrophone: (choice: MicrophoneChoice) => void
+  /** Input devices not in use, the browser's default input first. */
+  addableMicrophones: readonly MicrophoneOption[]
+  /** Adds a microphone; without a main microphone it becomes the main one. */
+  addMicrophone: (deviceId: string) => void
   /** Opens the browser's picker; call it straight from the click. */
   addDisplay: () => void
+  /**
+   * Removes a source. The main microphone hands over to the first added microphone, else the take
+   * goes on without one.
+   */
   remove: (id: string) => void
+}
+
+/** Live transcription's one microphone, and the others it can switch to. */
+export interface LiveMicrophone {
+  current: MicrophoneOption
+  others: readonly MicrophoneOption[]
 }
 
 /** How the live transcript is shown (T-61). None of it changes the text. */
@@ -92,6 +131,8 @@ export interface Recording {
   /** Chooses the main microphone; while regular recording runs, it is swapped in the mix. */
   selectMicrophone: (deviceId: string) => void
   sources: RecordingSources
+  /** Without a main microphone, live transcription takes the browser's default input. */
+  liveMicrophone: LiveMicrophone
   takes: readonly RecordedTake[]
   /** Starts regular recording or live transcription; ignored while busy. */
   start: (kind: RecordingKind) => Promise<void>

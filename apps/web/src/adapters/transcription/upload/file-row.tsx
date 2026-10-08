@@ -100,131 +100,139 @@ export function FileRow(props: FileRowProps): React.JSX.Element {
 
   return (
     <li
-      className="flex flex-col gap-2"
+      className="flex gap-2"
       onDragOver={(event) => props.onDragOver(position, event)}
       onDrop={(event) => props.onDrop(position, event)}
     >
-      {/* The actions wrap below the player where the row is too narrow for both. */}
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        {locked ? null : (
-          // The pointer's handle; the move menu beside it is the keyboard's way (T-07).
-          <span
-            draggable
-            aria-hidden="true"
-            title={t('transcription.upload.moveFile')}
-            className="flex shrink-0 cursor-grab touch-none"
-            onDragStart={(event) => {
-              event.dataTransfer.effectAllowed = 'move'
-              event.dataTransfer.setData('text/plain', file.id)
-              props.onDragStart(position)
-            }}
-            onDragEnd={props.onDragEnd}
-          >
-            <GripVerticalIcon {...ICON} />
-          </span>
-        )}
-        <div className="min-w-0 flex-1 basis-40">
-          {file.file ? (
-            <WaveformPlayer
-              source={file.file}
-              name={file.name}
-              knownDuration={file.duration ?? undefined}
-              jobId={waveform?.jobId ?? null}
-              jobRevision={waveform?.revision}
-              onDuration={(seconds) => queue.setDuration(file.id, seconds)}
-            />
-          ) : (
-            <RestoredPlayer file={file} />
-          )}
-        </div>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          {canMap ? (
-            <Button
-              type="button"
-              variant={file.voicesSaved ? 'secondary' : 'outline'}
-              size="sm"
-              // While a start runs, files not dispatched yet can still be named (kiChat reads the
-              // names only when it dispatches a file); a failed one is dispatched again.
-              disabled={file.phase === 'transcribing' || file.phase === 'completed'}
-              aria-label={[
-                t('transcription.upload.adjustSpeakersNamed', { name: file.name }),
-                unnamed > 0
-                  ? t('transcription.upload.unidentifiedSpeakers', { count: unnamed })
-                  : null,
-                file.voicesSaved ? t('transcription.upload.speakersSavedHint') : null
-              ]
-                .filter(Boolean)
-                .join(', ')}
-              title={t('transcription.upload.adjustSpeakers')}
-              onClick={() => props.onOpenMapping(file.id)}
-            >
-              <UsersIcon {...ICON} />
-              {unnamed > 0 ? <Badge tone="primary">{unnamed}</Badge> : null}
-            </Button>
-          ) : null}
-          {canRetry ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              disabled={processing}
-              aria-label={t('transcription.upload.retryNamed', { name: file.name })}
-              title={t('transcription.common.retry')}
-              onClick={retry}
-            >
-              <RotateCcwIcon {...ICON} />
-            </Button>
-          ) : null}
-          {locked ? null : <MoveMenu file={file} position={position} groups={groups} />}
-          {saved ? null : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              disabled={saving}
-              aria-label={t('transcription.upload.removeFileNamed', { name: file.name })}
-              title={t('transcription.upload.removeFile')}
-              onClick={() => void remove()}
-            >
-              <XIcon {...ICON} />
-            </Button>
-          )}
-        </div>
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        {/*
-         * The DS has no Progress component and none may be made up: the row shows a Spinner while
-         * it works and the percentage as a Badge, which carries the progressbar role for assistive
-         * technology. The status beside it is announced as it changes.
-         */}
-        {file.tone === 'processing' ? <Spinner size="sm" aria-hidden="true" /> : null}
-        <Badge
-          appearance="filled"
-          tone={TONE[file.tone]}
-          role="progressbar"
-          aria-label={t('transcription.upload.progressOf', { name: file.name })}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(file.progress)}
+      {/*
+       * The handle is the row's leftmost column, as tall as the whole row. A locked row keeps the
+       * column empty, so its content lines up with the movable rows of other groups.
+       */}
+      {locked ? (
+        <span aria-hidden="true" className="w-4 shrink-0" />
+      ) : (
+        // The pointer's handle; the move menu among the actions is the keyboard's way (T-07).
+        <span
+          draggable
+          aria-hidden="true"
+          title={t('transcription.upload.moveFile')}
+          className="flex w-4 shrink-0 cursor-grab touch-none items-center"
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = 'move'
+            event.dataTransfer.setData('text/plain', file.id)
+            props.onDragStart(position)
+          }}
+          onDragEnd={props.onDragEnd}
         >
-          {percentText(i18n.language, file.progress)}
-        </Badge>
-        <span aria-live="polite" className="min-w-0">
-          <Badge appearance="text" tone={TONE[file.tone]}>
-            {status}
-          </Badge>
+          <GripVerticalIcon {...ICON} />
         </span>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        {/* The actions wrap below the player where the row is too narrow for both. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="min-w-0 flex-1 basis-40">
+            {file.file ? (
+              <WaveformPlayer
+                source={file.file}
+                name={file.name}
+                knownDuration={file.duration ?? undefined}
+                jobId={waveform?.jobId ?? null}
+                jobRevision={waveform?.revision}
+                onDuration={(seconds) => queue.setDuration(file.id, seconds)}
+              />
+            ) : (
+              <RestoredPlayer file={file} />
+            )}
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {canMap ? (
+              <Button
+                type="button"
+                variant={file.voicesSaved ? 'secondary' : 'outline'}
+                size="sm"
+                // While a start runs, files not dispatched yet can still be named (kiChat reads the
+                // names only when it dispatches a file); a failed one is dispatched again.
+                disabled={file.phase === 'transcribing' || file.phase === 'completed'}
+                aria-label={[
+                  t('transcription.upload.adjustSpeakersNamed', { name: file.name }),
+                  unnamed > 0
+                    ? t('transcription.upload.unidentifiedSpeakers', { count: unnamed })
+                    : null,
+                  file.voicesSaved ? t('transcription.upload.speakersSavedHint') : null
+                ]
+                  .filter(Boolean)
+                  .join(', ')}
+                title={t('transcription.upload.adjustSpeakers')}
+                onClick={() => props.onOpenMapping(file.id)}
+              >
+                <UsersIcon {...ICON} />
+                {unnamed > 0 ? <Badge tone="primary">{unnamed}</Badge> : null}
+              </Button>
+            ) : null}
+            {canRetry ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={processing}
+                aria-label={t('transcription.upload.retryNamed', { name: file.name })}
+                title={t('transcription.common.retry')}
+                onClick={retry}
+              >
+                <RotateCcwIcon {...ICON} />
+              </Button>
+            ) : null}
+            {locked ? null : <MoveMenu file={file} position={position} groups={groups} />}
+            {saved ? null : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={saving}
+                aria-label={t('transcription.upload.removeFileNamed', { name: file.name })}
+                title={t('transcription.upload.removeFile')}
+                onClick={() => void remove()}
+              >
+                <XIcon {...ICON} />
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {/*
+           * The DS has no Progress component and none may be made up: the row shows a Spinner while
+           * it works and the percentage as a Badge, which carries the progressbar role for assistive
+           * technology. The status beside it is announced as it changes.
+           */}
+          {file.tone === 'processing' ? <Spinner size="sm" aria-hidden="true" /> : null}
+          <Badge
+            appearance="filled"
+            tone={TONE[file.tone]}
+            role="progressbar"
+            aria-label={t('transcription.upload.progressOf', { name: file.name })}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(file.progress)}
+          >
+            {percentText(i18n.language, file.progress)}
+          </Badge>
+          <span aria-live="polite" className="min-w-0">
+            <Badge appearance="text" tone={TONE[file.tone]}>
+              {status}
+            </Badge>
+          </span>
+        </div>
+        {file.error ? (
+          <Badge appearance="text" tone="error">
+            {errorText(t, file.error)}
+          </Badge>
+        ) : null}
+        {file.notice && !file.error ? (
+          <Badge appearance="text" tone="warning">
+            {t(`transcription.upload.notice.${file.notice}`)}
+          </Badge>
+        ) : null}
       </div>
-      {file.error ? (
-        <Badge appearance="text" tone="error">
-          {errorText(t, file.error)}
-        </Badge>
-      ) : null}
-      {file.notice && !file.error ? (
-        <Badge appearance="text" tone="warning">
-          {t(`transcription.upload.notice.${file.notice}`)}
-        </Badge>
-      ) : null}
     </li>
   )
 }

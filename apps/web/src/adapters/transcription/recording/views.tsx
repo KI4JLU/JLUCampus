@@ -1,9 +1,12 @@
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleIcon,
   DownloadIcon,
   MicIcon,
+  MonitorUpIcon,
   RadioIcon,
   SquareIcon,
   Trash2Icon,
@@ -17,15 +20,7 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardHeader,
   CardTitle,
-  Label,
-  PanelSection,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Spinner,
   Tabs,
   TabsContent,
@@ -39,16 +34,12 @@ import { decodesLocally, formatTime, WaveformPlayer } from '../audio'
 import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
 import { BackupFailedNotice, LeftoverNotices } from './backup-views'
-import { useRecording, type RecordedTake } from './context'
-import { DEFAULT_DEVICE_ID } from './devices'
+import { useRecording, type RecordedTake, type RecordedTrack } from './context'
 import { useElapsedSeconds, useRecordingStatusTexts } from './hooks'
-import { AddSourceMenu, SourceList, SourceNotices } from './source-views'
-import { areSourcesLocked, isRecordingBusy, type RecordingKind } from './state'
+import { SourceControls, SourceNotices } from './source-views'
+import { isRecordingBusy, type RecordingKind } from './state'
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
-
-/** Radix Select takes no empty value; this one stands for the browser's default input. */
-const DEFAULT_OPTION = '__default__'
 
 /**
  * Regular recording and live transcription as tabs of one work area, as in kiChat. While something
@@ -156,73 +147,17 @@ function ElapsedBadge(): React.JSX.Element | null {
 }
 
 /**
- * The main microphone (T-55): default input first. Regular recording swaps it while it runs; it is
- * locked while a take starts or ends, and while live transcription runs.
- */
-export function DeviceSelect({
-  id,
-  compact = false
-}: {
-  id: string
-  /** The side column's wording while devices load. */
-  compact?: boolean
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const { state, microphones, selectMicrophone } = useRecording()
-  const unavailable =
-    microphones.list === 'loading'
-      ? compact
-        ? t('transcription.recording.searchingDevices')
-        : t('transcription.recording.loadingMicrophones')
-      : microphones.list === 'unsupported'
-        ? t('transcription.recording.microphoneAccessUnsupported')
-        : microphones.list === 'failed'
-          ? t('transcription.recording.microphonesUnavailable')
-          : null
-
-  if (unavailable)
-    return (
-      <Select disabled value="">
-        <SelectTrigger id={id}>
-          <SelectValue placeholder={unavailable} />
-        </SelectTrigger>
-        <SelectContent />
-      </Select>
-    )
-
-  const value = microphones.selected === DEFAULT_DEVICE_ID ? DEFAULT_OPTION : microphones.selected
-  return (
-    <Select
-      disabled={areSourcesLocked(state)}
-      value={value}
-      onValueChange={(next) => selectMicrophone(next === DEFAULT_OPTION ? DEFAULT_DEVICE_ID : next)}
-    >
-      <SelectTrigger id={id}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={DEFAULT_OPTION}>
-          {t('transcription.recording.defaultMicrophone')}
-        </SelectItem>
-        {microphones.choices.map((choice) => (
-          <SelectItem key={choice.deviceId} value={choice.deviceId}>
-            {choice.label ?? t('transcription.recording.microphoneN', { n: choice.number })}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-/**
- * Start and stop, uploading the takes, and the microphone (kiChat's bar under the card); regular
- * recording adds and lists its other sources beside the microphone.
+ * Start and stop, uploading the takes, and the sources with the "+" beside them (kiChat's bar under
+ * the card). Live transcription lists its one microphone, and the "+" switches it.
  */
 export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.Element {
   const { t } = useTranslation()
   const { capabilities } = useTranscriptionWorkspace()
-  const { state, takes, start, stop, uploadTakes, live } = useRecording()
+  const { state, takes, start, stop, uploadTakes, live, microphones } = useRecording()
   const id = useId()
+  const { requestAccess } = microphones
+  // Opening the tab asks for the microphone, so the "+" lists the devices by name.
+  useEffect(() => requestAccess(), [requestAccess])
   const status = state.status
   const running = status === 'recording'
   const pending = status === 'requesting' || status === 'stopping'
@@ -272,18 +207,7 @@ export function RecordingControls({ kind }: { kind: RecordingKind }): React.JSX.
             </Button>
           ) : null}
         </div>
-        <div className="flex min-w-56 flex-1 flex-col gap-2 sm:max-w-sm">
-          <Label htmlFor={`${id}-device`} className="sr-only">
-            {t('transcription.recording.microphone')}
-          </Label>
-          <div className="flex items-center gap-1">
-            <div className="min-w-0 flex-1">
-              <DeviceSelect id={`${id}-device`} />
-            </div>
-            {kind === 'record' ? <AddSourceMenu /> : null}
-          </div>
-          {kind === 'record' ? <SourceList /> : null}
-        </div>
+        <SourceControls kind={kind} />
         {!batch && takes.length > 0 ? (
           <p id={`${id}-upload-hint`} className="m-0 basis-full">
             {t('transcription.recording.uploadUnavailable')}
@@ -305,14 +229,11 @@ export function TakeList(): React.JSX.Element | null {
   if (takes.length === 0) return null
   return (
     <Card>
-      <CardHeader>
-        <CardTitle asChild>
-          <h2>{t('transcription.recording.takesTitle')}</h2>
-        </CardTitle>
-        <CardDescription>{t('transcription.recording.takesHint')}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="m-0 flex list-none flex-col gap-stack-md p-0">
+      <CardContent className="pt-6">
+        <ul
+          aria-label={t('transcription.recording.takesTitle')}
+          className="m-0 flex list-none flex-col gap-stack-md p-0"
+        >
           {takes.map((take) => (
             <TakeItem key={take.id} take={take} />
           ))}
@@ -322,6 +243,23 @@ export function TakeList(): React.JSX.Element | null {
   )
 }
 
+/** Saves `file` under its own name through the browser's download. */
+function download(file: File): void {
+  const url = URL.createObjectURL(file)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = file.name
+  document.body.append(link)
+  link.click()
+  link.remove()
+  // Some browsers read the URL after the click returned.
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/**
+ * A take: the mix, which is what is uploaded, and below it each source's own track when it had
+ * several at once.
+ */
 function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   const { t } = useTranslation()
   const { deleteTake } = useRecording()
@@ -336,17 +274,6 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   // WebM over 20 minutes is not decoded, however small its file.
   const decoded = decodesLocally(take.file, take.duration)
 
-  const download = (): void => {
-    const url = URL.createObjectURL(take.file)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = name
-    document.body.append(link)
-    link.click()
-    link.remove()
-    // Some browsers read the URL after the click returned.
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  }
   const arm = (): void => {
     setArmed(true)
     requestAnimationFrame(() => confirmRef.current?.focus())
@@ -357,58 +284,139 @@ function TakeItem({ take }: { take: RecordedTake }): React.JSX.Element {
   }
 
   return (
+    <li className="flex flex-col gap-stack-sm">
+      <div className="flex flex-wrap items-center gap-stack-sm">
+        <div className="flex min-w-64 flex-1 flex-col gap-1">
+          <WaveformPlayer source={take.file} name={name} knownDuration={take.duration} />
+          {decoded ? null : <p className="m-0">{t('transcription.recording.waveformSkipped')}</p>}
+        </div>
+        <div className="flex items-center gap-1">
+          <IconButton label={downloadLabel} onClick={() => download(take.file)}>
+            <DownloadIcon {...ICON} />
+          </IconButton>
+          {armed ? (
+            <div
+              role="group"
+              aria-label={deleteLabel}
+              className="flex items-center gap-1"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.stopPropagation()
+                  disarm()
+                }
+              }}
+            >
+              <IconButton
+                ref={confirmRef}
+                label={confirmLabel}
+                variant="destructive"
+                onClick={() => deleteTake(take.id)}
+              >
+                <CheckIcon {...ICON} />
+              </IconButton>
+              <IconButton label={cancelLabel} onClick={disarm}>
+                <XIcon {...ICON} />
+              </IconButton>
+            </div>
+          ) : (
+            <IconButton ref={trashRef} label={deleteLabel} onClick={arm}>
+              <Trash2Icon {...ICON} />
+            </IconButton>
+          )}
+        </div>
+      </div>
+      {take.tracks ? <TrackList name={name} tracks={take.tracks} /> : null}
+    </li>
+  )
+}
+
+/**
+ * The tracks of a take, one per source, open from the start and closable; the mix above is what
+ * they make together.
+ */
+function TrackList({
+  name,
+  tracks
+}: {
+  name: string
+  tracks: readonly RecordedTrack[]
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(true)
+  const id = useId()
+  const Chevron = open ? ChevronDownIcon : ChevronRightIcon
+  return (
+    <div className="flex flex-col gap-stack-sm">
+      <div className="flex flex-wrap items-center gap-stack-sm">
+        <Badge tone="info">
+          {t('transcription.recording.tracks.count', { count: tracks.length })}
+        </Badge>
+        {/* DS gap: no Collapsible or Accordion; a button with `aria-expanded` shows the tracks. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={open ? id : undefined}
+          onClick={() => setOpen(!open)}
+        >
+          <Chevron {...ICON} />
+          {open
+            ? t('transcription.recording.tracks.hide')
+            : t('transcription.recording.tracks.show')}
+        </Button>
+      </div>
+      {open ? (
+        <ul
+          id={id}
+          aria-label={t('transcription.recording.tracks.listLabel', { name })}
+          className="m-0 flex list-none flex-col gap-stack-sm p-0"
+        >
+          {tracks.map((track, index) => (
+            <TrackItem key={track.id} track={track} number={index + 1} />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
+/** One source's track: what it is, where it starts in the take, its player and its download. */
+function TrackItem({ track, number }: { track: RecordedTrack; number: number }): React.JSX.Element {
+  const { t } = useTranslation()
+  const Icon = track.kind === 'display' ? MonitorUpIcon : MicIcon
+  const decoded = decodesLocally(track.file, track.duration)
+  return (
     <li className="flex flex-wrap items-center gap-stack-sm">
+      <Icon {...ICON} />
       <div className="flex min-w-64 flex-1 flex-col gap-1">
-        <WaveformPlayer source={take.file} name={name} knownDuration={take.duration} />
+        <WaveformPlayer source={track.file} name={track.label} knownDuration={track.duration} />
+        {track.offset >= 1 ? (
+          <p className="m-0">
+            {t('transcription.recording.tracks.from', { time: formatTime(track.offset) })}
+          </p>
+        ) : null}
         {decoded ? null : <p className="m-0">{t('transcription.recording.waveformSkipped')}</p>}
       </div>
-      <div className="flex items-center gap-1">
-        <IconButton label={downloadLabel} onClick={download}>
-          <DownloadIcon {...ICON} />
-        </IconButton>
-        {armed ? (
-          <div
-            role="group"
-            aria-label={deleteLabel}
-            className="flex items-center gap-1"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.stopPropagation()
-                disarm()
-              }
-            }}
-          >
-            <IconButton
-              ref={confirmRef}
-              label={confirmLabel}
-              variant="ghost-destructive"
-              onClick={() => deleteTake(take.id)}
-            >
-              <CheckIcon {...ICON} />
-            </IconButton>
-            <IconButton label={cancelLabel} onClick={disarm}>
-              <XIcon {...ICON} />
-            </IconButton>
-          </div>
-        ) : (
-          <IconButton ref={trashRef} label={deleteLabel} variant="ghost-destructive" onClick={arm}>
-            <Trash2Icon {...ICON} />
-          </IconButton>
-        )}
-      </div>
+      <IconButton
+        label={t('transcription.recording.tracks.download', { number, name: track.label })}
+        onClick={() => download(track.file)}
+      >
+        <DownloadIcon {...ICON} />
+      </IconButton>
     </li>
   )
 }
 
 function IconButton({
   label,
-  variant = 'ghost',
+  variant = 'secondary',
   onClick,
   children,
   ref
 }: {
   label: string
-  variant?: 'ghost' | 'ghost-destructive'
+  variant?: 'secondary' | 'destructive'
   onClick: () => void
   children: ReactNode
   ref?: React.Ref<HTMLButtonElement>
@@ -445,40 +453,5 @@ export function RecordView(): React.JSX.Element {
       <RecordingControls kind="record" />
       <TakeList />
     </RecordingTabs>
-  )
-}
-
-/**
- * The side column of the `record` view: the status and the microphone, as in kiChat, with the
- * other sources.
- */
-export function RecordingSettings(): React.JSX.Element {
-  const { t } = useTranslation()
-  const id = useId()
-  const texts = useRecordingStatusTexts()
-  return (
-    <>
-      <PanelSection title={t('transcription.common.statusLabel')}>
-        <p className="m-0">{texts.title}</p>
-        {texts.error ? (
-          <Notice tone="error" inline>
-            {texts.text}
-          </Notice>
-        ) : (
-          <p className="m-0">{texts.text}</p>
-        )}
-      </PanelSection>
-      <PanelSection
-        title={<Label htmlFor={`${id}-device`}>{t('transcription.recording.microphone')}</Label>}
-      >
-        <div className="flex items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <DeviceSelect id={`${id}-device`} compact />
-          </div>
-          <AddSourceMenu />
-        </div>
-        <SourceList />
-      </PanelSection>
-    </>
   )
 }

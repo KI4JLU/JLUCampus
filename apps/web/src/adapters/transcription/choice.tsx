@@ -50,7 +50,14 @@ export function ChoiceView(): React.JSX.Element {
   return (
     <div className="grid gap-stack-lg md:grid-cols-2">
       {choices.map((choice) => (
-        <Card key={choice.title} interactive={choice.available}>
+        // The whole lit card opens the choice; its button stays the one control for the keyboard,
+        // and its click reaches the card's. DS gap: `interactive` sets no pointer cursor.
+        <Card
+          key={choice.title}
+          interactive={choice.available}
+          className={choice.available ? 'cursor-pointer' : undefined}
+          onClick={choice.available ? () => setView(choice.view) : undefined}
+        >
           <CardHeader>
             <CardTitle asChild>
               <h2 className="flex items-center gap-2">
@@ -61,7 +68,7 @@ export function ChoiceView(): React.JSX.Element {
             <CardDescription>{choice.description}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-stack-sm">
-            <Button type="button" disabled={!choice.available} onClick={() => setView(choice.view)}>
+            <Button type="button" disabled={!choice.available}>
               {choice.title}
             </Button>
             {choice.available || !capabilities ? null : (

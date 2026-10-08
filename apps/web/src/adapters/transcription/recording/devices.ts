@@ -34,16 +34,6 @@ export function microphoneChoices(devices: readonly DeviceInfo[]): MicrophoneCho
 }
 
 /**
- * The selection after the device list changed: a device that is gone falls back to the default
- * input. kiChat never picks the first device on its own, since that silently switched every later
- * session to, e.g., a laptop's built-in microphone.
- */
-export function keepSelectedDevice(selected: string, choices: readonly MicrophoneChoice[]): string {
-  if (selected === DEFAULT_DEVICE_ID) return selected
-  return choices.some((choice) => choice.deviceId === selected) ? selected : DEFAULT_DEVICE_ID
-}
-
-/**
  * The `audio` constraint of `getUserMedia` for a selection: with the browser's echo cancellation,
  * noise suppression and gain control asked for explicitly, as live transcription hears the room.
  */

@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  audioConstraint,
-  DEFAULT_DEVICE_ID,
-  keepSelectedDevice,
-  microphoneChoices,
-  type DeviceInfo
-} from './devices'
+import { audioConstraint, DEFAULT_DEVICE_ID, microphoneChoices, type DeviceInfo } from './devices'
 
 const devices: DeviceInfo[] = [
   { deviceId: 'cam', kind: 'videoinput', label: 'Camera' },
@@ -25,19 +19,6 @@ describe('microphoneChoices', () => {
 
   it('offers nothing but the default before the permission names ids', () => {
     expect(microphoneChoices([{ deviceId: '', kind: 'audioinput', label: '' }])).toEqual([])
-  })
-})
-
-describe('keepSelectedDevice', () => {
-  const choices = microphoneChoices(devices)
-
-  it('keeps a device that is still there', () => {
-    expect(keepSelectedDevice('b', choices)).toBe('b')
-  })
-
-  it('falls back to the default input when the device disappeared', () => {
-    expect(keepSelectedDevice('gone', choices)).toBe(DEFAULT_DEVICE_ID)
-    expect(keepSelectedDevice(DEFAULT_DEVICE_ID, [])).toBe(DEFAULT_DEVICE_ID)
   })
 })
 
