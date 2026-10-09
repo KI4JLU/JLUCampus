@@ -1036,7 +1036,7 @@
     },
     "announcements": {
       "title": "Manage announcements",
-      "description": "News open once as a dialog for every user the next time they open the app. Element hints open once as a dialog when users click the element they belong to; the element's action follows only after “Got it”.",
+      "description": "News open once as a dialog for every user the next time they open the app, and stay on the “What's new” page. Element hints open once as a dialog when users click the element they belong to; the element's action follows only after “Got it”.",
       "newAnnouncement": "New announcement",
       "loadFailed": "The announcements could not be loaded.",
       "kinds": {
@@ -1083,14 +1083,14 @@
         "generalDescription": "What kind of announcement this is and whether it reaches users.",
         "kind": "Type",
         "kindHints": {
-          "news": "Opens once as a dialog the next time users open the app.",
+          "news": "Opens once as a dialog the next time users open the app, and stays on the “What's new” page.",
           "hint": "Opens as a dialog, like a news item, when users click the element. The element's action follows only after “Got it”; after that the hint does not appear again."
         },
         "enabled": "Active",
         "enabledHint": "Inactive announcements stay saved as drafts and reach no one.",
         "title": "Title",
         "body": "Text",
-        "bodyHint": "Plain text. A blank line starts a new paragraph.",
+        "bodyHint": "Markdown: **bold**, *italic*, “- ” at the start of a line for lists, [text](https://…) for links. A blank line starts a new paragraph.",
         "target": "Target",
         "targetDescription": "The element whose click opens the hint as a dialog, and on which pages. “Test on page” shows it only to you, without saving.",
         "suggestion": "Known element",
@@ -1119,6 +1119,24 @@
           "selectorInvalid": "This is not a valid CSS selector.",
           "path": "Enter a path that starts with / and has at most one * at the end (at most {{max}} characters)."
         }
+      },
+      "translate": {
+        "button": "Translate from {{from}}",
+        "from": {
+          "de": "German",
+          "en": "English"
+        },
+        "pending": "Translating …",
+        "hint": "Fills title and text using the translator's default engine. Please check before saving.",
+        "needsSource": "Write the title and text in {{from}} first, then translate.",
+        "unavailable": "The translator is not set up, so translation is unavailable.",
+        "done": "Translated. Please check before saving.",
+        "failed": "The translation failed. Please try again.",
+        "replaceTitle": "Replace text?",
+        "replaceDescription": "This language's title and text are replaced by a translation from {{from}}.",
+        "replace": "Replace",
+        "changed": "The text changed while it was being translated, so the translation was discarded. Please translate again.",
+        "misaligned": "The translation did not match the text and was discarded. Please try again."
       }
     }
   },
@@ -1130,7 +1148,10 @@
       "pageChanged": "News {{current}} of {{total}}: {{title}}",
       "back": "Back",
       "next": "Next",
-      "done": "Done"
+      "done": "Done",
+      "all": "All news",
+      "new": "New",
+      "loadFailed": "The news could not be loaded."
     },
     "hint": {
       "gotIt": "Got it",

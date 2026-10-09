@@ -10,7 +10,6 @@ import {
 } from '@ki4jlu/design-system'
 import { LANGUAGES, type Me } from '@justcampus/shared'
 import { useLanguage } from '@/lib/language'
-import { useOpenNews } from '@/lib/news-context'
 import { signOut } from '@/lib/session'
 import { toast } from '@/lib/toast'
 import { TOUR } from '@/lib/tour-targets'
@@ -27,7 +26,6 @@ export function AccountMenu({ me }: { me: Me }): React.JSX.Element {
   const navigate = useNavigate()
   const { language, setLanguage } = useLanguage({ persist: true })
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const openNews = useOpenNews()
   const menuRef = useRef<HTMLDivElement>(null)
   const displayName = me.name || me.email
 
@@ -59,11 +57,11 @@ export function AccountMenu({ me }: { me: Me }): React.JSX.Element {
           <SettingsIcon {...ICON} />
           {t('account.settings')}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => openNews(menuRef.current?.querySelector('button') ?? null)}
-        >
-          <SparklesIcon {...ICON} />
-          {t('account.news')}
+        <DropdownMenuItem asChild>
+          <Link to="/news">
+            <SparklesIcon {...ICON} />
+            {t('account.news')}
+          </Link>
         </DropdownMenuItem>
         {me.role === 'admin' ? (
           <DropdownMenuItem asChild>

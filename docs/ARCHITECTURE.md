@@ -685,9 +685,22 @@ allows every signed-in user and is the entry point for future audience rules.
   the feed read (`PUT /api/feed/read`); showing a tile does not, except that
   a feed never read is marked on first display so later entries can be new.
 - Announcements: `AnnouncementHost` (mounted once in `app-layout.tsx`)
-  opens the unread news as a paged dialog once the app has started and marks
-  every page the user viewed seen when it closes; the account menu's "What's
-  new" reopens all news. Hints never open by themselves: document-level
+  opens the unread news as a paged dialog once the app has started (not when
+  it started on `/news`) and marks every page the user viewed seen when it
+  closes. The account menu's "What's new" and the dialog's "All news" link go
+  to `/news` (`routes/news-page.tsx`), which lists every news item as a card,
+  newest first, like a blog, and marks the unread ones seen (their "New" badge
+  stays until the page is left). Bodies are Markdown, rendered read-only by
+  Tiptap (`components/markdown-view.tsx`, with single line breaks kept through
+  a `marked` instance of its own per view, and the text's headings moved two
+  levels down under the post's or dialog's `<h2>`), so no HTML from the text
+  reaches the page.
+  In the admin editor, "Translate from German" fills the English title and
+  text through the translator module's `/translate` with its default engine
+  (`lib/announcement-translation.ts`): only each line's words go out, list
+  markers, indentation and blank lines stay as written; the result is unsaved
+  until the admin saves.
+  Hints never open by themselves: document-level
   listeners (capture phase) find the oldest unread, path-matching hint whose
   selector `closest()`-matches the pressed or clicked element (`hintForClick`)
   and open it as a dialog shaped like a news item (`AnnouncementDialog`,

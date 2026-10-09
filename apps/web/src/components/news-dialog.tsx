@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@ki4jlu/design-system'
 import type { Language } from '@justcampus/shared'
-import { textIn, type UserNews } from '@/lib/announcements'
+import { newsDate, textIn, type UserNews } from '@/lib/announcements'
 import { AnnouncementDialog } from './announcement-dialog'
 
 interface NewsDialogProps {
@@ -12,20 +13,14 @@ interface NewsDialogProps {
   language: Language
   /** As the dialog closes, with the items the user paged to. */
   onClose: (viewedIds: string[]) => void
-  onCloseAutoFocus?: (event: Event) => void
 }
 
 /**
  * News items one page each, with Back and Next, the last page's button closing the dialog. The
  * items the user actually paged to count as read; closing early leaves the rest for next time.
+ * "All news" closes it too and goes to the news page, which counts every item as read.
  */
-export function NewsDialog({
-  open,
-  items,
-  language,
-  onClose,
-  onCloseAutoFocus
-}: NewsDialogProps): React.JSX.Element {
+export function NewsDialog({ open, items, language, onClose }: NewsDialogProps): React.JSX.Element {
   const { t } = useTranslation()
   const [page, setPage] = useState(0)
   // The furthest page shown so far: every page up to it was viewed.
@@ -56,22 +51,26 @@ export function NewsDialog({
     <AnnouncementDialog
       open={open}
       onClose={close}
-      onCloseAutoFocus={onCloseAutoFocus}
       meta={
         !item
           ? t('announcements.news.empty')
           : items.length > 1
             ? t('announcements.news.meta', {
-                date: formatDate(item.publishedAt, language),
+                date: newsDate(item.publishedAt, language),
                 current: page + 1,
                 total: items.length
               })
-            : formatDate(item.publishedAt, language)
+            : newsDate(item.publishedAt, language)
       }
       title={text ? text.title : t('announcements.news.title')}
       body={text ? text.body : null}
       footer={
         <>
+          <Button asChild variant="link" className="sm:me-auto">
+            <Link to="/news" onClick={close}>
+              {t('announcements.news.all')}
+            </Link>
+          </Button>
           {items.length > 1 ? (
             <Button variant="secondary" disabled={page === 0} onClick={() => goTo(page - 1)}>
               {t('announcements.news.back')}
@@ -90,8 +89,4 @@ export function NewsDialog({
       </p>
     </AnnouncementDialog>
   )
-}
-
-function formatDate(iso: string, language: Language): string {
-  return new Intl.DateTimeFormat(language, { dateStyle: 'long' }).format(new Date(iso))
 }

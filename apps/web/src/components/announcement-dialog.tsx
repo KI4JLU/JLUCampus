@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Dialog,
@@ -6,9 +6,11 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle
+  DialogTitle,
+  Spinner
 } from '@ki4jlu/design-system'
-import { AnnouncementBody } from './announcement-body'
+
+const MarkdownView = lazy(() => import('./markdown-view'))
 
 interface AnnouncementDialogProps {
   open: boolean
@@ -17,7 +19,7 @@ interface AnnouncementDialogProps {
   /** The small line above the title, e.g. the date or a badge; it describes the dialog. */
   meta: ReactNode
   title: string
-  /** `null` for a dialog with nothing to read but its title and meta line. */
+  /** Markdown; `null` for a dialog with nothing to read but its title and meta line. */
   body: string | null
   /** After the text, e.g. a note or a live region. */
   children?: ReactNode
@@ -55,7 +57,9 @@ export function AnnouncementDialog({
         {body !== null ? (
           // Long texts scroll inside the dialog; the buttons stay in view.
           <div className="max-h-96 overflow-y-auto">
-            <AnnouncementBody body={body} />
+            <Suspense fallback={<Spinner label={t('common.loading')} />}>
+              <MarkdownView markdown={body} breaks headingOffset={2} />
+            </Suspense>
           </div>
         ) : null}
         {children}

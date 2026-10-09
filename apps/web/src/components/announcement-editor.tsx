@@ -63,6 +63,7 @@ import {
 } from '@/lib/queries'
 import { toast } from '@/lib/toast'
 import { componentTourId, tourSelector, TOUR_TARGETS } from '@/lib/tour-targets'
+import { AnnouncementAutoTranslate } from './announcement-auto-translate'
 import { DeleteAnnouncementDialog, type AnnouncementTarget } from './announcement-dialogs'
 import { Field } from './field'
 import { FormSection } from './form-section'
@@ -70,6 +71,9 @@ import { PageHeader } from './page-header'
 import { Alert, AlertDescription } from './ui/alert'
 
 const ICON = { 'aria-hidden': true, width: '1em', height: '1em' } as const
+
+/** The language admins write first; the others can be translated from it. */
+const SOURCE_LANGUAGE: Language = 'de'
 
 /** Every navigation away is a candidate; `disabled` lets them through while nothing is unsaved. */
 const BLOCK_NAVIGATION = (): boolean => true
@@ -282,6 +286,15 @@ export function AnnouncementEditor({ announcement }: AnnouncementEditorProps): R
         </FormSection>
         {LANGUAGES.map((language) => (
           <FormSection key={language} title={t(`language.${language}`)}>
+            {language !== SOURCE_LANGUAGE ? (
+              <AnnouncementAutoTranslate
+                from={SOURCE_LANGUAGE}
+                to={language}
+                source={state.texts[SOURCE_LANGUAGE]}
+                current={state.texts[language]}
+                onTranslated={(text) => setText(language, text)}
+              />
+            ) : null}
             <Field
               id={`${formId}-${language}-title`}
               label={t('admin.announcements.form.title')}
