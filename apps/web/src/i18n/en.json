@@ -1134,7 +1134,9 @@
         "failed": "The translation failed. Please try again.",
         "replaceTitle": "Replace text?",
         "replaceDescription": "This language's title and text are replaced by a translation from {{from}}.",
-        "replace": "Replace"
+        "replace": "Replace",
+        "changed": "The text changed while it was being translated, so the translation was discarded. Please translate again.",
+        "misaligned": "The translation did not match the text and was discarded. Please try again."
       }
     }
   },

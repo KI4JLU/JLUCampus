@@ -1134,7 +1134,9 @@
         "failed": "Die Übersetzung ist fehlgeschlagen. Bitte erneut versuchen.",
         "replaceTitle": "Text ersetzen?",
         "replaceDescription": "Titel und Text dieser Sprache werden durch eine Übersetzung aus {{from}} ersetzt.",
-        "replace": "Ersetzen"
+        "replace": "Ersetzen",
+        "changed": "Der Text wurde während der Übersetzung geändert; die Übersetzung wurde verworfen. Bitte erneut übersetzen.",
+        "misaligned": "Die Übersetzung passte nicht zum Text und wurde verworfen. Bitte erneut versuchen."
       }
     }
   },

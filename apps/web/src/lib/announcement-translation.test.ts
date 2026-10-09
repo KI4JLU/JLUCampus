@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   joinTranslated,
+  keepVerbatim,
+  MisalignedTranslationError,
   splitMarkdown,
   translateAnnouncementText
 } from './announcement-translation'
@@ -51,9 +53,44 @@ describe('splitMarkdown', () => {
     expect(joinTranslated(joints, texts)).toBe(BODY)
   })
 
-  it('keeps lines that are only a marker in the structure', () => {
-    expect(splitMarkdown('-\nText')).toEqual({ texts: ['-', 'Text'], joints: ['', '\n', ''] })
+  it('keeps lines of syntax only in the structure', () => {
+    expect(splitMarkdown('-\nText')).toEqual({ texts: ['Text'], joints: ['-\n', ''] })
     expect(splitMarkdown('- \nText')).toEqual({ texts: ['Text'], joints: ['- \n', ''] })
+    expect(splitMarkdown('**\n---\nText')).toEqual({ texts: ['Text'], joints: ['**\n---\n', ''] })
+  })
+
+  it('keeps task boxes with the list marker', () => {
+    expect(splitMarkdown('- [x] Erledigt')).toEqual({ texts: ['Erledigt'], joints: ['- [x] ', ''] })
+  })
+
+  it('leaves code blocks alone, up to the matching fence', () => {
+    const text = 'Vorher\n```ts\nconst a = 1\n~~~\n```\nNachher'
+    expect(splitMarkdown(text)).toEqual({
+      texts: ['Vorher', 'Nachher'],
+      joints: ['', '\n```ts\nconst a = 1\n~~~\n```\n', '']
+    })
+  })
+
+  it('translates table cells one by one and keeps pipes and the delimiter row', () => {
+    const text = '| Name | Wert |\n| --- | :-: |\n| Eins | Zwei |'
+    const { texts, joints } = splitMarkdown(text)
+    expect(texts).toEqual(['Name', 'Wert', 'Eins', 'Zwei'])
+    expect(joinTranslated(joints, texts)).toBe(text)
+  })
+})
+
+describe('keepVerbatim', () => {
+  it('puts link destinations and inline code back', () => {
+    expect(
+      keepVerbatim(
+        'Siehe [Seite](https://a.de/x "Titel") und `npm ci`.',
+        'See [page](https://a.de/y "Title") and `npm install`.'
+      )
+    ).toBe('See [page](https://a.de/x "Titel") and `npm ci`.')
+  })
+
+  it('leaves the translation as it is when the counts differ', () => {
+    expect(keepVerbatim('[a](x) [b](y)', '[a](z)')).toBe('[a](z)')
   })
 })
 
@@ -77,5 +114,15 @@ describe('translateAnnouncementText', () => {
       title: 'EN(Neuigkeit)',
       body: '- EN(**Eins**)\n  EN(Zwei)\n\nEN(Drei)'
     })
+  })
+
+  it('rejects answers that do not line up', async () => {
+    const run = (text: string[]): Promise<unknown> =>
+      translateAnnouncementText({ title: 'Titel', body: 'Eins\nZwei' }, 'de', 'en', async () => ({
+        text
+      }))
+    await expect(run(['Title', 'One'])).rejects.toBeInstanceOf(MisalignedTranslationError)
+    // How the model engine answers when it lost count: everything in the first piece.
+    await expect(run(['Title One Two', '', ''])).rejects.toBeInstanceOf(MisalignedTranslationError)
   })
 })
