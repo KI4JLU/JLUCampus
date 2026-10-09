@@ -50,8 +50,8 @@ export function unreadNews(announcements: readonly UserAnnouncement[]): UserNews
 }
 
 /**
- * The hints that may show on `pathname`, in the order they take turns: not yet acknowledged,
- * limited to a matching path, oldest first. Which one shows depends on whose element is on screen.
+ * The hints that may open on `pathname`: not yet acknowledged, limited to a matching path, oldest
+ * first.
  */
 export function hintQueue(
   announcements: readonly UserAnnouncement[],
@@ -61,6 +61,37 @@ export function hintQueue(
     .filter((item): item is UserHint => item.kind === 'hint' && !item.seen)
     .filter((item) => announcementPathMatches(item.target.path, pathname))
     .sort(byPublishedAt)
+}
+
+/**
+ * The element `selector` finds from the clicked element outwards (`closest`), or `null`; an
+ * invalid selector finds nothing.
+ */
+export function closestMatch<E>(
+  selector: string,
+  closest: (selector: string) => E | null
+): E | null {
+  try {
+    return closest(selector)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The hint a click opens and the element it points at: the oldest unread hint for the page whose
+ * element is the clicked one or contains it. `closest` is the clicked element's.
+ */
+export function hintForClick<E>(
+  announcements: readonly UserAnnouncement[],
+  pathname: string,
+  closest: (selector: string) => E | null
+): { hint: UserHint; element: E } | null {
+  for (const hint of hintQueue(announcements, pathname)) {
+    const element = closestMatch(hint.target.selector, closest)
+    if (element !== null) return { hint, element }
+  }
+  return null
 }
 
 /**

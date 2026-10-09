@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 
-const WATCHED_ATTRIBUTES = ['class', 'style', 'hidden', 'open', 'data-state', 'aria-hidden']
+/** Attributes whose change may show or hide an element. */
+export const WATCHED_ATTRIBUTES = ['class', 'style', 'hidden', 'open', 'data-state', 'aria-hidden']
 
 export interface VisibleTarget {
   /** Which selector found it. */
@@ -10,8 +11,8 @@ export interface VisibleTarget {
 
 /**
  * The first group, in order, with an eligible item, and that item. Groups are the elements each
- * selector of the queue finds; a group without an eligible one (none on the page, or none on
- * screen) passes the turn to the next.
+ * selector finds; a group without an eligible one (none on the page, or none on screen) passes
+ * the turn to the next.
  */
 export function firstEligible<T>(
   groups: readonly (readonly T[])[],
@@ -35,7 +36,7 @@ function queryAll(selector: string): Element[] {
 }
 
 /** Whether the element is rendered with a size: not `hidden`, `display: none` or invisible. */
-function isRendered(element: Element): boolean {
+export function isRendered(element: Element): boolean {
   const box = element.getBoundingClientRect()
   if (box.width === 0 && box.height === 0) return false
   return element.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) ?? true
@@ -50,8 +51,7 @@ interface TargetWatcher {
  * Watches the elements the selectors find: which are on the page (a `MutationObserver`, so late
  * renders count) and which intersect the viewport, unclipped by scrolling containers (an
  * `IntersectionObserver`, which reports as the user scrolls or the layout moves). The snapshot is
- * the first selector's element that is both, so an element scrolled out of view lets the next
- * hint in the queue show.
+ * the first selector's element that is both.
  */
 function createTargetWatcher(selectors: readonly string[]): TargetWatcher {
   let snapshot: VisibleTarget | null = null
@@ -127,7 +127,8 @@ function createTargetWatcher(selectors: readonly string[]): TargetWatcher {
 
 /**
  * The element of the first selector that has one on screen, kept up to date as the page renders
- * (elements may appear late, e.g. after a query), changes, scrolls or hides it.
+ * (elements may appear late, e.g. after a query), changes, scrolls or hides it. The preview uses
+ * it to tell the admin when a page has no element to click.
  */
 export function useVisibleTarget(selectors: readonly string[]): VisibleTarget | null {
   // A new array with the same selectors keeps the watcher.

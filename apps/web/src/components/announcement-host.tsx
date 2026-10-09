@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useEffectEvent, useState, type ReactNode } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Badge, Button } from '@ki4jlu/design-system'
-import { announcementPathMatches, type Language, type UserAnnouncement } from '@justcampus/shared'
+import { announcementPathMatches, type Language } from '@justcampus/shared'
 import { currentLanguage } from '@/i18n'
 import {
   allNews,
-  hintQueue,
+  closestMatch,
+  hintForClick,
   previewOwnedBy,
   textIn,
   unreadNews,
   type AnnouncementPreview,
+  type UserHint,
   type UserNews
 } from '@/lib/announcements'
 import {
@@ -19,6 +21,7 @@ import {
   endAnnouncementPreview,
   useAnnouncementPreview
 } from '@/lib/announcement-preview'
+import { renderedMatch, useAnchorLeaves, useModalLayerOpen } from '@/lib/hint-anchor'
 import { OpenNewsContext } from '@/lib/news-context'
 import { announcementsQuery, meQuery, useMarkAnnouncementSeen } from '@/lib/queries'
 import { toast } from '@/lib/toast'
@@ -28,6 +31,21 @@ import { NewsDialog } from './news-dialog'
 
 /** How long a preview looks for its element on a page before it says it found none. */
 const PREVIEW_NOT_FOUND_MS = 4000
+
+/** Keys that open a pop-up trigger's menu or list. */
+const OPENING_KEYS = new Set(['Enter', ' ', 'ArrowDown'])
+
+/** Whether `target` is (in) a control that opens a menu, list or dialog. */
+function isPopupTrigger(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest('[aria-haspopup]:not([aria-haspopup="false"])') !== null
+  )
+}
+
+/** The hint a click opened, with the element it points at. */
+type OpenedHint =
+  { kind: 'hint'; id: string; element: Element } | { kind: 'preview'; element: Element }
 
 interface NewsSession {
   /** Remounts the dialog per opening, so it starts on its first page. */
@@ -40,7 +58,12 @@ interface NewsSession {
 
 /**
  * Shows the user's announcements in the signed-in app: unread news as a dialog once the app has
- * started, then the hints of the current page one at a time, never both at once. While an admin
+ * started, and an unread hint when the user clicks its element. Listeners on the document
+ * (capture phase, so they see every click first, and leave it alone) find the hint: the oldest
+ * unread one for the page whose element is the clicked one or contains it. The
+ * element's own action runs as usual. One hint at a time: clicks open nothing while a hint or the
+ * news are open. A hint waits while a modal dialog or menu covers the page (the one its element
+ * opened, say) and closes unseen when its element leaves the page or the view. While an admin
  * tries a hint out from its editor, that preview takes the hints' place, for that admin only.
  * `children` (the app frame) can reopen the news from `OpenNewsContext`.
  */
@@ -60,6 +83,8 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
     if (me) markSeen.mutate({ id, userId: me.id })
   }
   const [news, setNews] = useState<NewsSession | null>(null)
+  const [opened, setOpened] = useState<OpenedHint | null>(null)
+  const modalOpen = useModalLayerOpen()
   const [startChecked, setStartChecked] = useState(false)
 
   // The first list after the app started opens the unread news, once.
@@ -92,6 +117,60 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
 
   const newsOpen = news?.open ?? false
   const previewing = preview?.active === true && preview.form.kind === 'hint'
+  // What the click opened, while it still applies: the hint still unread, the preview still on.
+  const openHint =
+    opened?.kind === 'hint' && !previewing
+      ? announcements?.find(
+          (item): item is UserHint => item.kind === 'hint' && item.id === opened.id && !item.seen
+        )
+      : undefined
+  const openPreview = opened?.kind === 'preview' && previewing ? preview : null
+  const anchor = openHint || openPreview ? (opened?.element ?? null) : null
+
+  // A new element in the old one's place takes over; otherwise the hint hides, not acknowledged,
+  // and the next click on the element opens it again.
+  useAnchorLeaves(anchor, () => {
+    const selector = openHint?.target.selector ?? openPreview?.form.selector.trim()
+    const next = selector ? renderedMatch(selector) : null
+    setOpened((current) =>
+      current && next && next !== current.element ? { ...current, element: next } : null
+    )
+  })
+
+  const activate = useEffectEvent((target: EventTarget | null) => {
+    if (newsOpen || anchor || !(target instanceof Element)) return
+    const closest = (selector: string): Element | null => target.closest(selector)
+    if (previewing) {
+      const element = closestMatch(preview.form.selector.trim(), closest)
+      if (element) setOpened({ kind: 'preview', element })
+      return
+    }
+    const match = announcements ? hintForClick(announcements, pathname, closest) : null
+    if (match) setOpened({ kind: 'hint', id: match.hint.id, element: match.element })
+  })
+
+  // Clicks (also Enter and Space on buttons) open hints. Radix opens menus and lists on the press
+  // or key instead, and its modal ones then keep the click from reaching their trigger, so on
+  // pop-up triggers the press and the opening keys count too; whichever comes first opens it.
+  useEffect(() => {
+    const onClick = (event: MouseEvent): void => activate(event.target)
+    const onPointerDown = (event: PointerEvent): void => {
+      if (event.button === 0 && isPopupTrigger(event.target)) activate(event.target)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (OPENING_KEYS.has(event.key) && isPopupTrigger(event.target)) activate(event.target)
+    }
+    document.addEventListener('click', onClick, true)
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('click', onClick, true)
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [])
+
+  const close = (): void => setOpened(null)
 
   return (
     <OpenNewsContext.Provider value={openNews}>
@@ -110,60 +189,54 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
           }}
         />
       ) : null}
-      {previewing ? (
-        <PreviewHint preview={preview} pathname={pathname} language={language} paused={newsOpen} />
-      ) : announcements ? (
-        <PageHints
-          announcements={announcements}
-          pathname={pathname}
-          language={language}
-          paused={newsOpen}
-          onSeen={acknowledge}
-        />
+      {previewing ? <PreviewNotices pathname={pathname} selector={preview.form.selector} /> : null}
+      {anchor && !modalOpen ? (
+        openPreview ? (
+          <PreviewHint
+            preview={openPreview}
+            anchor={anchor}
+            pathname={pathname}
+            language={language}
+            onClose={close}
+          />
+        ) : openHint ? (
+          <PageHint
+            key={openHint.id}
+            hint={openHint}
+            anchor={anchor}
+            language={language}
+            onSeen={() => {
+              acknowledge(openHint.id)
+              close()
+            }}
+          />
+        ) : null
       ) : null}
     </OpenNewsContext.Provider>
   )
 }
 
-interface PageHintsProps {
-  announcements: UserAnnouncement[]
-  pathname: string
+interface PageHintProps {
+  hint: UserHint
+  anchor: Element
   language: Language
-  /** While the news dialog is open, no hint shows. */
-  paused: boolean
-  onSeen: (id: string) => void
+  onSeen: () => void
 }
 
-/**
- * The page's unread hints take turns, oldest first; one shows as soon as its element is on
- * screen. A hint whose element goes away hides until it is back; only "Got it", the close button
- * or Escape mark it seen.
- */
-function PageHints({
-  announcements,
-  pathname,
-  language,
-  paused,
-  onSeen
-}: PageHintsProps): React.JSX.Element | null {
+/** An unread hint a click opened; only "Got it", the close button or Escape mark it seen. */
+function PageHint({ hint, anchor, language, onSeen }: PageHintProps): React.JSX.Element {
   const { t } = useTranslation()
-  const queue = paused ? [] : hintQueue(announcements, pathname)
-  const target = useVisibleTarget(queue.map((hint) => hint.target.selector))
-  const hint = target ? queue[target.index] : undefined
-  if (!target || !hint) return null
   const text = textIn(hint.texts, language)
-  const acknowledge = (): void => onSeen(hint.id)
   return (
     <HintPopover
-      key={hint.id}
-      anchor={target.element}
+      anchor={anchor}
       side={hint.target.side}
       title={text.title}
       body={text.body}
       closeLabel={t('common.close')}
-      onClose={acknowledge}
+      onClose={onSeen}
       actions={
-        <Button size="sm" onClick={acknowledge}>
+        <Button size="sm" onClick={onSeen}>
           {t('announcements.hint.gotIt')}
         </Button>
       }
@@ -171,33 +244,27 @@ function PageHints({
   )
 }
 
-interface PreviewHintProps {
-  preview: AnnouncementPreview
-  pathname: string
-  language: Language
-  paused: boolean
-}
-
 /**
- * The hint an admin tries out, unsaved, on whichever page they open, whether or not its page path
- * would show it there (it says when not). It marks nothing seen. When a page has no such element
- * after a few seconds, a toast says so; the preview stays for the next page.
+ * While a preview is on: says so on arrival, and when a page has no element for its selector on
+ * screen after a few seconds, says that too; the preview stays for the next page.
  */
-function PreviewHint({
-  preview,
-  pathname,
-  language,
-  paused
-}: PreviewHintProps): React.JSX.Element | null {
+function PreviewNotices({ pathname, selector }: { pathname: string; selector: string }): null {
   const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { form, announcementId } = preview
-  const selector = form.selector.trim()
-  const target = useVisibleTarget(paused || !selector ? [] : [selector])
-  const found = target !== null
+  const trimmed = selector.trim()
+  const found = useVisibleTarget(trimmed ? [trimmed] : []) !== null
+
+  const announce = useEffectEvent(() =>
+    toast({
+      variant: 'info',
+      title: t('announcements.preview.active'),
+      description: t('announcements.preview.activeDescription')
+    })
+  )
+  // Once per preview (and page load), not again on every page.
+  useEffect(() => announce(), [])
 
   useEffect(() => {
-    if (found || paused) return
+    if (found) return
     const timer = window.setTimeout(
       () =>
         toast({
@@ -208,14 +275,45 @@ function PreviewHint({
       PREVIEW_NOT_FOUND_MS
     )
     return () => window.clearTimeout(timer)
-  }, [found, paused, pathname, t])
+  }, [found, pathname, t])
 
-  if (!target) return null
+  return null
+}
+
+interface PreviewHintProps {
+  preview: AnnouncementPreview
+  anchor: Element
+  pathname: string
+  language: Language
+  onClose: () => void
+}
+
+/**
+ * The hint an admin tries out, unsaved, opened by a click on its element on whichever page they
+ * are, whether or not its page path would offer it there (it says when not). It marks nothing
+ * seen; closing it keeps the preview on for the next click.
+ */
+function PreviewHint({
+  preview,
+  anchor,
+  pathname,
+  language,
+  onClose
+}: PreviewHintProps): React.JSX.Element {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { form, announcementId } = preview
   const text = textIn(form.texts, language)
   const path = form.path.trim()
   const shownHere = announcementPathMatches(path ? path : null, pathname)
 
+  const end = (): void => {
+    endAnnouncementPreview()
+    onClose()
+  }
+
   const backToEditor = (): void => {
+    onClose()
     void (announcementId
       ? navigate({
           to: '/admin/announcements/$announcementId',
@@ -226,7 +324,7 @@ function PreviewHint({
 
   return (
     <HintPopover
-      anchor={target.element}
+      anchor={anchor}
       side={form.side}
       title={text.title.trim() || t('announcements.preview.untitled')}
       body={text.body}
@@ -242,11 +340,11 @@ function PreviewHint({
           </Badge>
         )
       }
-      closeLabel={t('announcements.preview.end')}
-      onClose={endAnnouncementPreview}
+      closeLabel={t('common.close')}
+      onClose={onClose}
       actions={
         <>
-          <Button size="sm" variant="secondary" onClick={endAnnouncementPreview}>
+          <Button size="sm" variant="secondary" onClick={end}>
             {t('announcements.preview.end')}
           </Button>
           <Button size="sm" onClick={backToEditor}>

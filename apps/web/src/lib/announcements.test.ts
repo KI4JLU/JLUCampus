@@ -4,6 +4,8 @@ import { initialAnnouncementForm } from './announcement-form'
 import { ApiRequestError } from './api'
 import {
   allNews,
+  closestMatch,
+  hintForClick,
   hintQueue,
   isPreviewFor,
   paragraphsOf,
@@ -108,6 +110,46 @@ describe('hintQueue', () => {
     const ids = hintQueue(announcements, '/c/abc').map((item) => item.id)
     expect(ids).not.toContain(id(1))
     expect(ids).not.toContain(id(2))
+  })
+})
+
+describe('hintForClick', () => {
+  /** A clicked icon inside the `#target-5` button inside the `#target-3` bar, then the page. */
+  const ancestors = ['icon', '#target-5', '#target-3', '#target-1']
+  const closest = (selector: string): string | null => {
+    if (selector.startsWith('[')) throw new SyntaxError(`'${selector}' is not valid`)
+    return ancestors.find((element) => element === selector) ?? null
+  }
+
+  it('opens the oldest unread hint whose element contains the click', () => {
+    expect(hintForClick(announcements, '/c/abc', closest)).toMatchObject({
+      hint: { id: id(3) },
+      element: '#target-3'
+    })
+  })
+
+  it('leaves out hints for other pages', () => {
+    const onlyFive = announcements.filter((item) => item.id !== id(3))
+    expect(hintForClick(onlyFive, '/c/abc', closest)?.hint.id).toBe(id(5))
+    expect(hintForClick(onlyFive, '/', closest)).toBeNull()
+  })
+
+  it('leaves out acknowledged hints', () => {
+    const onlyOne = announcements.filter((item) => item.id === id(1))
+    expect(hintForClick(onlyOne, '/', closest)).toBeNull()
+  })
+
+  it('opens nothing for a click outside every hint element', () => {
+    expect(hintForClick(announcements, '/c/abc', () => null)).toBeNull()
+  })
+
+  it('skips a hint with an invalid selector', () => {
+    const broken: UserAnnouncement = {
+      ...hint(7, '2026-09-01T00:00:00.000Z'),
+      target: { selector: '[broken', path: null, side: 'top' }
+    } as UserAnnouncement
+    expect(hintForClick([broken, ...announcements], '/c/abc', closest)?.hint.id).toBe(id(3))
+    expect(closestMatch('[broken', closest)).toBeNull()
   })
 })
 

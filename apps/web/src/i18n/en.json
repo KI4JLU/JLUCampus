@@ -919,7 +919,7 @@
     },
     "announcements": {
       "title": "Manage announcements",
-      "description": "News open once as a dialog for every user the next time they open the app. Element hints appear next to an element of the app until they are dismissed.",
+      "description": "News open once as a dialog for every user the next time they open the app. Element hints open once when users click the element they belong to.",
       "newAnnouncement": "New announcement",
       "loadFailed": "The announcements could not be loaded.",
       "kinds": {
@@ -973,7 +973,7 @@
         "kind": "Type",
         "kindHints": {
           "news": "Opens once as a dialog the next time users open the app.",
-          "hint": "Pops up next to an element of the app until users dismiss it."
+          "hint": "Opens as a small pop-up when users click the element, and only once: after “Got it” it does not appear again."
         },
         "enabled": "Active",
         "enabledHint": "Inactive announcements stay saved as drafts and reach no one.",
@@ -981,14 +981,14 @@
         "body": "Text",
         "bodyHint": "Plain text. A blank line starts a new paragraph.",
         "target": "Target",
-        "targetDescription": "The element the hint appears next to, and on which pages. “Test on page” shows it only to you, without saving.",
+        "targetDescription": "The element whose click opens the hint, and on which pages. “Test on page” shows it only to you, without saving.",
         "suggestion": "Known element",
         "suggestionHint": "Sets the selector for an element the app marks permanently.",
         "suggestionPlaceholder": "Choose an element",
         "suggestionShell": "App frame",
         "suggestionSidebar": "Components in the sidebar",
         "selector": "CSS selector",
-        "selectorHint": "The hint points at the first visible element that matches.",
+        "selectorHint": "A click on a matching element, or on anything inside it, opens the hint.",
         "path": "Page path",
         "pathHint": "Empty: every page. A trailing * matches every path that starts with it, e.g. /c/*.",
         "side": "Side of the element",
@@ -1032,7 +1032,9 @@
       "end": "End preview",
       "back": "Back to editor",
       "notFound": "Element not found",
-      "notFoundDescription": "No visible element on this page matches the selector. The preview stays on, so you can open another page."
+      "notFoundDescription": "No visible element on this page matches the selector. The preview stays on, so you can open another page.",
+      "active": "Preview on",
+      "activeDescription": "Click the element to see the hint."
     },
     "tourTargets": {
       "dashboardLink": "Sidebar: Dashboard",

@@ -10,6 +10,7 @@ import {
 import { XIcon } from 'lucide-react'
 import { Button, Popover, PopoverAnchor, PopoverContent } from '@ki4jlu/design-system'
 import type { AnnouncementSide } from '@justcampus/shared'
+import { hintMarker } from '@/lib/hint-anchor'
 import { leavesHint, pageControlBeside, relationTo, tabbablesIn } from '@/lib/hint-focus'
 import { AnnouncementBody } from './announcement-body'
 
@@ -35,7 +36,7 @@ interface HintPopoverProps {
 /**
  * A small pop-up beside an element of the page. It leaves the focus where it is and stays when
  * the user clicks elsewhere, so it never interrupts work on the page; only its buttons or Escape
- * close it. It hides while its element is scrolled out of view. For the keyboard it sits right
+ * close it. The host closes it once its element leaves the view. For the keyboard it sits right
  * after its element: Tab moves through it and on into the page (Radix would loop inside it), and
  * when it closes with the focus inside, the focus goes back to the element.
  */
@@ -99,7 +100,10 @@ export function HintPopover({
   return (
     <Popover open>
       <PopoverAnchor virtualRef={virtualRef} />
+      {/* DS gap: Popover shares z-50 with panels and dialogs; a hint opened by the click that
+          opens a panel must stay above it. */}
       <PopoverContent
+        className="z-60"
         side={side}
         collisionPadding={12}
         hideWhenDetached
@@ -109,6 +113,7 @@ export function HintPopover({
         onInteractOutside={(event) => event.preventDefault()}
         onEscapeKeyDown={onClose}
         onKeyDown={handleKeyDown}
+        {...hintMarker}
         onFocus={() => {
           focusInside.current = true
         }}
