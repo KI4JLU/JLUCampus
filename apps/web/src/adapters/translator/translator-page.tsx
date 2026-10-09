@@ -269,6 +269,7 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
               store={store}
               disabled={notSetUp || !list}
               canRephrase={canRephrase}
+              canDropDocuments={documents}
             />
           )}
           <PageSidePanel

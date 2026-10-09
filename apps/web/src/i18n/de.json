@@ -103,7 +103,7 @@
     "loadFailedTitle": "Komponente konnte nicht geladen werden",
     "loadFailedDescription": "Der Server antwortet nicht. Bitte versuchen Sie es erneut.",
     "notFoundTitle": "Komponente nicht gefunden",
-    "notFoundDescription": "Diese Komponente gibt es nicht mehr oder sie wurde deaktiviert.",
+    "notFoundDescription": "Diese Komponente gibt es nicht mehr, sie wurde deaktiviert oder Ihre Rollen erlauben sie nicht.",
     "iframe": {
       "urlLabel": "Adresse (URL)",
       "urlHint": "Die Website, die auf der Seite der Komponente eingebettet wird. Nur https, http nur für localhost."

@@ -103,7 +103,7 @@
     "loadFailedTitle": "Component could not be loaded",
     "loadFailedDescription": "The server is not responding. Please try again.",
     "notFoundTitle": "Component not found",
-    "notFoundDescription": "This component no longer exists or has been disabled.",
+    "notFoundDescription": "This component no longer exists, has been disabled, or your roles do not allow it.",
     "iframe": {
       "urlLabel": "Address (URL)",
       "urlHint": "The website embedded on the component's page. https only; http is allowed for localhost."
