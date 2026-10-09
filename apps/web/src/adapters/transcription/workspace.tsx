@@ -6,8 +6,9 @@ import type {
   TranscriptionSpeakerColorMap,
   TranscriptionTranscript
 } from '@justcampus/shared'
+import { useFeature } from '@/lib/features'
 import type { ComponentOf } from '../types'
-import { useTranscriptionCapabilities } from './api'
+import { useOfferedCapabilities } from './capabilities'
 import { useMemoryCell, usePageMemory, type PageMemory } from './page-memory'
 import { WorkspaceContext } from './use-workspace'
 
@@ -82,7 +83,10 @@ export interface TranscriptionWorkspace {
   component: ComponentOf<'transcription'>
   /** What the page keeps across a remount of itself (see `page-memory.ts`). */
   memory: PageMemory
-  /** `undefined` while loading or when the module does not answer. */
+  /**
+   * What the module offers the user (live transcription only when their roles allow it);
+   * `undefined` while loading or when the module does not answer.
+   */
   capabilities: TranscriptionCapabilities | undefined
   view: TranscriptionView
   setView: (view: TranscriptionView) => void
@@ -126,11 +130,15 @@ export function TranscriptionWorkspaceProvider({
   component,
   children
 }: WorkspaceProviderProps): React.JSX.Element {
-  const capabilities = useTranscriptionCapabilities().data
+  const capabilities = useOfferedCapabilities()
+  const live = useFeature('transcription.live')
   const memory = usePageMemory(component.id)
-  const [view, setView] = useMemoryCell(
+  const [storedView, setView] = useMemoryCell(
     memory.cell<TranscriptionView>('workspace.view', () => 'choice')
   )
+  // Live transcription the user may no longer use, e.g. kept in the page's memory, gives way to
+  // the entry choice.
+  const view = storedView === 'live' && !live ? 'choice' : storedView
   const [transcriptId, setTranscriptId] = useMemoryCell(
     memory.cell<string | null>('workspace.transcriptId', () => null)
   )

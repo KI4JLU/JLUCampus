@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useRecording } from './context'
 import { formatFileSize } from './files'
+import { hasRecordingSource } from './sources'
+import type { RecordingKind } from './state'
 
 /** Seconds since `startedAt`, ticking while it is set (T-56). */
 export function useElapsedSeconds(startedAt: number | null): number {
@@ -22,11 +24,12 @@ export interface StatusTexts {
 
 /**
  * What the status says, in kiChat's order (`updateLiveRecordingUI`): the running step first, then
- * an error, then the takes ready to upload, then whether the microphone is ready.
+ * an error, then the takes ready to upload, then whether the microphone is ready. It counts as
+ * ready only once a source is chosen; before, the status asks for one.
  */
-export function useRecordingStatusTexts(): StatusTexts {
+export function useRecordingStatusTexts(kind: RecordingKind): StatusTexts {
   const { t } = useTranslation()
-  const { state, takes, microphones } = useRecording()
+  const { state, takes, microphones, sources } = useRecording()
   switch (state.status) {
     case 'recording':
       return state.kind === 'live'
@@ -76,7 +79,7 @@ export function useRecordingStatusTexts(): StatusTexts {
               : t('transcription.recording.recordingsReadyToUpload', { count: takes.length }),
           error: false
         }
-      return microphones.granted
+      return microphones.granted && hasRecordingSource(kind, microphones.selected, sources.list)
         ? {
             title: t('transcription.recording.microphoneReady'),
             text: t('transcription.recording.selectInputDeviceHint'),

@@ -47,6 +47,22 @@ export function useSampleSource(file: QueueFile): {
   return { resolve }
 }
 
+/**
+ * What one move of a scrub does to the sound: it follows the pointer while it plays. A scrub begun
+ * playing whose sound stopped at an end meanwhile starts it again from the pointer, unless that is
+ * the file's end, where it would stop at once.
+ */
+export function scrubPlayback(move: {
+  time: number
+  playing: boolean
+  startedPlaying: boolean
+  duration: number | null
+}): 'seek' | 'play' | 'none' {
+  if (move.playing) return 'seek'
+  if (!move.startedPlaying) return 'none'
+  return move.duration === null || move.time < move.duration ? 'play' : 'none'
+}
+
 /** What plays: a sample's key and where it stops. */
 interface Playing {
   key: string
@@ -74,6 +90,11 @@ export interface SamplePlayer {
    */
   play: (key: string, start: number, end: number, origin?: PlayOrigin) => Promise<void>
   stop: () => void
+  /**
+   * Moves the playhead of the sound playing to `time`, which now stops at `end`: the sample
+   * editor's scrub. Does nothing while none plays.
+   */
+  seek: (time: number, end: number) => void
   /** Plays the window, or stops it when it is the one playing (kiChat's chips). */
   toggle: (key: string, start: number, end: number) => void
   /** The key of a chip's preview playing or starting, else `null`; read at event time. */
@@ -209,6 +230,15 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
     [resolve]
   )
 
+  const seek = useCallback((time: number, end: number) => {
+    const audio = audioRef.current
+    const current = range.current
+    if (!audio || !current) return
+    range.current = { key: current.key, end }
+    audio.currentTime = time
+    setTime(time)
+  }, [])
+
   const toggle = useCallback(
     (key: string, start: number, end: number) => {
       if (playing === key) stop()
@@ -260,6 +290,7 @@ export function useSamplePlayer(resolve: () => Promise<string | null>): SamplePl
     failed,
     play,
     stop,
+    seek,
     toggle,
     preview,
     element: (

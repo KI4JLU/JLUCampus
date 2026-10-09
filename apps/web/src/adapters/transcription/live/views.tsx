@@ -185,9 +185,7 @@ export function LiveView(): React.JSX.Element {
     <RecordingTabs current="live">
       {onpremUnavailable ? (
         <Notice tone="warning">
-          {t(`transcription.recording.onpremUnavailable.${onpremUnavailable.reason}`, {
-            model: onpremUnavailable.model
-          })}
+          {t(`transcription.recording.onpremUnavailable.${onpremUnavailable.reason}`)}
         </Notice>
       ) : live.modes.length === 0 ? (
         <Notice tone="warning">{t('transcription.recording.liveUnavailable')}</Notice>

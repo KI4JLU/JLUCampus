@@ -14,7 +14,10 @@ export class AudioMixer {
   /** The mix, one mono track. */
   readonly stream: MediaStream
   private readonly destination: MediaStreamAudioDestinationNode
-  private readonly inputs = new Map<string, MediaStreamAudioSourceNode>()
+  private readonly inputs = new Map<
+    string,
+    { node: MediaStreamAudioSourceNode; stream: MediaStream }
+  >()
   private closed = false
 
   constructor(private readonly context: MixerContext) {
@@ -30,16 +33,26 @@ export class AudioMixer {
   add(id: string, stream: MediaStream): void {
     if (this.closed) return
     this.remove(id)
-    const source = this.context.createMediaStreamSource(stream)
-    source.connect(this.destination)
-    this.inputs.set(id, source)
+    const node = this.context.createMediaStreamSource(stream)
+    node.connect(this.destination)
+    this.inputs.set(id, { node, stream })
+  }
+
+  /**
+   * Mixes exactly `streams` by id: what is not among them leaves, what is new or plays another
+   * stream under its id comes in.
+   */
+  sync(streams: ReadonlyMap<string, MediaStream>): void {
+    for (const id of [...this.inputs.keys()]) if (!streams.has(id)) this.remove(id)
+    for (const [id, stream] of streams)
+      if (this.inputs.get(id)?.stream !== stream) this.add(id, stream)
   }
 
   /** Takes `id` out of the mix; whether it was in. */
   remove(id: string): boolean {
-    const source = this.inputs.get(id)
-    if (!source) return false
-    source.disconnect()
+    const input = this.inputs.get(id)
+    if (!input) return false
+    input.node.disconnect()
     this.inputs.delete(id)
     return true
   }
@@ -62,7 +75,7 @@ export class AudioMixer {
   close(): void {
     if (this.closed) return
     this.closed = true
-    for (const source of this.inputs.values()) source.disconnect()
+    for (const input of this.inputs.values()) input.node.disconnect()
     this.inputs.clear()
     this.destination.disconnect()
     void this.context.close().catch(() => undefined)

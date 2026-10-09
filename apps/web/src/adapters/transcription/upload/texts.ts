@@ -1,6 +1,5 @@
 import type { TFunction } from 'i18next'
-import type { BadgeProps } from '@ki4jlu/design-system'
-import type { FileError, RowTone, StatusKey } from './queue'
+import type { FileError, StatusKey } from './queue'
 
 /** The status line of a row in the UI language (T-11). */
 export function statusText(t: TFunction, status: StatusKey): string {
@@ -44,12 +43,4 @@ export function errorText(t: TFunction, error: FileError): string {
 export function percentText(language: string, progress: number): string {
   const value = Math.max(0, Math.min(100, Math.round(progress)))
   return new Intl.NumberFormat(language, { style: 'percent' }).format(value / 100)
-}
-
-/** The badge tone of a row's look. */
-export const TONE: Record<RowTone, NonNullable<BadgeProps['tone']>> = {
-  ready: 'neutral',
-  processing: 'primary',
-  error: 'error',
-  success: 'success'
 }

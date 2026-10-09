@@ -86,6 +86,30 @@ describe('AudioMixer', () => {
     expect(sources[1]).toMatchObject({ connected: [destination], stream: { id: 'new' } })
   })
 
+  it('catches up with the sources that changed while a take started', () => {
+    const { context, destination, sources } = fakeContext()
+    const mixer = new AudioMixer(context)
+    const microphone = stream('b')
+    mixer.add('main', stream('a'))
+    mixer.add('b', microphone)
+    mixer.add('tab', stream('tab'))
+    // The main microphone went; the added one took its place with its open stream.
+    mixer.sync(
+      new Map([
+        ['main', microphone],
+        ['tab', sources[2]!.stream]
+      ])
+    )
+    expect(mixer.size).toBe(2)
+    expect(mixer.has('b')).toBe(false)
+    expect(sources[0]!.connected).toEqual([])
+    expect(sources[1]!.connected).toEqual([])
+    // The tab plays on untouched; the handed-over stream connects under the main id.
+    expect(sources[2]!.connected).toEqual([destination])
+    expect(sources[3]).toMatchObject({ connected: [destination], stream: { id: 'b' } })
+    expect(sources).toHaveLength(4)
+  })
+
   it('resumes a suspended context and closes everything once', async () => {
     const { context, destination, sources } = fakeContext('suspended')
     const mixer = new AudioMixer(context)

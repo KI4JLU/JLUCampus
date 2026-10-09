@@ -22,6 +22,8 @@ import { AdminComponentsPage } from './admin-components-page'
 import { AdminFoldersPage } from './admin-folders-page'
 import { AdminPresetEditorPage } from './admin-preset-editor-page'
 import { AdminPresetsPage } from './admin-presets-page'
+import { AdminNewRolePage, AdminRoleEditorPage } from './admin-role-editor-page'
+import { AdminRolesPage } from './admin-roles-page'
 import { AdminUsersPage } from './admin-users-page'
 import { AppErrorPage, NotFoundPage } from './error-pages'
 import { AppLayout } from './app-layout'
@@ -113,6 +115,24 @@ const adminPresetRoute = createRoute({
   component: AdminPresetEditorPage
 })
 
+const adminRolesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/roles',
+  component: AdminRolesPage
+})
+
+const adminNewRoleRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/roles/new',
+  component: AdminNewRolePage
+})
+
+const adminRoleRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/roles/$roleId',
+  component: AdminRoleEditorPage
+})
+
 const adminUsersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/admin/users',
@@ -150,6 +170,9 @@ const routeTree = rootRoute.addChildren([
     adminFoldersRoute,
     adminPresetsRoute,
     adminPresetRoute,
+    adminRolesRoute,
+    adminNewRoleRoute,
+    adminRoleRoute,
     adminUsersRoute,
     adminAnnouncementsRoute,
     adminNewAnnouncementRoute,

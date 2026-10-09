@@ -1,10 +1,12 @@
 import { serve } from '@hono/node-server'
 
 import { app } from './app.js'
+import { ensureBuiltInRoles } from './access.js'
 import { env } from './env.js'
 import { ensureSingletonComponents, startModules } from './modules/index.js'
 import { createWebSocketServer } from './websocket.js'
 
+await ensureBuiltInRoles()
 await ensureSingletonComponents()
 startModules()
 serve(

@@ -1,4 +1,8 @@
-import type { DesktopComponentType, SingletonComponentType } from '@justcampus/shared'
+import type {
+  ComponentNameTranslations,
+  DesktopComponentType,
+  SingletonComponentType
+} from '@justcampus/shared'
 
 import { transcriptionModule } from './transcription/index.js'
 import { translatorModule } from './translator/index.js'
@@ -10,9 +14,19 @@ export const moduleRegistry = {
 } satisfies { [T in SingletonComponentType]: ServerModule<T> }
 
 /**
- * Name and icon of each desktop component when the server creates it. The component's page lives
+ * Name with its translations, and icon, of each desktop component when the server creates it. The component's page lives
  * in the desktop app, so the server holds nothing else for it.
  */
 export const desktopComponentDefaults = {
-  files: { name: 'Dateien & Laufwerke', icon: 'hard-drive' }
-} satisfies { [T in DesktopComponentType]: { name: string; icon: string } }
+  files: {
+    name: 'Dateien & Laufwerke',
+    nameTranslations: { en: 'Files & drives' },
+    icon: 'hard-drive'
+  }
+} satisfies {
+  [T in DesktopComponentType]: {
+    name: string
+    nameTranslations: ComponentNameTranslations
+    icon: string
+  }
+}

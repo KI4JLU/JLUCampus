@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import type { MicrophoneChoice } from './devices'
+import { DEFAULT_DEVICE_ID, type MicrophoneChoice } from './devices'
 import {
   addableMicrophones,
+  canRemoveSource,
   goneMicrophones,
+  hasRecordingSource,
   INITIAL_SOURCES,
+  mainSuccessor,
   sourcesReducer,
+  startupMicrophoneOwner,
   type RecordingSource,
   type SourcesAction,
   type SourcesState
@@ -54,9 +58,20 @@ describe('sourcesReducer', () => {
       list: [],
       announcement: { change: 'ended', label: 'Seminar', serial: 2 }
     })
-    const main = sourcesReducer(ended, { type: 'mainEnded', label: 'Laptop' })
+    const main = sourcesReducer(ended, { type: 'mainChanged', change: 'ended', label: 'Laptop' })
     expect(main.announcement).toEqual({ change: 'ended', label: 'Laptop', serial: 3 })
     expect(sourcesReducer(main, { type: 'dismiss' }).announcement).toBeNull()
+  })
+
+  it('announces the main microphone added or removed, leaving the list alone', () => {
+    const state = run([{ type: 'add', source: tab }])
+    const removed = sourcesReducer(state, { type: 'mainChanged', change: 'removed', label: 'USB' })
+    expect(removed).toEqual({
+      list: [tab],
+      announcement: { change: 'removed', label: 'USB', serial: 2 }
+    })
+    const added = sourcesReducer(removed, { type: 'mainChanged', change: 'added', label: 'USB' })
+    expect(added.announcement).toEqual({ change: 'added', label: 'USB', serial: 3 })
   })
 
   it('lets go of tabs, windows and screens when a take ends, keeping microphones', () => {
@@ -80,17 +95,111 @@ describe('sourcesReducer', () => {
 })
 
 describe('addableMicrophones', () => {
-  it('leaves out the main microphone and those added already', () => {
-    const choices = [choice('laptop', 1), choice('headset', 2), choice('usb', 3)]
-    expect(addableMicrophones(choices, 'laptop', [headset, tab])).toEqual([choice('usb', 3)])
-    // The default input names no device.
-    expect(addableMicrophones(choices, '', []).length).toBe(3)
+  const choices = [choice('laptop', 1), choice('headset', 2), choice('usb', 3)]
+
+  it('offers the default input first, then the devices not in use', () => {
+    expect(addableMicrophones('ready', choices, 'laptop', [headset, tab])).toEqual([
+      DEFAULT_DEVICE_ID,
+      'usb'
+    ])
+    expect(addableMicrophones('ready', choices, DEFAULT_DEVICE_ID, [])).toEqual([
+      'laptop',
+      'headset',
+      'usb'
+    ])
+  })
+
+  it('offers every microphone without a main one', () => {
+    expect(addableMicrophones('ready', choices, null, [tab])).toEqual([
+      DEFAULT_DEVICE_ID,
+      'laptop',
+      'headset',
+      'usb'
+    ])
+  })
+
+  it('leaves out the default input once it is added', () => {
+    const fallback: RecordingSource = { ...headset, id: 's3', deviceId: DEFAULT_DEVICE_ID }
+    expect(addableMicrophones('ready', choices, 'laptop', [fallback])).toEqual(['headset', 'usb'])
+  })
+
+  it('offers the default input without the device list, also with nothing chosen', () => {
+    expect(addableMicrophones('failed', choices, null, [])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('ready', [], null, [])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('failed', [], 'laptop', [tab])).toEqual([DEFAULT_DEVICE_ID])
+    expect(addableMicrophones('failed', [], DEFAULT_DEVICE_ID, [])).toEqual([])
+  })
+
+  it('offers nothing while the list loads or without media devices', () => {
+    expect(addableMicrophones('loading', [], null, [])).toEqual([])
+    expect(addableMicrophones('unsupported', [], null, [])).toEqual([])
+  })
+})
+
+describe('canRemoveSource', () => {
+  it('lets every source go before a take, down to none', () => {
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [], false)).toBe(true)
+    expect(canRemoveSource(null, [tab], false)).toBe(true)
+    expect(canRemoveSource(null, [], false)).toBe(false)
+  })
+
+  it('keeps the last source of a take, be it the main microphone or another', () => {
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [], true)).toBe(false)
+    expect(canRemoveSource(null, [tab], true)).toBe(false)
+    expect(canRemoveSource(DEFAULT_DEVICE_ID, [tab], true)).toBe(true)
+    expect(canRemoveSource(null, [headset, tab], true)).toBe(true)
+  })
+})
+
+describe('hasRecordingSource', () => {
+  it('has nothing to record before a source is chosen', () => {
+    expect(INITIAL_SOURCES.list).toEqual([])
+    expect(hasRecordingSource('record', null, INITIAL_SOURCES.list)).toBe(false)
+    expect(hasRecordingSource('live', null, INITIAL_SOURCES.list)).toBe(false)
+  })
+
+  it('records any source, and transcribes live only a chosen microphone', () => {
+    expect(hasRecordingSource('record', null, [tab])).toBe(true)
+    expect(hasRecordingSource('record', 'headset', [])).toBe(true)
+    expect(hasRecordingSource('live', null, [tab, headset])).toBe(false)
+    expect(hasRecordingSource('live', DEFAULT_DEVICE_ID, [])).toBe(true)
+  })
+})
+
+describe('mainSuccessor', () => {
+  it('hands over to the first added microphone, else to none', () => {
+    expect(mainSuccessor([tab, headset])).toBe('headset')
+    expect(mainSuccessor([tab])).toBeNull()
+    expect(mainSuccessor([])).toBeNull()
+  })
+})
+
+describe('startupMicrophoneOwner', () => {
+  it('gives a microphone that is still listed to its source, opened or failed', () => {
+    expect(startupMicrophoneOwner(headset, [headset, tab], 'laptop', true)).toBe('source')
+  })
+
+  it('gives it to the main microphone when it took over a main one gone while it opened', () => {
+    // The main microphone went before this one opened or failed: it left the list as the new
+    // main one. Opened, it plays as such; failed, it goes as the main one would.
+    expect(startupMicrophoneOwner(headset, [tab], 'headset', false)).toBe('main')
+  })
+
+  it('gives it to nobody when it was removed, or a main microphone is open already', () => {
+    expect(startupMicrophoneOwner(headset, [tab], 'laptop', true)).toBeNull()
+    expect(startupMicrophoneOwner(headset, [tab], null, false)).toBeNull()
+    expect(startupMicrophoneOwner(headset, [tab], 'headset', true)).toBeNull()
   })
 })
 
 describe('goneMicrophones', () => {
-  it('finds added microphones whose device disappeared, never a shared surface', () => {
+  it('finds microphones whose device disappeared, never a shared surface', () => {
     expect(goneMicrophones([headset, tab], [choice('laptop', 1)])).toEqual([headset])
     expect(goneMicrophones([headset, tab], [choice('headset', 1)])).toEqual([])
+  })
+
+  it('never counts the default input as gone', () => {
+    const fallback: RecordingSource = { ...headset, deviceId: DEFAULT_DEVICE_ID }
+    expect(goneMicrophones([fallback], [])).toEqual([])
   })
 })

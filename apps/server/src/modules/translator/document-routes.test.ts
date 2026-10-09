@@ -1,3 +1,4 @@
+import { FEATURE_KEYS, type FeatureKey } from '@justcampus/shared'
 import { Hono } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -10,6 +11,7 @@ import { ApiError } from '../../api.js'
 import type { AppEnvironment } from '../types.js'
 import { uploadDocument } from './deepl.js'
 import { activeDocumentCount, findDocument } from './documents.js'
+import { glossaryEntries } from './glossaries.js'
 import { translatorApp } from './index.js'
 
 vi.mock('./documents.js', () => ({
@@ -29,6 +31,10 @@ vi.mock('./deepl.js', () => ({
   uploadDocument: vi.fn(),
   DeepLRefusedError: class extends Error {}
 }))
+vi.mock('./glossaries.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./glossaries.js')>()),
+  glossaryEntries: vi.fn(async () => [])
+}))
 
 const deleteState = vi.hoisted(() => ({ values: {} as Record<string, unknown> }))
 vi.mock('../../db/index.js', () => ({
@@ -42,9 +48,17 @@ vi.mock('../../db/index.js', () => ({
   }
 }))
 
-function app(userId: string): Hono<AppEnvironment> {
+function app(userId: string, features: readonly FeatureKey[] = FEATURE_KEYS): Hono<AppEnvironment> {
   const testApp = new Hono<AppEnvironment>()
   testApp.use('*', async (context, next) => {
+    context.set(
+      'access',
+      Promise.resolve({
+        isAdmin: false,
+        componentIds: new Set(['component']),
+        features: new Set(features)
+      })
+    )
     context.set('session', { user: { id: userId } } as AppEnvironment['Variables']['session'])
     context.set('module', {
       type: 'translator',
@@ -84,10 +98,54 @@ describe('document routes', () => {
     return body
   }
 
+  it.each(['de', undefined])(
+    'refuses glossary ids before loading entries or uploading, with source %s',
+    async (source) => {
+      vi.mocked(activeDocumentCount).mockResolvedValue(0)
+      vi.mocked(uploadDocument).mockClear()
+      vi.mocked(glossaryEntries).mockClear()
+      const body = uploadForm()
+      body.append('glossaryId', id)
+      if (source) body.set('source', source)
+      const response = await app(
+        'glossary-denied',
+        FEATURE_KEYS.filter((feature) => feature !== 'translator.glossaries')
+      ).request('http://test/documents', { method: 'POST', body })
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: { code: 'forbidden' } })
+      expect(glossaryEntries).not.toHaveBeenCalled()
+      expect(uploadDocument).not.toHaveBeenCalled()
+    }
+  )
+
+  it('allows glossary ids with permission', async () => {
+    vi.mocked(activeDocumentCount).mockResolvedValue(0)
+    vi.mocked(uploadDocument).mockClear()
+    vi.mocked(glossaryEntries).mockClear()
+    vi.mocked(uploadDocument).mockRejectedValueOnce(new Error('upstream unavailable'))
+    const body = uploadForm()
+    body.set('source', 'de')
+    body.append('glossaryId', id)
+    const response = await app('glossary-allowed').request('http://test/documents', {
+      method: 'POST',
+      body
+    })
+    expect(response.status).toBe(502)
+    expect(glossaryEntries).toHaveBeenCalledWith(
+      [id],
+      '00000000-0000-0000-0000-000000000001',
+      expect.any(Function)
+    )
+    expect(uploadDocument).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects a job over the guard before DeepL', async () => {
     vi.mocked(activeDocumentCount).mockResolvedValue(TRANSLATOR_DOCUMENT_ACTIVE_MAX)
     vi.mocked(uploadDocument).mockClear()
-    const response = await app('owner').request('http://test/documents', {
+    const response = await app(
+      'owner',
+      FEATURE_KEYS.filter((feature) => feature !== 'translator.glossaries')
+    ).request('http://test/documents', {
       method: 'POST',
       body: uploadForm()
     })
@@ -122,7 +180,10 @@ describe('document routes', () => {
     vi.mocked(activeDocumentCount).mockResolvedValue(3)
     vi.mocked(uploadDocument).mockClear()
     vi.mocked(uploadDocument).mockRejectedValueOnce(new Error('upstream unavailable'))
-    const response = await app('owner').request('http://test/documents', {
+    const response = await app(
+      'owner',
+      FEATURE_KEYS.filter((feature) => feature !== 'translator.glossaries')
+    ).request('http://test/documents', {
       method: 'POST',
       body: uploadForm()
     })

@@ -4,6 +4,8 @@ import { PageHeaderExtraActionsContext } from '@/lib/page-header-slots'
 
 interface PageHeaderProps {
   title: ReactNode
+  /** Shown before the title, outside the heading, e.g. an icon-only back button. */
+  leading?: ReactNode
   /** Muted line below the header, part of the page body. */
   description?: ReactNode
   /** Buttons for the whole page (edit, add). */
@@ -17,6 +19,7 @@ interface PageHeaderProps {
  */
 export function PageHeader({
   title,
+  leading,
   description,
   actions: pageActions,
   className
@@ -31,12 +34,23 @@ export function PageHeader({
     pageActions
   )
 
+  const heading = (
+    <h1 className="m-0 flex min-w-0 items-center gap-2 font-headline-md text-headline-md-mobile text-on-surface">
+      {title}
+    </h1>
+  )
+
   return (
     <header className={cn('flex flex-col gap-stack-sm', className)}>
       <div className="flex flex-wrap items-center justify-between gap-stack-sm">
-        <h1 className="m-0 flex min-w-0 items-center gap-2 font-headline-md text-headline-md-mobile text-on-surface">
-          {title}
-        </h1>
+        {leading ? (
+          <div className="flex min-w-0 items-center gap-2">
+            {leading}
+            {heading}
+          </div>
+        ) : (
+          heading
+        )}
         {actions ? <div className="flex flex-wrap items-center gap-stack-sm">{actions}</div> : null}
       </div>
       {description ? (

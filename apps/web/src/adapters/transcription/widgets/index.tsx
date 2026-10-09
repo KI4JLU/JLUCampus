@@ -19,8 +19,10 @@ import {
   type TranscriptionJobStatus
 } from '@justcampus/shared'
 import { ComponentIcon } from '@/components/component-icon'
+import { useComponentName } from '@/lib/component-name'
 import type { ComponentOf, ComponentViewProps } from '../../types'
 import { useTranscriptionCapabilities, useTranscriptionJobs, useTranscripts } from '../api'
+import { useOfferedCapabilities } from '../capabilities'
 import { setTranscriptionTarget, type TranscriptionTarget } from './target-store'
 
 /**
@@ -60,6 +62,7 @@ function useOpenPage(
 
 function TileHeader({ component }: ComponentViewProps<'transcription'>): React.JSX.Element {
   const { t } = useTranslation()
+  const name = useComponentName()(component)
   return (
     // DS gap: no compact header for a dashboard tile; the same bar as the translator's and the feeds'.
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-outline-variant px-3">
@@ -70,10 +73,10 @@ function TileHeader({ component }: ComponentViewProps<'transcription'>): React.J
         <Link
           to="/c/$componentId"
           params={{ componentId: component.id }}
-          aria-label={t('dashboard.openPage', { name: component.name })}
+          aria-label={t('dashboard.openPage', { name })}
           className="truncate text-on-surface no-underline hover:underline"
         >
-          {component.name}
+          {name}
         </Link>
       </h2>
     </div>
@@ -83,7 +86,7 @@ function TileHeader({ component }: ComponentViewProps<'transcription'>): React.J
 /** A new transcription: the entry choice, or straight to upload or recording; the running jobs. */
 export function QuickTile({ component }: ComponentViewProps<'transcription'>): React.JSX.Element {
   const { t } = useTranslation()
-  const capabilities = useTranscriptionCapabilities().data
+  const capabilities = useOfferedCapabilities()
   const batch = capabilities?.batch ?? false
   const live = (capabilities?.realtimeModes.length ?? 0) > 0
   const { active } = useWidgetJobs(batch)

@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  DEFAULT_DEVICE_ID,
-  keepSelectedDevice,
-  microphoneChoices,
-  type MicrophoneChoice
-} from './devices'
+import { useMemoryCell, type MemoryCell } from '../page-memory'
+import { microphoneChoices, type MicrophoneChoice } from './devices'
 
 /**
  * The state of the device list: `loading` until the first enumeration, `unsupported` without
@@ -15,13 +11,26 @@ export type MicrophoneListState = 'loading' | 'ready' | 'unsupported' | 'failed'
 export interface Microphones {
   list: MicrophoneListState
   choices: MicrophoneChoice[]
-  /** `DEFAULT_DEVICE_ID` for the browser's default input. */
-  selected: string
-  select: (deviceId: string) => void
+  /**
+   * The main microphone: `DEFAULT_DEVICE_ID` for the browser's default input, `null` for none:
+   * before one is chosen, or when regular recording takes only other sources.
+   */
+  selected: string | null
+  /**
+   * `selected` as of now, also before the next render and in a remounted page: for what resolves
+   * while a take starts.
+   */
+  latestSelected: () => string | null
+  select: (deviceId: string | null) => void
   /** Whether the browser reports the microphone permission as granted. */
   granted: boolean
   /** After a successful `getUserMedia`: the permission is there and devices have labels now. */
   markGranted: () => void
+  /**
+   * Asks for the microphone once, unless the browser reports it as granted already: without it,
+   * the devices have no names to choose by. The stream it opens is closed at once.
+   */
+  requestAccess: () => void
 }
 
 function mediaDevices(): MediaDevices | undefined {
@@ -30,17 +39,25 @@ function mediaDevices(): MediaDevices | undefined {
 
 /**
  * Microphone permission and input devices after kiChat (T-55): checks the permission without
- * prompting, enumerates the inputs, follows permission changes and plugged or unplugged devices
- * (a selected device that disappears falls back to the default input). One selection serves
- * regular recording and live transcription.
+ * prompting, enumerates the inputs, follows permission changes and plugged or unplugged devices.
+ * One selection serves regular recording and live transcription, kept in `selection` (the page's
+ * memory, as the take it opens); the provider lets a selected device that disappears go, as any
+ * other source.
  */
-export function useMicrophones(): Microphones {
+export function useMicrophones(selection: MemoryCell<string | null>): Microphones {
   const [list, setList] = useState<MicrophoneListState>(() =>
     mediaDevices()?.enumerateDevices ? 'loading' : 'unsupported'
   )
   const [choices, setChoices] = useState<MicrophoneChoice[]>([])
-  const [selected, setSelected] = useState(DEFAULT_DEVICE_ID)
+  const [selected, select] = useMemoryCell(selection)
+  const latestSelected = selection.get
   const [granted, setGranted] = useState(false)
+  // Whether the permission query answered (or cannot): asking before would prompt even when granted.
+  const [checked, setChecked] = useState(
+    () => typeof navigator === 'undefined' || !navigator.permissions
+  )
+  const [wanted, setWanted] = useState(false)
+  const asked = useRef(false)
   const mounted = useRef(true)
 
   const refresh = useCallback((): Promise<void> => {
@@ -51,7 +68,6 @@ export function useMicrophones(): Microphones {
         if (!mounted.current) return
         const next = microphoneChoices(found)
         setChoices(next)
-        setSelected((current) => keepSelectedDevice(current, next))
         setList('ready')
       },
       () => {
@@ -81,10 +97,12 @@ export function useMicrophones(): Microphones {
         if (!mounted.current) return
         status = result
         setGranted(result.state === 'granted')
+        setChecked(true)
         result.addEventListener('change', onPermission)
       })
       .catch(() => {
         // Firefox before 131 and some WebViews know no microphone permission query.
+        if (mounted.current) setChecked(true)
       })
 
     return () => {
@@ -99,8 +117,34 @@ export function useMicrophones(): Microphones {
     void refresh()
   }, [refresh])
 
+  const requestAccess = useCallback(() => setWanted(true), [])
+
+  useEffect(() => {
+    const devices = mediaDevices()
+    if (!wanted || !checked || granted || asked.current || !devices?.getUserMedia) return
+    asked.current = true
+    devices.getUserMedia({ audio: true }).then(
+      (stream) => {
+        for (const track of stream.getTracks()) track.stop()
+        if (mounted.current) markGranted()
+      },
+      () => {
+        // Denied or no device: the take asks again when it starts and says why it cannot.
+      }
+    )
+  }, [checked, granted, markGranted, wanted])
+
   return useMemo(
-    () => ({ list, choices, selected, select: setSelected, granted, markGranted }),
-    [list, choices, selected, granted, markGranted]
+    () => ({
+      list,
+      choices,
+      selected,
+      latestSelected,
+      select,
+      granted,
+      markGranted,
+      requestAccess
+    }),
+    [list, choices, selected, latestSelected, select, granted, markGranted, requestAccess]
   )
 }

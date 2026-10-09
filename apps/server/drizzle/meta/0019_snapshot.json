@@ -1,5 +1,5 @@
 {
-  "id": "94cc8881-e337-47af-bd20-468b40346d7f",
+  "id": "9294b243-05bd-437f-b35c-f737d5548d7a",
   "prevId": "ba09c1bb-b8c9-4f69-a9e9-14a196823fef",
   "version": "7",
   "dialect": "postgresql",
@@ -127,138 +127,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.announcement": {
-      "name": "announcement",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "texts": {
-          "name": "texts",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target": {
-          "name": "target",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "published_at": {
-          "name": "published_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.announcement_seen": {
-      "name": "announcement_seen",
-      "schema": "",
-      "columns": {
-        "announcement_id": {
-          "name": "announcement_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "seen_at": {
-          "name": "seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "announcement_seen_announcement_id_announcement_id_fk": {
-          "name": "announcement_seen_announcement_id_announcement_id_fk",
-          "tableFrom": "announcement_seen",
-          "tableTo": "announcement",
-          "columnsFrom": [
-            "announcement_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "announcement_seen_user_id_user_id_fk": {
-          "name": "announcement_seen_user_id_user_id_fk",
-          "tableFrom": "announcement_seen",
-          "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "announcement_seen_announcement_id_user_id_pk": {
-          "name": "announcement_seen_announcement_id_user_id_pk",
-          "columns": [
-            "announcement_id",
-            "user_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.component": {
       "name": "component",
       "schema": "",
@@ -275,6 +143,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "name_translations": {
+          "name": "name_translations",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "type": {
           "name": "type",

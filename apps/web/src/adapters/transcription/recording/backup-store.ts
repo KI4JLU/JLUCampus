@@ -1,7 +1,10 @@
+import type { SourceKind } from './sources'
+
 /**
  * The crash backup of recorded takes in the browser's Origin Private File System: one
  * directory per take under `transcription-recordings/<id>/` with `meta.json` and numbered
- * chunk files. A writable only commits on `close()`, so every few seconds the recorder's chunks
+ * chunk files, and the take's tracks, one per source, alike in `tracks/<track id>/` inside it
+ * (takes backed up before tracks have none). A writable only commits on `close()`, so every few seconds the recorder's chunks
  * become one closed file; a crash or reload loses at most the last few seconds. The directory
  * stays until its take is uploaded or deleted; what is left over is offered again on the next
  * visit. A Web Lock per recording marks the ones a page still holds, so another tab never offers
@@ -10,6 +13,7 @@
 
 export const BACKUP_DIRECTORY = 'transcription-recordings'
 export const META_FILE = 'meta.json'
+export const TRACKS_DIRECTORY = 'tracks'
 
 /** About five seconds of audio at the recorder's one-second chunks. */
 export const CHUNKS_PER_FILE = 5
@@ -22,6 +26,29 @@ export interface BackupMeta {
   startedAt: number
   filename: string
   mimeType: string
+}
+
+/** A track's `meta.json`: one source of a take, recorded on its own. */
+export interface TrackBackupMeta {
+  id: string
+  /** The source's name. */
+  label: string
+  kind: SourceKind
+  /** When the track started, in milliseconds since the epoch; the take's start is its offset 0. */
+  startedAt: number
+  /**
+   * When it stopped capturing, written once it did; a track still running when the page went has
+   * none. Its last chunk is stored later than that, so only this tells when it ended.
+   */
+  endedAt?: number
+  mimeType: string
+}
+
+/** A track read back from the backup. */
+export interface StoredTrack extends TrackBackupMeta {
+  blob: Blob
+  /** Seconds, from its start to its end, else to its last chunk written. */
+  duration: number
 }
 
 /** What the backup needs of an OPFS file; the tests fake it. */
@@ -83,6 +110,31 @@ export function parseBackupMeta(text: string): BackupMeta | null {
   return null
 }
 
+export function parseTrackMeta(text: string): TrackBackupMeta | null {
+  try {
+    const value = JSON.parse(text) as Partial<TrackBackupMeta> | null
+    if (
+      typeof value?.id === 'string' &&
+      typeof value.label === 'string' &&
+      (value.kind === 'microphone' || value.kind === 'display') &&
+      typeof value.startedAt === 'number' &&
+      (value.endedAt === undefined || typeof value.endedAt === 'number') &&
+      typeof value.mimeType === 'string'
+    )
+      return {
+        id: value.id,
+        label: value.label,
+        kind: value.kind,
+        startedAt: value.startedAt,
+        ...(value.endedAt === undefined ? {} : { endedAt: value.endedAt }),
+        mimeType: value.mimeType
+      }
+  } catch {
+    // Not JSON.
+  }
+  return null
+}
+
 let root: Promise<StoreDirectory | null> | null = null
 
 /** The backup's directory; `null` where the browser has no OPFS or refuses it. */
@@ -100,6 +152,24 @@ export function backupDirectory(): Promise<StoreDirectory | null> {
   return root
 }
 
+/**
+ * The directory of a take's tracks, made with the take's own if it is not there yet; it rejects
+ * when the storage refuses, which fails the track's backup alone.
+ */
+export async function trackDirectory(
+  directory: Promise<StoreDirectory | null>,
+  takeId: string
+): Promise<StoreDirectory | null> {
+  const parent = await directory
+  if (!parent) return null
+  const take = await parent.getDirectoryHandle(takeId, { create: true })
+  return take.getDirectoryHandle(TRACKS_DIRECTORY, { create: true })
+}
+
+async function readText(folder: StoreDirectory, name: string): Promise<string> {
+  return (await (await folder.getFileHandle(name)).getFile()).text()
+}
+
 async function writeFile(
   directory: StoreDirectory,
   name: string,
@@ -114,12 +184,16 @@ async function writeFile(
 export interface BackupJournal {
   /** One recorder chunk; every `CHUNKS_PER_FILE` of them are written as one file. */
   add: (chunk: Blob) => void
-  /** Writes what is pending and waits for every write; never rejects. */
-  close: () => Promise<void>
+  /**
+   * Writes what is pending, then `meta` over the first one if given, and waits for every write;
+   * never rejects.
+   */
+  close: (meta?: BackupMeta | TrackBackupMeta) => Promise<void>
 }
 
 /**
- * Backs one recording up while it runs. Writes run one after another through one promise chain.
+ * Backs one recording, a take or one of its tracks, up while it runs, in `meta.id` below
+ * `directory`. Writes run one after another through one promise chain.
  * Batches follow the recorder's chunks rather than a timer, since Chrome throttles timers of a
  * tab in the background, which is where this tab is while another tab's meeting is recorded. The
  * first failure (no OPFS, quota, a refused write) ends the backup and calls `onFailure` once; the
@@ -127,7 +201,7 @@ export interface BackupJournal {
  */
 export function createBackupJournal(
   directory: Promise<StoreDirectory | null>,
-  meta: BackupMeta,
+  meta: BackupMeta | TrackBackupMeta,
   onFailure: () => void,
   chunksPerFile = CHUNKS_PER_FILE
 ): BackupJournal {
@@ -170,8 +244,17 @@ export function createBackupJournal(
       pending.push(chunk)
       if (pending.length >= chunksPerFile) flush()
     },
-    close: () => {
+    close: (final) => {
       flush()
+      if (final)
+        chain = chain.then(async () => {
+          if (failed) return
+          try {
+            await writeFile(await own, META_FILE, JSON.stringify(final))
+          } catch {
+            fail()
+          }
+        })
       return chain
     }
   }
@@ -249,7 +332,71 @@ export async function readStoredRecording(directory: StoreDirectory, id: string)
   return new Blob(parts, { type: meta?.mimeType ?? 'audio/webm' })
 }
 
-/** Removes a recording from the backup; one that is gone already counts as removed. */
+/**
+ * A take's tracks in the backup, by start, each as one blob read into memory; a take backed up
+ * before tracks, or without any, has none. Tracks that cannot be listed or read, or have no
+ * chunk, are left out; it never rejects, so the take is restored however its tracks fare.
+ */
+export async function readStoredTracks(
+  directory: StoreDirectory,
+  takeId: string
+): Promise<StoredTrack[]> {
+  let folder: StoreDirectory
+  try {
+    folder = await (await directory.getDirectoryHandle(takeId)).getDirectoryHandle(TRACKS_DIRECTORY)
+  } catch {
+    return []
+  }
+  const ids: string[] = []
+  try {
+    for await (const id of folder.keys()) ids.push(id)
+  } catch {
+    // The tracks listed so far are read; the take comes back either way.
+  }
+  const tracks: StoredTrack[] = []
+  for (const id of ids) {
+    try {
+      const track = await folder.getDirectoryHandle(id)
+      const meta = parseTrackMeta(await readText(track, META_FILE))
+      if (!meta || meta.id !== id) continue
+      const names = await chunkNames(track)
+      if (names.length === 0) continue
+      const parts: ArrayBuffer[] = []
+      let last = 0
+      for (const name of names) {
+        const file = await (await track.getFileHandle(name)).getFile()
+        parts.push(await file.arrayBuffer())
+        last = Math.max(last, file.lastModified)
+      }
+      tracks.push({
+        ...meta,
+        blob: new Blob(parts, { type: meta.mimeType }),
+        duration: Math.max(0, ((meta.endedAt ?? last) - meta.startedAt) / 1000)
+      })
+    } catch {
+      // Not offered, as a take that cannot be read.
+    }
+  }
+  return tracks.sort((a, b) => a.startedAt - b.startedAt)
+}
+
+/** Removes a take's tracks from the backup, the take staying; none counts as removed. */
+export async function removeStoredTracks(
+  directory: Promise<StoreDirectory | null>,
+  takeId: string
+): Promise<void> {
+  try {
+    const take = await (await directory)?.getDirectoryHandle(takeId)
+    await take?.removeEntry(TRACKS_DIRECTORY, { recursive: true })
+  } catch {
+    // None, or the storage refuses; they go with their take.
+  }
+}
+
+/**
+ * Removes a recording, with its tracks, from the backup; one that is gone already counts as
+ * removed.
+ */
 export async function removeStoredRecording(
   directory: Promise<StoreDirectory | null>,
   id: string

@@ -12,6 +12,7 @@ import { toComponentInput } from './queries'
 const stored = {
   id: '00000000-0000-4000-8000-000000000001',
   name: 'Übersetzer',
+  nameTranslations: { en: 'Translator' },
   icon: 'languages',
   iconUrl: null,
   enabled: false,
@@ -115,6 +116,7 @@ describe('applyComponentInput', () => {
   it('follows secret changes without keeping their values', () => {
     const input: Extract<ComponentInput, { type: 'translator' }> = {
       name: translator.name,
+      nameTranslations: translator.nameTranslations,
       icon: translator.icon,
       iconUrl: translator.iconUrl,
       enabled: translator.enabled,
@@ -140,6 +142,7 @@ describe('toComponentInput', () => {
   it('never sends secrets, so a full replace keeps them', () => {
     expect(toComponentInput(translator)).toEqual({
       name: 'Übersetzer',
+      nameTranslations: { en: 'Translator' },
       icon: 'languages',
       iconUrl: null,
       enabled: false,

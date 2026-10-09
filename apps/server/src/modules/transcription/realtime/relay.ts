@@ -121,6 +121,8 @@ export interface LiveLimits {
   upstreamBufferMax: number
   /** How often the watchdog looks. */
   watchIntervalMs: number
+  /** How often an open socket's access is read again. */
+  accessCheckIntervalMs: number
 }
 
 export const DEFAULT_LIVE_LIMITS: LiveLimits = {
@@ -145,7 +147,8 @@ export const DEFAULT_LIVE_LIMITS: LiveLimits = {
   holdMaxMs: 30_000,
   clientBufferMax: 1024 * 1024,
   upstreamBufferMax: 2 * 1024 * 1024,
-  watchIntervalMs: 1000
+  watchIntervalMs: 1000,
+  accessCheckIntervalMs: 60_000
 }
 
 /** vLLM starts decoding after this much audio of an item, so deltas stream while speaking. */
@@ -189,6 +192,8 @@ export interface LiveSessionOptions {
    * `closeMs`; at the latest twice that after the end): frees its slot.
    */
   onEnd: () => void
+  /** Re-reads component and function permissions for this socket's user. */
+  checkAccess?: () => Promise<boolean>
   limits?: Partial<LiveLimits>
   log?: LiveLog
   /** Opens a gateway stream; tests may replace it. */
@@ -285,6 +290,8 @@ export class LiveSession {
 
   private phase: 'opening' | 'running' | 'finalizing' | 'closed' = 'opening'
   private readonly startedAt = Date.now()
+  private lastAccessCheckAt = this.startedAt
+  private accessCheckPending = false
   private lastAudioAt = Date.now()
   /** The browser's budgets: audio (`audioBurstMs`, `audioRateFactor`), messages, wire bytes. */
   private readonly audioBudget: Budget
@@ -975,6 +982,14 @@ export class LiveSession {
 
   /** The watchdog: sessions without audio or beyond their lifetime are finalized. */
   private watch(): void {
+    if (this.closed) return
+    if (
+      this.options.checkAccess &&
+      !this.accessCheckPending &&
+      Date.now() - this.lastAccessCheckAt >= this.limits.accessCheckIntervalMs
+    ) {
+      void this.checkAccess()
+    }
     if (this.phase !== 'running') return
     const now = Date.now()
     this.expireItems(now)
@@ -986,6 +1001,18 @@ export class LiveSession {
     this.log('finalizing on its own', { reason: verdict })
     this.send(clientEvents.error(verdict))
     this.requestFinalize()
+  }
+
+  private async checkAccess(): Promise<void> {
+    this.accessCheckPending = true
+    this.lastAccessCheckAt = Date.now()
+    try {
+      if (!(await this.options.checkAccess!())) this.close(CLOSE.policy, 'permission_revoked')
+    } catch {
+      this.close(CLOSE.error, 'access_check_failed')
+    } finally {
+      this.accessCheckPending = false
+    }
   }
 
   /** Sends to the browser unless it does not read; then the session ends. */

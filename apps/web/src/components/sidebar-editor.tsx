@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { NavItem, PopoverAnchor, useSidebarCollapsed } from '@ki4jlu/design-system'
 import type { Component } from '@justcampus/shared'
 import { externalUrlOf, feedUrlOf, isAvailableHere } from '@/adapters/registry'
+import { useComponentName } from '@/lib/component-name'
 import { externalLinkProps } from '@/lib/external'
 import { componentsQuery, sidebarQuery, useSaveSidebar } from '@/lib/queries'
 import { keepHiddenIds } from '@/lib/sidebar-hidden'
@@ -65,14 +66,15 @@ function SidebarComponentLink({
   pathname
 }: SidebarComponentLinkProps): React.JSX.Element {
   const { t } = useTranslation()
+  const name = useComponentName()(component)
   const url = externalUrlOf(component)
   const feedUrl = feedUrlOf(component)
   if (url) {
     return (
-      <NavItem asChild label={component.name} data-tour={componentTourId(component.id)}>
+      <NavItem asChild label={name} data-tour={componentTourId(component.id)}>
         <a {...externalLinkProps(url)}>
           <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} siteUrl={url} />
-          <span className="truncate">{component.name}</span>
+          <span className="truncate">{name}</span>
           <span className="sr-only">{t('shortcut.opensOutside')}</span>
           <ArrowUpRightIcon {...icon} className="ml-auto shrink-0 text-on-surface-variant" />
         </a>
@@ -104,11 +106,12 @@ function ComponentPageLink({
   unread
 }: SidebarComponentLinkProps & { unread: boolean }): React.JSX.Element {
   const { t } = useTranslation()
+  const name = useComponentName()(component)
   const collapsed = useSidebarCollapsed()
   const active = pathname === `/c/${component.id}`
   const unreadText = t('nav.newEntries')
   // Collapsed, the row's text is hidden and `label` is its name.
-  const label = unread ? `${component.name} ${unreadText}` : component.name
+  const label = unread ? `${name} ${unreadText}` : name
   return (
     <NavItem
       asChild
@@ -119,7 +122,7 @@ function ComponentPageLink({
     >
       <Link to="/c/$componentId" params={{ componentId: component.id }}>
         <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} />
-        <span className="truncate">{component.name}</span>
+        <span className="truncate">{name}</span>
         {unread ? (
           <>
             <span className="sr-only"> {unreadText}</span>

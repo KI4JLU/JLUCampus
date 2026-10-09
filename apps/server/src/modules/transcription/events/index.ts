@@ -10,10 +10,13 @@ import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { publicJob } from '../jobs/rows.js'
 import { listJobs } from '../jobs/store.js'
+import { hasModuleAccess } from '../realtime/access.js'
 import { transcriptionEventsHub } from './hub.js'
 
 /** Recheck cookie authentication on reconnect, including sessions ended at Keycloak. */
 export const TRANSCRIPTION_EVENTS_MAX_AGE_MS = 5 * 60_000
+/** How often an open stream re-reads the user's roles, so a revoked component closes it. */
+export const TRANSCRIPTION_EVENTS_ACCESS_CHECK_MS = 60_000
 export const eventsRouter = new Hono<AppEnvironment>()
 
 eventsRouter.get('/events', (context) => {
@@ -60,6 +63,15 @@ eventsRouter.get('/events', (context) => {
         })
         .catch(close)
     }, TRANSCRIPTION_EVENTS_HEARTBEAT_MS)
+    const accessCheck = setInterval(() => {
+      hasModuleAccess(userId, componentId).then(
+        (allowed) => {
+          if (!allowed) close()
+        },
+        // A failed check keeps the stream; the next one or the reconnect decides.
+        () => undefined
+      )
+    }, TRANSCRIPTION_EVENTS_ACCESS_CHECK_MS)
     try {
       await Promise.race([transcriptionEventsHub.start(), done])
       if (closed) return
@@ -79,6 +91,7 @@ eventsRouter.get('/events', (context) => {
       unsubscribe()
       clearTimeout(maxAge)
       clearInterval(heartbeat)
+      clearInterval(accessCheck)
       context.req.raw.signal.removeEventListener('abort', close)
     }
   })

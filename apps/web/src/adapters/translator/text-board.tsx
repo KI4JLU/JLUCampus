@@ -17,6 +17,10 @@ interface TextBoardProps {
   store: TranslatorStore
   /** The module lacks its settings: nothing can be sent. */
   disabled: boolean
+  /** Whether the user may rewrite texts, and so pass the translation on to rewriting. */
+  canRephrase: boolean
+  /** Whether dropped files go to the document translator, so the hint offers it. */
+  canDropDocuments: boolean
 }
 
 /**
@@ -35,7 +39,13 @@ const LIMIT = TRANSLATE_TEXT_MAX.toLocaleString('de-DE')
  * DS gap: there is no Separator, and Card's sub-parts come without rules, so the rules between
  * the card's parts are borders in the DS's divider token (`outline-variant`).
  */
-export function TextBoard({ id, store, disabled }: TextBoardProps): React.JSX.Element {
+export function TextBoard({
+  id,
+  store,
+  disabled,
+  canRephrase,
+  canDropDocuments
+}: TextBoardProps): React.JSX.Element {
   const { t } = useTranslation()
   const state = store.getState()
   const mode = store.textMode
@@ -198,9 +208,11 @@ export function TextBoard({ id, store, disabled }: TextBoardProps): React.JSX.El
                 )}
               >
                 <p className="m-0">{t('component.translator.placeholder')}</p>
-                <p className={cn('m-0 max-w-md', boardTextSize(true))}>
-                  {t('component.translator.placeholderDocuments')}
-                </p>
+                {canDropDocuments ? (
+                  <p className={cn('m-0 max-w-md', boardTextSize(true))}>
+                    {t('component.translator.placeholderDocuments')}
+                  </p>
+                ) : null}
               </div>
             )}
             {buffer.source ? (
@@ -249,7 +261,7 @@ export function TextBoard({ id, store, disabled }: TextBoardProps): React.JSX.El
               {t('component.translator.resultCount', { length: count(target.length) })}
             </Badge>
             <Stack direction="row" gap="sm" align="center">
-              {target && translating ? (
+              {target && translating && canRephrase ? (
                 <IconAction
                   label={t('component.translator.improveResult')}
                   onClick={() => store.improveTarget()}

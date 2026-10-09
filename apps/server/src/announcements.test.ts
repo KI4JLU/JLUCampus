@@ -23,8 +23,15 @@ const state = vi.hoisted(() => ({
 
 vi.mock('./auth.js', () => ({
   auth: { handler: vi.fn() },
-  getSession: async () =>
-    state.authenticated ? { user: { id: state.actorId, role: state.actorRole } } : null
+  getSession: async () => (state.authenticated ? { user: { id: state.actorId } } : null)
+}))
+vi.mock('./access.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./access.js')>()),
+  getAccess: async () => ({
+    isAdmin: state.actorRole === 'admin',
+    componentIds: new Set<string>(),
+    features: new Set()
+  })
 }))
 vi.mock('./env.js', () => ({
   env: {

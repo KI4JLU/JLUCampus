@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
-import { EllipsisIcon, InfoIcon, SearchIcon, ShieldCheckIcon, ShieldOffIcon } from 'lucide-react'
+import { EllipsisIcon, InfoIcon, SearchIcon, ShieldCheckIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   Avatar,
@@ -25,16 +25,16 @@ import {
   TableHeader,
   TableRow
 } from '@ki4jlu/design-system'
-import type { AdminUser, UserRole } from '@justcampus/shared'
+import type { AdminUser } from '@justcampus/shared'
 import { AdminGuard } from '@/components/admin-guard'
-import { UserRoleBadge } from '@/components/admin-user-details'
+import { UserRoleBadges } from '@/components/admin-user-details'
 import { PageHeader } from '@/components/page-header'
 import { PageLoading } from '@/components/page-message'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { UserDetailsDialog } from '@/components/user-details-dialog'
-import { UserRoleDialog, type RoleChange } from '@/components/user-role-dialog'
+import { UserRoleDialog } from '@/components/user-role-dialog'
 import { filterUsers, formatUserDate, userInitials } from '@/lib/admin-users'
-import { adminUsersQuery, meQuery } from '@/lib/queries'
+import { adminRolesQuery, adminUsersQuery, meQuery } from '@/lib/queries'
 
 const route = getRouteApi('/app/admin/users')
 
@@ -49,9 +49,9 @@ export function AdminUsersPage(): React.JSX.Element {
 }
 
 /**
- * Everyone who ever signed in, admins first. A user's name, or "Details" in the menu at the end of
- * their row, shows them in a dialog; the menu and the dialog grant or revoke their admin role,
- * after a confirmation. The dialog's user is the `user` search param, so a reload keeps it.
+ * Everyone who ever signed in, admins first, with their roles. A user's name, or "Details" in the
+ * menu at the end of their row, shows them in a dialog; the menu and the dialog open the dialog
+ * that assigns their roles. The details' user is the `user` search param, so a reload keeps it.
  */
 function Users(): React.JSX.Element {
   const { t, i18n } = useTranslation()
@@ -60,8 +60,9 @@ function Users(): React.JSX.Element {
   const { user: selectedId } = route.useSearch()
   const { data: me } = useSuspenseQuery(meQuery)
   const { data: users, isPending, isError } = useQuery(adminUsersQuery)
+  const roles = useQuery(adminRolesQuery)
   const [query, setQuery] = useState('')
-  const [change, setChange] = useState<RoleChange | null>(null)
+  const [assigning, setAssigning] = useState<AdminUser | null>(null)
   // What opened each dialog, which gets the focus back as it closes.
   const detailsOpener = useRef<HTMLElement | null>(null)
   const roleOpener = useRef<HTMLElement | null>(null)
@@ -72,9 +73,9 @@ function Users(): React.JSX.Element {
     detailsOpener.current = opener
     void navigate({ to: '/admin/users', search: { user: user.id }, replace: true })
   }
-  const changeRole = (user: AdminUser, role: UserRole, opener: HTMLElement | null): void => {
+  const assignRoles = (user: AdminUser, opener: HTMLElement | null): void => {
     roleOpener.current = opener
-    setChange({ user, role })
+    setAssigning(user)
   }
 
   return (
@@ -155,7 +156,7 @@ function Users(): React.JSX.Element {
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{user.email}</TableCell>
                       <TableCell className="whitespace-nowrap">
-                        <UserRoleBadge role={user.role} />
+                        <UserRoleBadges user={user} roles={roles.data} />
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {user.lastSignInAt ? (
@@ -170,9 +171,8 @@ function Users(): React.JSX.Element {
                         <div className="flex justify-end">
                           <UserActions
                             user={user}
-                            isSelf={user.id === me.id}
                             onShowDetails={(opener) => showDetails(user, opener)}
-                            onChangeRole={(role, opener) => changeRole(user, role, opener)}
+                            onAssignRoles={(opener) => assignRoles(user, opener)}
                           />
                         </div>
                       </TableCell>
@@ -186,16 +186,19 @@ function Users(): React.JSX.Element {
       </Card>
       <UserDetailsDialog
         user={selected}
-        isSelf={selected?.id === me.id}
-        onChangeRole={(role, opener) => {
-          if (selected) changeRole(selected, role, opener)
+        roles={roles.data}
+        onAssignRoles={(opener) => {
+          if (selected) assignRoles(selected, opener)
         }}
         onClose={() => void navigate({ to: '/admin/users', search: {}, replace: true })}
         onCloseAutoFocus={(event) => focusBack(event, detailsOpener.current)}
       />
       <UserRoleDialog
-        change={change}
-        onClose={() => setChange(null)}
+        user={assigning}
+        roles={roles.data}
+        rolesFailed={roles.isError}
+        isSelf={assigning?.id === me.id}
+        onClose={() => setAssigning(null)}
         onCloseAutoFocus={(event) => focusBack(event, roleOpener.current)}
       />
     </Container>
@@ -204,23 +207,15 @@ function Users(): React.JSX.Element {
 
 interface UserActionsProps {
   user: AdminUser
-  /** The signed-in admin, who cannot revoke their own role (the details say why). */
-  isSelf: boolean
   /** Both get the menu's button, which takes the focus back from the dialog they open. */
   onShowDetails: (opener: HTMLElement | null) => void
-  onChangeRole: (role: UserRole, opener: HTMLElement | null) => void
+  onAssignRoles: (opener: HTMLElement | null) => void
 }
 
-/** The menu at the end of a user's row: their details, and granting or revoking the admin role. */
-function UserActions({
-  user,
-  isSelf,
-  onShowDetails,
-  onChangeRole
-}: UserActionsProps): React.JSX.Element {
+/** The menu at the end of a user's row: their details, and assigning their roles. */
+function UserActions({ user, onShowDetails, onAssignRoles }: UserActionsProps): React.JSX.Element {
   const { t } = useTranslation()
   const trigger = useRef<HTMLButtonElement>(null)
-  const admin = user.role === 'admin'
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -239,21 +234,10 @@ function UserActions({
           {t('admin.users.actions.details')}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {admin ? (
-          <DropdownMenuItem
-            variant="destructive"
-            disabled={isSelf}
-            onSelect={() => onChangeRole('user', trigger.current)}
-          >
-            <ShieldOffIcon {...ICON} />
-            {t('admin.users.role.revoke')}
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem onSelect={() => onChangeRole('admin', trigger.current)}>
-            <ShieldCheckIcon {...ICON} />
-            {t('admin.users.role.grant')}
-          </DropdownMenuItem>
-        )}
+        <DropdownMenuItem onSelect={() => onAssignRoles(trigger.current)}>
+          <ShieldCheckIcon {...ICON} />
+          {t('admin.users.role.assign')}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

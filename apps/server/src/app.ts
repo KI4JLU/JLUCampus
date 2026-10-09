@@ -35,15 +35,18 @@ import {
   type Widget,
   type WidgetRef
 } from '@justcampus/shared'
-import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm'
-import { Hono } from 'hono'
+import { and, asc, desc, eq, inArray, or, not, sql, type SQL } from 'drizzle-orm'
+import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { basename, resolve } from 'node:path'
 import { z } from 'zod'
 
 import { ApiError, parseBody, validationIssues } from './api.js'
-import { changeUserRole, orderAdminUsers, toAdminUser } from './admin-users.js'
+import { changeUserRoles, listAdminUsers } from './admin-users.js'
+import { getAccess, grantEveryoneComponent } from './access.js'
+import { registerRoleRoutes } from './roles.js'
+import type { UserAccess } from './logic.js'
 import { registerAnnouncementRoutes } from './announcements.js'
 import { auth, getSession } from './auth.js'
 import { applySecretsPatch, componentTypeChangeConflicts } from './component-secrets.js'
@@ -117,13 +120,29 @@ function toFolderTemplate(
   })
 }
 
-async function readMe(userId: string): Promise<Me> {
+async function readMe(context: Context<AppEnvironment>): Promise<Me> {
+  const userId = context.get('session').user.id
+  const access = await getAccess(context)
   const [record] = await db.select().from(user).where(eq(user.id, userId)).limit(1)
   if (!record) throw new ApiError(404, 'not_found', 'User not found')
-  return meSchema.parse(record)
+  return meSchema.parse({
+    ...record,
+    role: access.isAdmin ? 'admin' : 'user',
+    features: [...access.features],
+    componentIds: [...access.componentIds]
+  })
 }
 
-async function requireWidgets(refs: readonly WidgetRef[], enabledOnly: boolean): Promise<void> {
+async function requireWidgets(
+  refs: readonly WidgetRef[],
+  enabledOnly: boolean,
+  access?: UserAccess
+): Promise<void> {
+  if (access)
+    requireComponentAccess(
+      refs.map(({ componentId }) => componentId),
+      access
+    )
   const componentIds = [...new Set(refs.map(({ componentId }) => componentId))]
   if (componentIds.length === 0) return
 
@@ -153,8 +172,12 @@ async function requireWidgets(refs: readonly WidgetRef[], enabledOnly: boolean):
   }
 }
 
-async function requireEnabledComponents(ids: readonly string[]): Promise<void> {
-  return requireComponents(ids, true)
+function requireComponentAccess(ids: readonly string[], access: UserAccess): void {
+  if (ids.some((id) => !access.componentIds.has(id))) {
+    throw new ApiError(400, 'validation', 'Contains an inaccessible component id', [
+      { path: ['componentIds'], message: 'Contains an inaccessible component id' }
+    ])
+  }
 }
 
 async function requireComponents(ids: readonly string[], enabledOnly: boolean): Promise<void> {
@@ -215,11 +238,15 @@ function widgetsForComponents(rows: readonly { id: string; type: string }[]): Wi
   )
 }
 
-/** Enabled component ids for deletes that must leave disabled component data alone. */
-const enabledIdsSubquery = db
-  .select({ id: component.id })
-  .from(component)
-  .where(eq(component.enabled, true))
+/** Apply the same selection to reads and deletes, preserving hidden layout entries. */
+function accessibleComponents(access: UserAccess): SQL {
+  return and(eq(component.enabled, true), inArray(component.id, [...access.componentIds]))!
+}
+
+function enabledIdsSubquery(access: UserAccess): SQL {
+  const query = db.select({ id: component.id }).from(component).where(accessibleComponents(access))
+  return sql`(${query.getSQL()})`
+}
 const loadFeed = createFeedLoader({ allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS })
 
 export const app = new Hono<AppEnvironment>()
@@ -268,7 +295,7 @@ app.use('/api/*', async (context, next) => {
 })
 
 app.use('/api/admin/*', async (context, next) => {
-  if (context.get('session').user.role !== 'admin') {
+  if (!(await getAccess(context)).isAdmin) {
     return context.json(
       { error: { code: 'forbidden', message: 'Administrator access required' } },
       403
@@ -279,23 +306,23 @@ app.use('/api/admin/*', async (context, next) => {
 
 registerModuleRoutes(app)
 registerAnnouncementRoutes(app)
+registerRoleRoutes(app)
 
 app.get(API.adminUsers, async (context) => {
-  const rows = await db.select().from(user)
-  return context.json(adminUserListSchema.parse({ users: orderAdminUsers(rows).map(toAdminUser) }))
+  return context.json(adminUserListSchema.parse({ users: await listAdminUsers() }))
 })
 
 app.patch('/api/admin/users/:id', async (context) => {
-  const { role } = await parseBody(context, adminUserPatchSchema)
-  const updated = await changeUserRole(
+  const { roleIds } = await parseBody(context, adminUserPatchSchema)
+  const updated = await changeUserRoles(
     context.get('session').user.id,
     context.req.param('id'),
-    role
+    roleIds
   )
   return context.json(updated)
 })
 
-app.get(API.me, async (context) => context.json(await readMe(context.get('session').user.id)))
+app.get(API.me, async (context) => context.json(await readMe(context)))
 
 app.patch(API.me, async (context) => {
   const patch = await parseBody(context, mePatchSchema)
@@ -305,14 +332,14 @@ app.patch(API.me, async (context) => {
       .set({ language: patch.language, updatedAt: new Date() })
       .where(eq(user.id, context.get('session').user.id))
   }
-  return context.json(await readMe(context.get('session').user.id))
+  return context.json(await readMe(context))
 })
 
 app.get(API.components, async (context) => {
   const rows = await db
     .select()
     .from(component)
-    .where(eq(component.enabled, true))
+    .where(accessibleComponents(await getAccess(context)))
     .orderBy(asc(component.sortOrder))
   return context.json({ components: rows.map(toComponent) })
 })
@@ -321,7 +348,7 @@ app.get(API.widgets, async (context) => {
   const rows = await db
     .select({ id: component.id, type: component.type })
     .from(component)
-    .where(eq(component.enabled, true))
+    .where(accessibleComponents(await getAccess(context)))
     .orderBy(asc(component.sortOrder))
   return context.json({ widgets: widgetsForComponents(rows) })
 })
@@ -390,18 +417,23 @@ app.post(API.adminComponents, async (context) => {
     .from(component)
     .orderBy(desc(component.sortOrder))
     .limit(1)
-  const [created] = await db
-    .insert(component)
-    .values({
-      name: input.name,
-      type: input.type,
-      icon: input.icon,
-      iconUrl: input.iconUrl,
-      config: input.config,
-      enabled: input.enabled,
-      sortOrder: (last?.sortOrder ?? -1) + 1
-    })
-    .returning()
+  const created = await db.transaction(async (transaction) => {
+    const [created] = await transaction
+      .insert(component)
+      .values({
+        name: input.name,
+        nameTranslations: input.nameTranslations,
+        type: input.type,
+        icon: input.icon,
+        iconUrl: input.iconUrl,
+        config: input.config,
+        enabled: input.enabled,
+        sortOrder: (last?.sortOrder ?? -1) + 1
+      })
+      .returning()
+    await grantEveryoneComponent(created!.id, transaction)
+    return created!
+  })
   return context.json(toAdminComponent(created!), 201)
 })
 
@@ -461,6 +493,7 @@ app.put('/api/admin/components/:id', async (context) => {
       .update(component)
       .set({
         name: input.name,
+        nameTranslations: input.nameTranslations,
         type: input.type,
         icon: input.icon,
         iconUrl: input.iconUrl,
@@ -540,7 +573,7 @@ app.get(API.folderTemplates, async (context) => {
     db
       .select({ id: component.id, type: component.type })
       .from(component)
-      .where(eq(component.enabled, true))
+      .where(accessibleComponents(await getAccess(context)))
   ])
   const items = await readTemplateItems(rows.map(({ id }) => id))
   return context.json({
@@ -852,7 +885,10 @@ app.get(API.sidebar, async (context) => {
     .from(sidebarEntry)
     .innerJoin(
       component,
-      and(eq(sidebarEntry.componentId, component.id), eq(component.enabled, true))
+      and(
+        eq(sidebarEntry.componentId, component.id),
+        accessibleComponents(await getAccess(context))
+      )
     )
     .where(eq(sidebarEntry.userId, context.get('session').user.id))
     .orderBy(asc(sidebarEntry.position))
@@ -861,16 +897,20 @@ app.get(API.sidebar, async (context) => {
 
 app.put(API.sidebar, async (context) => {
   const { componentIds } = await parseBody(context, sidebarPutSchema)
-  await requireEnabledComponents(componentIds)
+  const access = await getAccess(context)
+  requireComponentAccess(componentIds, access)
+  await requireComponents(componentIds, true)
   const userId = context.get('session').user.id
 
-  // Entries of currently disabled components are invisible to the client and are
-  // kept, so re-enabling a component restores its place.
+  // Keep hidden entries so restoring component access also restores their place.
   await db.transaction(async (transaction) => {
     await transaction
       .delete(sidebarEntry)
       .where(
-        and(eq(sidebarEntry.userId, userId), inArray(sidebarEntry.componentId, enabledIdsSubquery))
+        and(
+          eq(sidebarEntry.userId, userId),
+          inArray(sidebarEntry.componentId, enabledIdsSubquery(access))
+        )
       )
     if (componentIds.length > 0) {
       await transaction
@@ -903,7 +943,7 @@ app.get(API.dashboard, async (context) => {
     db
       .select({ id: component.id, type: component.type })
       .from(component)
-      .where(eq(component.enabled, true))
+      .where(accessibleComponents(await getAccess(context)))
   ])
   const enabledRefs = new Set(widgetsForComponents(enabled).map(widgetRefKey))
   return context.json({ tiles: assembleTiles(rows, items, enabledRefs) })
@@ -913,13 +953,13 @@ app.put(API.dashboard, async (context) => {
   const { tiles } = await parseBody(context, dashboardPutSchema)
   const widgetTiles = tiles.filter((tile) => tile.kind === 'widget')
   const folders = tiles.filter((tile) => tile.kind === 'folder')
-  await requireWidgets(widgetRefsFromDashboard({ tiles }), true)
+  const access = await getAccess(context)
+  await requireWidgets(widgetRefsFromDashboard({ tiles }), true, access)
   await requireMinimumSizes(widgetTiles)
   const userId = context.get('session').user.id
 
   await db.transaction(async (transaction) => {
-    // Folder items of disabled components are invisible to the client; remember them
-    // so re-enabling the component puts them back into their folder.
+    // Remember hidden folder widgets so restoring component access brings them back.
     const hidden = await transaction
       .select({
         id: dashboardFolderItem.id,
@@ -938,7 +978,7 @@ app.put(API.dashboard, async (context) => {
         and(
           eq(dashboardTile.userId, userId),
           eq(dashboardFolderItem.kind, 'widget'),
-          eq(component.enabled, false)
+          not(accessibleComponents(access))
         )
       )
       .orderBy(asc(dashboardFolderItem.position))
@@ -952,7 +992,7 @@ app.put(API.dashboard, async (context) => {
             eq(dashboardTile.kind, 'folder'),
             eq(dashboardTile.kind, 'link'),
             eq(dashboardTile.kind, 'feed'),
-            inArray(dashboardTile.componentId, enabledIdsSubquery)
+            inArray(dashboardTile.componentId, enabledIdsSubquery(access))
           )
         )
       )

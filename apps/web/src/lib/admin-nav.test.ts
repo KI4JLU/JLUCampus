@@ -30,6 +30,13 @@ describe('activeAdminEntry', () => {
     expect(activeAdminEntry('/admin/users', modules)).toEqual({ kind: 'section', section: 'users' })
   })
 
+  it('keeps roles current in a role editor', () => {
+    const roles = { kind: 'section', section: 'roles' }
+    expect(activeAdminEntry('/admin/roles', modules)).toEqual(roles)
+    expect(activeAdminEntry('/admin/roles/new', modules)).toEqual(roles)
+    expect(activeAdminEntry('/admin/roles/abc', modules)).toEqual(roles)
+  })
+
   it('keeps announcements current in an announcement editor', () => {
     const announcements = { kind: 'section', section: 'announcements' }
     expect(activeAdminEntry('/admin/announcements', modules)).toEqual(announcements)

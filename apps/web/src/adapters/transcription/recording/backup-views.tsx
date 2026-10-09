@@ -20,12 +20,18 @@ export function LeftoverNotices(): React.JSX.Element {
   )
 }
 
-/** The backup of the running or last take failed; the take itself is complete. */
+/**
+ * The backup of the running or last take failed; the take itself is complete. When only its
+ * separate tracks could not be backed up, the mix is safe, and the notice says just that.
+ */
 export function BackupFailedNotice(): React.JSX.Element | null {
   const { t } = useTranslation()
   const { backup } = useRecording()
-  if (!backup.failed) return null
-  return <Notice tone="warning">{t('transcription.recording.backup.failed')}</Notice>
+  if (backup.failed)
+    return <Notice tone="warning">{t('transcription.recording.backup.failed')}</Notice>
+  if (backup.tracksFailed)
+    return <Notice tone="info">{t('transcription.recording.backup.tracksFailed')}</Notice>
+  return null
 }
 
 /** A recording left in the backup: add it to the takes, or discard it after asking once more. */

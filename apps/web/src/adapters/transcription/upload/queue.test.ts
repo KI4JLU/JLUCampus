@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   addToGroup,
   fitIntoGroup,
-  cleanupEmptyGroups,
   defaultGroupName,
   dropTargetIndex,
   duplicateKey,
@@ -51,15 +50,6 @@ describe('groups (T-06)', () => {
       'Transcript 3',
       'Transcript 4'
     ])
-  })
-
-  it('drops empty groups and renumbers', () => {
-    const groups = cleanupEmptyGroups([
-      group('Transcript 1'),
-      group('Transcript 2', ['a.wav']),
-      group('Meeting', ['b.wav'])
-    ])
-    expect(groups.map((entry) => entry.name)).toEqual(['Transcript 1', 'Meeting'])
   })
 
   it('removes a group and renumbers the rest', () => {
@@ -177,6 +167,29 @@ describe('moving and removing (T-07, T-08)', () => {
     expect(names(groups)).toEqual([['a', 'b', 'c']])
     expect(findFile(groups, 'b')).toMatchObject({ groupIndex: 0, fileIndex: 1 })
     expect(findFile(groups, 'd')).toBeNull()
+  })
+
+  it('keeps an empty group the user added when another group loses its last file', () => {
+    const groups = [
+      group('Transcript 1', ['a']),
+      group('Transcript 2', ['b']),
+      group('Transcript 3')
+    ]
+    expect(removeFile(groups, 'b').map((entry) => entry.name)).toEqual([
+      'Transcript 1',
+      'Transcript 2'
+    ])
+    expect(names(removeFile(groups, 'b'))).toEqual([['a'], []])
+    // The group removed was the one emptied, not the one added.
+    expect(removeFile(groups, 'b')[1]!.id).toBe(groups[2]!.id)
+  })
+
+  it('clears the queue once its last file goes, by file or by group', () => {
+    const groups = [group('Transcript 1', ['a']), group('Transcript 2')]
+    expect(removeFile(groups, 'a')).toEqual([])
+    expect(removeGroup(groups, groups[0]!.id)).toEqual([])
+    // An empty group removed while files remain leaves the rest as they are.
+    expect(names(removeGroup(groups, groups[1]!.id))).toEqual([['a']])
   })
 })
 

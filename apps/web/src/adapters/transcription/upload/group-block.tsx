@@ -1,7 +1,7 @@
 import { useSyncExternalStore, type DragEvent } from 'react'
-import { FilePlusIcon, FileTextIcon, FolderIcon, Trash2Icon } from 'lucide-react'
+import { FileTextIcon, FolderIcon, Trash2Icon, UploadIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Button, Card, CardContent, Input } from '@ki4jlu/design-system'
+import { Button, Card, CardContent, CardHeader, CardTitle, Input } from '@ki4jlu/design-system'
 import { TRANSCRIPTION_TITLE_MAX } from '@justcampus/shared'
 import { toast } from '@/lib/toast'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -44,6 +44,7 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
   // While its transcript is being saved, the group and its files can be neither removed nor moved.
   const saving = useSyncExternalStore(queue.subscribe, () => queue.isSaving(group.id))
   const locked = groupLocked(state, group) || saving
+  const hasBody = group.saveConflict || group.saveFailed || group.files.length > 0
 
   const commitName = async (): Promise<void> => {
     if (!(await queue.commitGroupName(group.id))) {
@@ -75,13 +76,22 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
       role="group"
       aria-label={group.name}
       accent={props.dropTarget}
+      className="overflow-hidden"
       onDragOver={(event) => props.onDragOver(index, null, event)}
       onDrop={(event) => props.onDrop(index, null, event)}
     >
-      <CardContent className="flex flex-col gap-stack-md pt-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <FolderIcon {...ICON} />
-          <div className="min-w-0 flex-1">
+      {/*
+       * The header names the folder: its name takes the card title's type (CardTitle hands its type
+       * tokens to the inline field), and the band is tinted, so it reads apart from the files below.
+       * The band is slim, as kiChat's: its height is that of the icon buttons, which the title's
+       * line does not exceed.
+       * DS gap: CardHeader has no tone; the tint is the primary/10 of a pressed outline button, the
+       * card clips it to its corners.
+       */}
+      <CardHeader className="flex-row flex-wrap items-center gap-2 bg-primary/10 px-4 py-2">
+        <FolderIcon aria-hidden className="size-5 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <CardTitle asChild>
             <Input
               variant="inline"
               value={group.name}
@@ -96,93 +106,99 @@ export function GroupBlock(props: GroupBlockProps): React.JSX.Element {
                 }
               }}
             />
-          </div>
-          {group.saved ? (
+          </CardTitle>
+        </div>
+        {group.saved ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            title={group.saved.title}
+            onClick={() => void openTranscript(group.saved!.id)}
+          >
+            <FileTextIcon {...ICON} />
+            {t('transcription.upload.openItem', { title: linkTitle(group.saved.title) })}
+          </Button>
+        ) : (
+          <>
             <Button
               type="button"
-              variant="outline"
-              size="sm"
-              title={group.saved.title}
-              onClick={() => void openTranscript(group.saved!.id)}
+              variant="ghost"
+              size="icon"
+              disabled={locked}
+              aria-label={t('transcription.upload.addFileTo', { name: group.name })}
+              title={t('transcription.upload.addFile')}
+              onClick={() => props.onAddFile(index)}
             >
-              <FileTextIcon {...ICON} />
-              {t('transcription.upload.openItem', { title: linkTitle(group.saved.title) })}
+              <UploadIcon {...ICON} />
             </Button>
-          ) : (
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                disabled={locked}
-                aria-label={t('transcription.upload.addFileTo', { name: group.name })}
-                title={t('transcription.upload.addFile')}
-                onClick={() => props.onAddFile(index)}
-              >
-                <FilePlusIcon {...ICON} />
-              </Button>
-              {/* Open during a start too: kiChat cancels the group's jobs then. */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                disabled={saving}
-                aria-label={t('transcription.upload.deleteGroupNamed', { name: group.name })}
-                title={t('transcription.upload.deleteTranscriptGroup')}
-                onClick={() => void removeGroup()}
-              >
-                <Trash2Icon {...ICON} />
-              </Button>
-            </>
-          )}
-        </div>
-        {group.saveConflict ? (
-          <Notice tone="warning" title={t('transcription.upload.saveFailed')}>
-            {t(`transcription.upload.saveConflict.${group.saveConflict}`)}
-          </Notice>
-        ) : null}
-        {group.saveFailed ? (
-          <Notice
-            tone="error"
-            title={t('transcription.upload.saveFailed')}
-            action={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={state.processing || saving}
-                onClick={() => void queue.saveGroup(group.id)}
-              >
-                {t('transcription.common.retry')}
-              </Button>
-            }
-          />
-        ) : null}
-        {group.files.length > 0 ? (
-          <ul className="m-0 flex list-none flex-col gap-stack-md p-0">
-            {group.files.map((file, fileIndex) => (
-              <FileRow
-                key={file.id}
-                file={file}
-                position={{ groupIndex: index, fileIndex }}
-                groups={state.groups}
-                locked={locked}
-                saving={saving}
-                processing={state.processing}
-                onOpenMapping={props.onOpenMapping}
-                onDragStart={props.onDragStart}
-                onDragEnd={props.onDragEnd}
-                onDragOver={(position, event) =>
-                  props.onDragOver(position.groupIndex, position.fileIndex, event)
-                }
-                onDrop={(position, event) =>
-                  props.onDrop(position.groupIndex, position.fileIndex, event)
-                }
-              />
-            ))}
-          </ul>
-        ) : null}
-      </CardContent>
+            {/* Open during a start too: kiChat cancels the group's jobs then. */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={saving}
+              aria-label={t('transcription.upload.deleteGroupNamed', { name: group.name })}
+              title={t('transcription.upload.deleteTranscriptGroup')}
+              onClick={() => void removeGroup()}
+            >
+              <Trash2Icon {...ICON} />
+            </Button>
+          </>
+        )}
+      </CardHeader>
+      {hasBody ? (
+        <CardContent className="flex flex-col gap-stack-sm p-4">
+          {group.saveConflict ? (
+            <Notice tone="warning" title={t('transcription.upload.saveFailed')}>
+              {t(`transcription.upload.saveConflict.${group.saveConflict}`)}
+            </Notice>
+          ) : null}
+          {group.saveFailed ? (
+            <Notice
+              tone="error"
+              title={t('transcription.upload.saveFailed')}
+              action={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={state.processing || saving}
+                  onClick={() => void queue.saveGroup(group.id)}
+                >
+                  {t('transcription.common.retry')}
+                </Button>
+              }
+            />
+          ) : null}
+          {group.files.length > 0 ? (
+            // A line between the files keeps their players apart; each row pads itself off it.
+            // DS gap: no Separator; the divider takes the outline-variant token of the DS's borders.
+            <ul className="m-0 flex list-none flex-col divide-y divide-outline-variant p-0">
+              {group.files.map((file, fileIndex) => (
+                <FileRow
+                  key={file.id}
+                  file={file}
+                  position={{ groupIndex: index, fileIndex }}
+                  saved={group.saved !== null}
+                  locked={locked}
+                  saving={saving}
+                  processing={state.processing}
+                  onOpenMapping={props.onOpenMapping}
+                  onDragStart={props.onDragStart}
+                  onDragEnd={props.onDragEnd}
+                  onDragOver={(position, event) =>
+                    props.onDragOver(position.groupIndex, position.fileIndex, event)
+                  }
+                  onDrop={(position, event) =>
+                    props.onDrop(position.groupIndex, position.fileIndex, event)
+                  }
+                />
+              ))}
+            </ul>
+          ) : null}
+        </CardContent>
+      ) : null}
     </Card>
   )
 }

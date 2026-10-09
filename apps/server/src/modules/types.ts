@@ -1,8 +1,14 @@
-import type { Component, SecretKey, SingletonComponentType } from '@justcampus/shared'
+import type {
+  Component,
+  ComponentNameTranslations,
+  SecretKey,
+  SingletonComponentType
+} from '@justcampus/shared'
 import type { Hono } from 'hono'
 import type { ZodType } from 'zod'
 
 import type { AuthSession } from '../auth.js'
+import type { UserAccess } from '../logic.js'
 
 export type ModuleConfigMap = {
   [T in SingletonComponentType]: Extract<Component, { type: T }>['config']
@@ -26,6 +32,7 @@ export type AnyModuleRuntime = {
 
 export type AppEnvironment = {
   Variables: {
+    access?: Promise<UserAccess>
     session: AuthSession
     module: AnyModuleRuntime
   }
@@ -34,6 +41,8 @@ export type AppEnvironment = {
 export interface ServerModule<T extends SingletonComponentType> {
   type: T
   defaultName: string
+  /** The default name in the languages it differs in. */
+  defaultNameTranslations: ComponentNameTranslations
   defaultIcon: string
   defaultConfig: ModuleConfigMap[T]
   configSchema: ZodType<ModuleConfigMap[T]>

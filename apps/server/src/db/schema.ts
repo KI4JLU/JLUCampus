@@ -2,7 +2,10 @@ import type {
   AnnouncementKind,
   AnnouncementTarget,
   AnnouncementTexts,
+  BuiltInRole,
+  FeatureKey,
   ComponentConfig,
+  ComponentNameTranslations,
   Dashboard,
   Sidebar,
   TranscriptionJobError,
@@ -45,7 +48,6 @@ export const user = pgTable('user', {
   image: text('image'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  role: text('role').notNull().default('user'),
   language: text('language'),
   /** Keycloak's `preferred_username`, `given_name` and `family_name`, refreshed on every sign-in. */
   username: text('username'),
@@ -127,6 +129,10 @@ export const component = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
+    nameTranslations: jsonb('name_translations')
+      .$type<ComponentNameTranslations>()
+      .notNull()
+      .default({}),
     type: text('type').notNull(),
     icon: text('icon'),
     iconUrl: text('icon_url'),
@@ -143,6 +149,50 @@ export const component = pgTable(
     uniqueIndex('component_singleton_type_uidx')
       .on(table.type)
       .where(sql`${table.singleton} = true`)
+  ]
+)
+
+export const appRole = pgTable('app_role', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  builtIn: text('built_in').$type<BuiltInRole>().unique(),
+  name: text('name').notNull(),
+  keycloakRoles: jsonb('keycloak_roles').$type<string[]>().notNull().default([]),
+  keycloakGroups: jsonb('keycloak_groups').$type<string[]>().notNull().default([]),
+  features: jsonb('features').$type<FeatureKey[]>().notNull().default([]),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow()
+})
+
+export const appRoleComponent = pgTable(
+  'app_role_component',
+  {
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => appRole.id, { onDelete: 'cascade' }),
+    componentId: uuid('component_id')
+      .notNull()
+      .references(() => component.id, { onDelete: 'cascade' })
+  },
+  (table) => [
+    primaryKey({ columns: [table.roleId, table.componentId] }),
+    index('app_role_component_component_id_idx').on(table.componentId)
+  ]
+)
+
+export const appRoleMember = pgTable(
+  'app_role_member',
+  {
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => appRole.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at').notNull().defaultNow()
+  },
+  (table) => [
+    primaryKey({ columns: [table.roleId, table.userId] }),
+    index('app_role_member_user_id_idx').on(table.userId)
   ]
 )
 

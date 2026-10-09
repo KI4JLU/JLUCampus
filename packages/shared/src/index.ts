@@ -31,7 +31,104 @@ export const DEFAULT_LANGUAGE: Language = 'de'
 
 export const USER_ROLES = ['user', 'admin'] as const
 export const userRoleSchema = z.enum(USER_ROLES)
+/** `admin` when the user holds the built-in admin role (manually or through Keycloak). */
 export type UserRole = z.infer<typeof userRoleSchema>
+
+// ---------------------------------------------------------------------------
+// Roles and permissions
+// ---------------------------------------------------------------------------
+
+/**
+ * The module functions a role can grant, `<module>.<function>`. Using the module itself is the
+ * component's permission (`appRoleSchema.componentIds`); these switch single functions inside it.
+ * The server refuses a function's endpoints without it (`403 forbidden`) and the page hides it.
+ * A function added later needs a migration that grants it to the everyone role, or nobody but
+ * admins gets it.
+ */
+export const FEATURE_KEYS = [
+  /** Document translation (`API.translatorDocuments`). */
+  'translator.documents',
+  /** Rephrase mode (`API.rephrase`). */
+  'translator.rephrase',
+  /** The AI editor (`API.translatorCompose`, `API.translatorExecutePython`). */
+  'translator.compose',
+  /** Glossaries (`API.translatorGlossaries` and below). */
+  'translator.glossaries',
+  /** Live transcription (`/realtime/*`). */
+  'transcription.live',
+  /** AI summaries and their templates (`/summaries`, `/templates`). */
+  'transcription.summaries'
+] as const
+export const featureKeySchema = z.enum(FEATURE_KEYS)
+export type FeatureKey = z.infer<typeof featureKeySchema>
+
+/** The module a function belongs to. */
+export function featureModule(feature: FeatureKey): SingletonComponentType {
+  return feature.slice(0, feature.indexOf('.')) as SingletonComponentType
+}
+
+/**
+ * The two roles the server creates and nobody can delete. `everyone` holds every signed-in user;
+ * `admin` grants everything, including the admin area, and ignores its own permission lists.
+ */
+export const BUILT_IN_ROLES = ['everyone', 'admin'] as const
+export const builtInRoleSchema = z.enum(BUILT_IN_ROLES)
+export type BuiltInRole = z.infer<typeof builtInRoleSchema>
+
+export const ROLE_NAME_MAX = 80
+/** Keycloak role and group names a role matches, each list at most this long. */
+export const ROLE_RULES_MAX = 50
+
+const roleNameSchema = z.string().trim().min(1).max(ROLE_NAME_MAX)
+const keycloakNamesSchema = z
+  .array(z.string().trim().min(1).max(255))
+  .max(ROLE_RULES_MAX)
+  .transform((names) => [...new Set(names)])
+
+/**
+ * An app role. Users get it automatically when their last sign-in carried one of
+ * `keycloakRoles` or `keycloakGroups` (exact names, as `adminUserSchema` lists them), or manually
+ * from an admin (`adminUserPatchSchema`). A user may use the union of what their roles grant.
+ * For `everyone` the Keycloak lists and members do not apply; for `admin` the permission lists
+ * do not (admins may use everything).
+ */
+export const appRoleSchema = z.object({
+  id: z.uuid(),
+  builtIn: builtInRoleSchema.nullable(),
+  /** Built-in roles show under their translated name; this is the name custom roles show under. */
+  name: z.string(),
+  keycloakRoles: z.array(z.string()),
+  keycloakGroups: z.array(z.string()),
+  /** Components the role may use. */
+  componentIds: z.array(z.uuid()),
+  features: z.array(featureKeySchema),
+  /** Users an admin assigned the role to by hand. */
+  memberCount: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+})
+export type AppRole = z.infer<typeof appRoleSchema>
+
+/** Built-in roles first (everyone, admin), then by name. */
+export const appRoleListSchema = z.object({ roles: z.array(appRoleSchema) })
+export type AppRoleList = z.infer<typeof appRoleListSchema>
+
+/**
+ * Creates or replaces a role. For built-in roles the server keeps its own name; for `everyone` it
+ * ignores the Keycloak lists, for `admin` the permission lists. Unknown component ids answer
+ * `400 validation`.
+ */
+export const appRoleInputSchema = z.object({
+  name: roleNameSchema,
+  keycloakRoles: keycloakNamesSchema,
+  keycloakGroups: keycloakNamesSchema,
+  componentIds: z
+    .array(z.uuid())
+    .max(500)
+    .transform((ids) => [...new Set(ids)]),
+  features: z.array(featureKeySchema).transform((features) => [...new Set(features)])
+})
+export type AppRoleInput = z.input<typeof appRoleInputSchema>
 
 /** The signed-in user as the API reports them. */
 export const meSchema = z.object({
@@ -44,6 +141,13 @@ export const meSchema = z.object({
   givenName: z.string().nullable(),
   familyName: z.string().nullable(),
   role: userRoleSchema,
+  /** The module functions the user may use; every one of them for admins. */
+  features: z.array(featureKeySchema),
+  /**
+   * The components the user's roles allow (enabled or not; every one for admins). Clients poll
+   * `API.me` and reload their component, sidebar and dashboard data when this changes.
+   */
+  componentIds: z.array(z.uuid()),
   /** `null` until the user picked one; clients then fall back to the browser language. */
   language: languageSchema.nullable()
 })
@@ -55,9 +159,11 @@ export const mePatchSchema = z.object({
 export type MePatch = z.infer<typeof mePatchSchema>
 
 /**
- * A user as the admin user management lists them. `role` is the app's own: an admin grants or
- * revokes it there, or the server CLI sets it (`admin grant|revoke|list`); Keycloak roles never
- * change it. Keycloak roles and groups are those of the user's last sign-in.
+ * A user as the admin user management lists them. Keycloak roles and groups are those of the
+ * user's last sign-in. `roleIds` are the roles an admin assigned by hand (or the server CLI's
+ * `admin grant|revoke` for the admin role), `keycloakRoleIds` those the user's Keycloak roles and
+ * groups give them; the everyone role is in neither. `role` is `admin` when either list holds the
+ * admin role.
  */
 export const adminUserSchema = z.object({
   id: z.string(),
@@ -65,6 +171,8 @@ export const adminUserSchema = z.object({
   email: z.string(),
   image: z.string().nullable(),
   role: userRoleSchema,
+  roleIds: z.array(z.uuid()),
+  keycloakRoleIds: z.array(z.uuid()),
   keycloakRoles: z.array(z.string()),
   keycloakGroups: z.array(z.string()),
   createdAt: z.string().datetime(),
@@ -77,9 +185,17 @@ export type AdminUser = z.infer<typeof adminUserSchema>
 export const adminUserListSchema = z.object({ users: z.array(adminUserSchema) })
 export type AdminUserList = z.infer<typeof adminUserListSchema>
 
-/** Grants (`admin`) or revokes (`user`) a user's admin role. */
-export const adminUserPatchSchema = z.object({ role: userRoleSchema })
-export type AdminUserPatch = z.infer<typeof adminUserPatchSchema>
+/**
+ * Replaces the roles an admin assigned to a user by hand (the everyone role is ignored). Taking
+ * one's own admin role away, or leaving the app without any admin, answers `409 conflict`.
+ */
+export const adminUserPatchSchema = z.object({
+  roleIds: z
+    .array(z.uuid())
+    .max(200)
+    .transform((ids) => [...new Set(ids)])
+})
+export type AdminUserPatch = z.input<typeof adminUserPatchSchema>
 
 // ---------------------------------------------------------------------------
 // Dashboard grid geometry
@@ -374,8 +490,29 @@ export const lucideIconNameSchema = z
   .max(64)
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'Expected a kebab-case Lucide icon name')
 
+export const COMPONENT_NAME_MAX = 80
+
+const componentNameSchema = z.string().trim().min(1).max(COMPONENT_NAME_MAX)
+
+/**
+ * A component's name in the interface languages, keyed by language. A language without one shows
+ * `name`, so `name` is the name in every language the admin did not translate it into.
+ */
+export const componentNameTranslationsSchema = z.partialRecord(languageSchema, componentNameSchema)
+export type ComponentNameTranslations = z.infer<typeof componentNameTranslationsSchema>
+
+/** The name a component shows in `language`: its translation, or else its own name. */
+export function componentName(
+  component: { name: string; nameTranslations: ComponentNameTranslations },
+  language: Language
+): string {
+  return component.nameTranslations[language] ?? component.name
+}
+
 const componentBaseSchema = z.object({
-  name: z.string().trim().min(1).max(80),
+  name: componentNameSchema,
+  /** Older clients send none; the component then shows `name` in every language. */
+  nameTranslations: componentNameTranslationsSchema.default({}),
   /** Lucide icon name. Used when `iconUrl` is null. */
   icon: lucideIconNameSchema.nullable(),
   /** Optional image override (favicon, logo). Takes precedence over `icon`. */
@@ -1622,10 +1759,23 @@ export const API = {
   /** Admin only. GET: `adminUserListSchema`. */
   adminUsers: '/api/admin/users',
   /**
-   * Admin only. PATCH: `adminUserPatchSchema` → `adminUserSchema`. Revoking one's own admin role,
-   * which would also leave the app without one, answers `409 conflict`.
+   * Admin only. PATCH: `adminUserPatchSchema` → `adminUserSchema`. Taking one's own admin role
+   * away, or leaving the app without an admin, answers `409 conflict`.
    */
   adminUser: (id: string) => `/api/admin/users/${id}`,
+  /**
+   * Admin only. GET: `appRoleListSchema`. POST: `appRoleInputSchema` → 201 with `appRoleSchema`.
+   */
+  adminRoles: '/api/admin/roles',
+  /**
+   * Admin only. GET (`appRoleSchema`) / PUT (`appRoleInputSchema` → `appRoleSchema`) / DELETE
+   * (204) one role. Deleting a built-in role answers `409 conflict`; so does a change to the
+   * admin role's Keycloak lists that would take the acting admin's own admin role or leave the
+   * app without an admin.
+   */
+  adminRole: (id: string) => `/api/admin/roles/${id}`,
+  /** Admin only. GET: `presetAudienceSuggestionsSchema`, Keycloak names seen at sign-in. */
+  adminRoleAudiences: '/api/admin/roles/audiences',
   /** GET / PUT `sidebarSchema` for the current user. */
   sidebar: '/api/sidebar',
   /** GET / PUT `dashboardSchema` for the current user. */

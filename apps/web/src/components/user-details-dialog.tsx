@@ -6,28 +6,27 @@ import {
   DialogHeader,
   DialogTitle
 } from '@ki4jlu/design-system'
-import type { AdminUser, UserRole } from '@justcampus/shared'
+import type { AdminUser, AppRole } from '@justcampus/shared'
 import { AdminUserDetails } from './admin-user-details'
 
 interface UserDetailsDialogProps {
   /** The user to show; `null` closes the dialog. */
   user: AdminUser | null
-  /** The signed-in admin, who cannot revoke their own role. */
-  isSelf: boolean
-  onChangeRole: (role: UserRole, opener: HTMLElement) => void
+  roles: readonly AppRole[] | undefined
+  onAssignRoles: (opener: HTMLElement) => void
   onClose: () => void
   /** Where the focus goes as the dialog closes; see Radix' `onCloseAutoFocus`. */
   onCloseAutoFocus?: (event: Event) => void
 }
 
 /**
- * A user's details: name and e-mail as the title, then their role with its action, Keycloak roles
- * and groups, sign-ins. The role's confirmation opens on top of it.
+ * A user's details: name and e-mail as the title, then their roles with the way to assign them,
+ * Keycloak roles and groups, sign-ins. The role dialog opens on top of it.
  */
 export function UserDetailsDialog({
   user,
-  isSelf,
-  onChangeRole,
+  roles,
+  onAssignRoles,
   onClose,
   onCloseAutoFocus
 }: UserDetailsDialogProps): React.JSX.Element {
@@ -48,7 +47,7 @@ export function UserDetailsDialog({
               <DialogTitle className="wrap-anywhere">{user.name}</DialogTitle>
               <DialogDescription className="wrap-anywhere">{user.email}</DialogDescription>
             </DialogHeader>
-            <AdminUserDetails user={user} isSelf={isSelf} onChangeRole={onChangeRole} />
+            <AdminUserDetails user={user} roles={roles} onAssignRoles={onAssignRoles} />
           </>
         ) : null}
       </DialogContent>

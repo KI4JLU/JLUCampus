@@ -7,6 +7,7 @@ import {
   useState,
   type KeyboardEvent,
   type PointerEvent,
+  type ReactNode,
   type Ref
 } from 'react'
 import { PauseIcon, PlayIcon } from 'lucide-react'
@@ -28,11 +29,11 @@ import {
   type DecodedWaveform
 } from './peaks'
 
-/** A stretch of the speaker timeline under the waveform (T-24). */
+/** A speaker's stretch of the waveform (T-24): its bars are drawn in the speaker's colour. */
 export interface WaveformSegment {
   start: number
   end: number
-  /** `null` draws it in the neutral colour. */
+  /** `null` keeps its bars neutral. */
   colorId: TranscriptionSpeakerColorId | null
   /** The speaker, shown with the stretch's times when the pointer rests on it. */
   label?: string
@@ -80,6 +81,8 @@ export interface WaveformPlayerProps {
    * whether it is decoded here (`decodesLocally`).
    */
   name?: string
+  /** Shown before the name on its line, e.g. the kind of source the audio came from. */
+  icon?: ReactNode
   /** Size in bytes, shown and checked against the decode limit; a blob's own size by default. */
   size?: number
   /**
@@ -97,13 +100,15 @@ export interface WaveformPlayerProps {
    * waveform not found before is not remembered.
    */
   jobRevision?: string
-  /** The speaker timeline, coloured per speaker. */
+  /** The speakers' stretches, which colour the bars per speaker. */
   segments?: readonly WaveformSegment[]
   region?: WaveformRegion | null
   /** Shows and seeks another time line than the audio's own; nothing is decoded here then. */
   timeline?: WaveformTimeline
   /** Hides the line with name, size and time, for players that show them elsewhere. */
   compact?: boolean
+  /** Shown after the waveform on its line, e.g. the row's actions; wraps below where narrow. */
+  trailing?: ReactNode
   onTimeUpdate?: (seconds: number) => void
   onPlayingChange?: (playing: boolean) => void
   /**
@@ -129,14 +134,15 @@ function cssColor(element: Element, name: string): string {
 /**
  * The audio player the transcription page uses everywhere, after kiChat's `WaveformAudioPlayer`
  * and its global player: play/pause, a waveform that is the seek bar (pointer and keyboard), the
- * time, an optional speaker timeline and a highlighted region. Local files play from an object
- * URL; remote audio from the job's audio URL. Audio `decodesLocally` refuses (too large, or WebM
- * of unknown or long duration) is not decoded here: the waveform the analysis computed is drawn
- * (`jobId`), and the audio plays either way.
+ * time, bars in the speakers' colours where `segments` are given, and a highlighted region. Local
+ * files play from an object URL; remote audio from the job's audio URL. Audio `decodesLocally`
+ * refuses (too large, or WebM of unknown or long duration) is not decoded here: the waveform the
+ * analysis computed is drawn (`jobId`), and the audio plays either way.
  */
 export function WaveformPlayer({
   source,
   name,
+  icon,
   size,
   knownDuration: givenDuration,
   jobId = null,
@@ -145,6 +151,7 @@ export function WaveformPlayer({
   region,
   timeline,
   compact = false,
+  trailing,
   onTimeUpdate,
   onPlayingChange,
   onDuration,
@@ -253,7 +260,6 @@ export function WaveformPlayer({
       played: cssColor(bar, '--color-primary'),
       unplayed: cssColor(bar, '--color-outline-variant'),
       region: cssColor(bar, '--color-primary-container'),
-      neutral: cssColor(bar, '--color-outline'),
       speakers: TRANSCRIPTION_SPEAKER_COLORS
     }
     const shown = shownTimeline.current
@@ -392,6 +398,12 @@ export function WaveformPlayer({
   }
 
   const timeLabel = `${formatTime(time)} / ${formatTime(knownDuration)}`
+  const nameText = (
+    <span className="min-w-0 truncate">
+      {name}
+      {byteSize !== undefined ? ` · ${formatMegabytes(byteSize)}` : null}
+    </span>
+  )
   const playLabel = playing
     ? t('transcription.common.player.pause')
     : t('transcription.common.player.play')
@@ -399,20 +411,30 @@ export function WaveformPlayer({
   return (
     <div className={cn('flex min-w-0 flex-col gap-2', className)}>
       {compact ? null : (
-        <div className="flex min-w-0 items-baseline justify-between gap-3">
-          <span className="min-w-0 truncate">
-            {name}
-            {byteSize !== undefined ? ` · ${formatMegabytes(byteSize)}` : null}
-          </span>
+        // With an icon the texts are centred on it; they share one type, so they stay level.
+        <div
+          className={cn(
+            'flex min-w-0 justify-between gap-3',
+            icon ? 'items-center' : 'items-baseline'
+          )}
+        >
+          {icon ? (
+            <span className="flex min-w-0 items-center gap-2">
+              {icon}
+              {nameText}
+            </span>
+          ) : (
+            nameText
+          )}
           <span aria-hidden="true" className="shrink-0">
             {timeLabel}
           </span>
         </div>
       )}
-      <div className="flex min-w-0 items-center gap-3">
+      <div className={cn('flex min-w-0 items-center gap-3', trailing && 'flex-wrap')}>
         <Button
           type="button"
-          variant="outline"
+          variant="default"
           size="icon"
           aria-label={playLabel}
           title={playLabel}
@@ -449,23 +471,35 @@ export function WaveformPlayer({
             total: formatTime(barDuration)
           })}
           aria-disabled={!source || undefined}
-          className="relative h-12 min-w-0 flex-1 cursor-pointer touch-none focus-visible:outline-2 focus-visible:outline-focus-ring"
+          className={cn(
+            'relative h-12 min-w-0 cursor-pointer touch-none focus-visible:outline-2 focus-visible:outline-focus-ring',
+            // Room for some bars before what follows wraps below.
+            trailing ? 'grow basis-32' : 'flex-1'
+          )}
           onKeyDown={onKeyDown}
           onPointerDown={(event) => {
-            if (!barDuration) return
+            // Only the primary button seeks: a right-click's release can go to its menu instead.
+            if (!barDuration || event.button !== 0) return
             seeking.current = true
             event.currentTarget.setPointerCapture(event.pointerId)
             seekToPointer(event)
           }}
           onPointerMove={(event) => {
             if (seeking.current) {
-              seekToPointer(event)
-              return
+              if (event.buttons & 1) {
+                seekToPointer(event)
+                return
+              }
+              // A release the bar never saw (a menu, another window took it) ends the drag here,
+              // or merely hovering would seek, and the transcript scroll to each block it passed.
+              seeking.current = false
             }
-            // The speaker under the pointer, as kiChat's global player shows it.
+            // The speaker under the pointer, as kiChat's global player shows it; a native tooltip,
+            // which moves nothing on the page.
             if (!segments?.some((segment) => segment.label)) return
             const at = pointerTime(event)
-            event.currentTarget.title = at === null ? '' : segmentTitle(segments, at)
+            const title = at === null ? '' : segmentTitle(segments, at)
+            if (event.currentTarget.title !== title) event.currentTarget.title = title
           }}
           onPointerUp={(event) => {
             seeking.current = false
@@ -474,9 +508,13 @@ export function WaveformPlayer({
           onPointerCancel={() => {
             seeking.current = false
           }}
+          onLostPointerCapture={() => {
+            seeking.current = false
+          }}
         >
           <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" />
         </div>
+        {trailing ? <div className="ml-auto flex shrink-0 items-center">{trailing}</div> : null}
       </div>
       {source && !local && !waveform && !compact ? (
         <span>{t('transcription.common.player.waveformUnavailable')}</span>

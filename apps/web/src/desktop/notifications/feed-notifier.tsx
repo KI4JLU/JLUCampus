@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useMemo, useRef } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import type { Component, DesktopNotificationsBridge, FeedItem } from '@justcampus/shared'
+import { useComponentName } from '@/lib/component-name'
 import { hasUnreadEntries } from '@/lib/feed'
 import { feedQuery } from '@/lib/queries'
 import type { DesktopServiceProps } from '../types'
@@ -54,6 +55,7 @@ interface FeedWatchProps {
 /** One feed: notifies about the unread entries each new copy brings. */
 function FeedWatch({ bridge, component }: FeedWatchProps): null {
   const { t } = useTranslation()
+  const componentName = useComponentName()
   const { data: feed } = useQuery(feedQuery(component.config.feedUrl))
   const seen = useRef<ReadonlySet<string> | undefined>(undefined)
 
@@ -61,7 +63,7 @@ function FeedWatch({ bridge, component }: FeedWatchProps): null {
   const notify = useEffectEvent((entries: FeedItem[]) => {
     const [only] = entries
     void bridge.show({
-      title: component.name,
+      title: componentName(component),
       body:
         entries.length === 1 && only
           ? only.title

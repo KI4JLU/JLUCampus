@@ -6,4 +6,4 @@
  * microphone, the lifecycle and the takes.
  */
 export { RecordingProvider } from './provider'
-export { RecordingSettings, RecordView } from './views'
+export { RecordView } from './views'

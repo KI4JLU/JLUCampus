@@ -56,6 +56,8 @@ export interface TranslatorSidebarProps {
   /** What the model picker calls the models' group. */
   llmProvider: string | null
   glossaries: readonly TranslatorGlossary[] | undefined
+  /** Whether the user may use glossaries; without, their row is left out. */
+  glossariesOffered: boolean
   onMode: (mode: TranslatorMode) => void
   onEngine: (engine: TranslatorEngine) => void
   onLive: (live: boolean) => void
@@ -189,7 +191,7 @@ export function TranslatorSidebar(props: TranslatorSidebarProps): React.JSX.Elem
         )}
 
         <PanelSection title={t('component.translator.options')}>
-          {mode === 'translate' || documents ? (
+          {props.glossariesOffered && (mode === 'translate' || documents) ? (
             <SidebarRow
               icon={<BookMarkedIcon {...ICON} />}
               label={t('component.translator.glossaries.title')}

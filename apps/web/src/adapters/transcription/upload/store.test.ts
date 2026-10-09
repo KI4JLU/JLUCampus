@@ -655,6 +655,91 @@ describe('UploadQueue: removing (T-08)', () => {
   })
 })
 
+describe('UploadQueue: removing restored and analysing files (T-08, T-15)', () => {
+  /** A queue with one job restored while its voices are analysed, as after a reload. */
+  async function restoredAnalysing(): Promise<{ server: FakeServer; queue: UploadQueue }> {
+    const server_ = server()
+    const listed = job('job-x', { status: 'analyzing', filename: 'talk.wav.m4a' })
+    server_.api.listJobs.mockResolvedValue([listed])
+    server_.script('job-x', { status: 'analyzing' })
+    // The server answers the deletion and then reports the job gone, as its stream does.
+    server_.api.deleteJob.mockImplementation(async (id) => {
+      server_.api.listJobs.mockResolvedValue([])
+      queueMicrotask(() => server_.events.emit({ type: 'jobRemoved', data: { id } }))
+    })
+    const queue = makeQueue(server_.api, server_.events)
+    queue.attach()
+    queue.showView('upload')
+    await until(() => row(queue, 'talk.wav.m4a')?.status === 'analyzingSpeakers')
+    return { server: server_, queue }
+  }
+
+  it('deletes the job and the folder when the folder is deleted', async () => {
+    const { server: fake, queue } = await restoredAnalysing()
+    const groupId = queue.getSnapshot().groups[0]!.id
+    expect(await queue.removeGroup(groupId)).toBe(true)
+    expect(fake.api.deleteJob).toHaveBeenCalledWith('job-x')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(queue.getSnapshot().groups).toEqual([])
+    // Opening the upload view again brings nothing back.
+    queue.showView('upload')
+    await queue.whenRestored()
+    expect(queue.getSnapshot().groups).toEqual([])
+    queue.dispose()
+  })
+
+  it('deletes the job and the folder it leaves empty when its file is removed', async () => {
+    const { server: fake, queue } = await restoredAnalysing()
+    queue.addGroup()
+    expect(await queue.removeFile(row(queue, 'talk.wav.m4a').id)).toBe(true)
+    expect(fake.api.deleteJob).toHaveBeenCalledWith('job-x')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(rows(queue)).toEqual([])
+    // Without files the queue is empty again, the page back at its drop area.
+    expect(queue.getSnapshot().groups).toEqual([])
+    queue.dispose()
+  })
+
+  it('keeps a folder just added when another folder loses its last file', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: [] })
+    script('job-2', { status: 'analyzed', speakers: [] })
+    const queue = makeQueue(api, events)
+    queue.addFiles([wav('a.wav')])
+    queue.addGroup()
+    queue.addFiles([wav('b.wav')], 1)
+    await until(() => rows(queue).every((file) => file.phase === 'ready'))
+    queue.addGroup()
+
+    expect(await queue.removeFile(row(queue, 'b.wav').id)).toBe(true)
+    const groups = queue.getSnapshot().groups
+    expect(groups.map((group) => group.name)).toEqual(['Transcript 1', 'Transcript 2'])
+    expect(groups.map((group) => group.files.length)).toEqual([1, 0])
+    queue.dispose()
+  })
+
+  it('does not bring back a job removed while a listing of the jobs was under way', async () => {
+    const { api, events, script } = server()
+    script('job-1', { status: 'analyzed', speakers: [] })
+    const queue = makeQueue(api, events)
+    queue.attach()
+    queue.addFiles([wav('a.wav')])
+    await until(() => row(queue, 'a.wav')?.phase === 'ready')
+
+    // The listing answers with the job as it was before the removal.
+    let answer: (jobs: TranscriptionJob[]) => void = () => undefined
+    api.listJobs.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
+    queue.showView('upload')
+    await until(() => api.listJobs.mock.calls.length === 1)
+    expect(await queue.removeFile(row(queue, 'a.wav').id)).toBe(true)
+    answer([job('job-1', { status: 'analyzed', speakers: SPEAKERS, filename: 'a.wav' })])
+    await queue.whenRestored()
+
+    expect(queue.getSnapshot().groups).toEqual([])
+    queue.dispose()
+  })
+})
+
 describe('UploadQueue: telling when handed-over files are stored (T-58)', () => {
   it('reports stored once storage has the bytes, before the analysis starts', async () => {
     const { api, events, script } = server()

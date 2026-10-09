@@ -5,6 +5,7 @@ export class ApiError extends Error {
   constructor(
     readonly status: ContentfulStatusCode,
     readonly code:
+      | 'unauthorized'
       | 'not_found'
       | 'forbidden'
       | 'validation'

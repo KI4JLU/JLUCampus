@@ -13,6 +13,15 @@ const engines: TranslatorEngine[] = [
   { id: 'llm:gemma', kind: 'llm', label: 'Gemma' }
 ]
 
+/** What the page tells the store: every mode offered and allowed. */
+const context = {
+  engines,
+  defaultEngine: 'deepl',
+  documents: true,
+  rephrase: true,
+  create: true
+} as const
+
 /** Timers run by hand, so the store's pauses are instant and ordered. */
 function manualClock(): TranslatorClock & { run: () => void } {
   let timers: Array<{ callback: () => void; handle: number }> = []
@@ -56,7 +65,7 @@ function setup(overrides: Partial<TranslatorApi> = {}): {
   const storage = { setItem: vi.fn() }
   const clock = manualClock()
   const store = new TranslatorStore(api, parseSession(null, 'en-gb'), storage, clock)
-  store.setContext({ engines, defaultEngine: 'deepl', documents: true, glossaryIds: [] })
+  store.setContext({ ...context, glossaryIds: [] })
   return { store, api, storage, clock }
 }
 
@@ -248,14 +257,14 @@ describe('TranslatorStore', () => {
 
   it('drops the active glossaries on a reload and keeps the button off', async () => {
     const { store, storage } = setup()
-    store.setContext({ engines, defaultEngine: 'deepl', documents: true, glossaryIds: ['g1'] })
+    store.setContext({ ...context, glossaryIds: ['g1'] })
     store.setGlossaries(['g1'])
     store.setSource('Hallo Welt.')
     await store.run()
     const [, value] = storage.setItem.mock.calls.at(-1)!
     expect('glossaryIds' in JSON.parse(value)).toBe(false)
     const reloaded = new TranslatorStore(setup().api, parseSession(value, 'en-gb'), null)
-    reloaded.setContext({ engines, defaultEngine: 'deepl', documents: true, glossaryIds: ['g1'] })
+    reloaded.setContext({ ...context, glossaryIds: ['g1'] })
     expect(reloaded.getState().glossaryIds).toEqual([])
     expect(reloaded.targetText).toBe('EN:Hallo Welt.')
     expect(reloaded.hasChanges).toBe(false)
@@ -269,6 +278,19 @@ describe('TranslatorStore', () => {
     const reloaded = new TranslatorStore(setup().api, parseSession(value, 'en-gb'), null)
     expect(store.getState()).toMatchObject({ noticeClosed: true, webSearch: false })
     expect(reloaded.getState()).toMatchObject({ noticeClosed: false, webSearch: true })
+  })
+
+  it('gives way to translating when the user may no longer use the mode', () => {
+    const { store } = setup()
+    store.switchMode('rephrase')
+    store.setContext({ ...context, rephrase: false, glossaryIds: [] })
+    expect(store.getState().mode).toBe('translate')
+    store.switchMode('create')
+    store.setContext({ ...context, create: false, glossaryIds: [] })
+    expect(store.getState().mode).toBe('translate')
+    store.switchMode('documents')
+    store.setContext({ ...context, documents: false, glossaryIds: [] })
+    expect(store.getState().mode).toBe('translate')
   })
 
   it('keeps the documents’ target while the mode changes, and resets it on a reload', () => {
@@ -292,7 +314,7 @@ describe('TranslatorStore', () => {
     expect(store.targetText).toBe('')
     const [, value] = storage.setItem.mock.calls.at(-1)!
     const reloaded = new TranslatorStore(setup().api, parseSession(value, 'en-gb'), null)
-    reloaded.setContext({ engines, defaultEngine: 'deepl', documents: true, glossaryIds: [] })
+    reloaded.setContext({ ...context, glossaryIds: [] })
     expect(reloaded.targetText).toBe('EDITOR\\_R9\\_Neuladen')
     expect(reloaded.buffer.sourceSentences).toEqual(['Ein anderer Text.'])
     // The reloaded text counts as processed: the button stays off until something changes.

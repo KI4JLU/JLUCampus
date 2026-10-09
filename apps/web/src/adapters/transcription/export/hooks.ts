@@ -1,6 +1,19 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useFeature } from '@/lib/features'
+import type { ExportCategory } from './files'
 import type { SpeakerLabels } from './format'
+import { useExportState } from './store'
+
+/**
+ * The export category shown: the one chosen, except the summary for a user whose roles do not
+ * allow AI summaries, who gets the transcript instead.
+ */
+export function useExportCategory(): ExportCategory {
+  const { category } = useExportState()
+  const summaries = useFeature('transcription.summaries')
+  return category === 'summary' && !summaries ? 'transcript' : category
+}
 
 /** The names the export gives speakers without one, in the current language. */
 export function useSpeakerLabels(): SpeakerLabels {
