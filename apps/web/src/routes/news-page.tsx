@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useId, useState } from 'react'
+import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
@@ -23,9 +23,9 @@ import { announcementsQuery, meQuery, useMarkAnnouncementSeen } from '@/lib/quer
 const MarkdownView = lazy(() => import('@/components/markdown-view'))
 
 /**
- * Every news item as a post, newest first, like a blog. Opening the page counts as reading them:
- * the unread ones are acknowledged, so they do not open as a dialog again, and keep their "New"
- * badge until the user leaves the page.
+ * Every news item as a post, newest first, like a blog. Showing them counts as reading them: the
+ * unread ones, also those a later refetch brings, are acknowledged, so they do not open as a
+ * dialog again, and keep their "New" badge until the user leaves the page.
  */
 export function NewsPage(): React.JSX.Element {
   const { t } = useTranslation()
@@ -33,26 +33,25 @@ export function NewsPage(): React.JSX.Element {
   const { data: announcements, isPending, isError, refetch } = useQuery(announcementsQuery)
   const { data: me } = useQuery(meQuery)
   const markSeen = useMarkAnnouncementSeen()
-  // The news unread when the page opened; acknowledging them must not take their badge away.
-  const [unreadAtOpen, setUnreadAtOpen] = useState<ReadonlySet<string> | null>(null)
-  if (announcements && unreadAtOpen === null) {
-    setUnreadAtOpen(
-      new Set(
-        allNews(announcements)
-          .filter((item) => !item.seen)
-          .map((item) => item.id)
-      )
-    )
-  }
+  const news = announcements ? allNews(announcements) : []
+  // Every item shown unread on this visit, also ones a later refetch brought; acknowledging them
+  // must not take their badge away.
+  const [shownUnread, setShownUnread] = useState<ReadonlySet<string>>(() => new Set())
+  const fresh = news.filter((item) => !item.seen && !shownUnread.has(item.id))
+  if (fresh.length > 0) setShownUnread(new Set([...shownUnread, ...fresh.map((item) => item.id)]))
 
   const userId = me?.id
   const { mutate } = markSeen
+  // Each one is acknowledged once per visit; the cache marks it seen at once.
+  const acknowledged = useRef(new Set<string>())
   useEffect(() => {
-    if (!unreadAtOpen || !userId) return
-    unreadAtOpen.forEach((id) => mutate({ id, userId }))
-  }, [unreadAtOpen, userId, mutate])
-
-  const news = announcements ? allNews(announcements) : []
+    if (!userId) return
+    for (const id of shownUnread) {
+      if (acknowledged.current.has(id)) continue
+      acknowledged.current.add(id)
+      mutate({ id, userId })
+    }
+  }, [shownUnread, userId, mutate])
 
   return (
     <Container size="content" className="flex flex-col gap-gutter py-gutter md:py-margin-page">
@@ -78,7 +77,7 @@ export function NewsPage(): React.JSX.Element {
             key={item.id}
             item={item}
             language={language}
-            isNew={unreadAtOpen?.has(item.id) ?? false}
+            isNew={shownUnread.has(item.id)}
           />
         ))
       )}
@@ -115,7 +114,7 @@ function NewsPost({ item, language, isNew }: NewsPostProps): React.JSX.Element {
         </CardHeader>
         <CardContent>
           <Suspense fallback={<Spinner label={t('common.loading')} />}>
-            <MarkdownView markdown={text.body} breaks />
+            <MarkdownView markdown={text.body} breaks headingOffset={2} />
           </Suspense>
         </CardContent>
       </Card>

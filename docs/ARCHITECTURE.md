@@ -692,7 +692,9 @@ allows every signed-in user and is the entry point for future audience rules.
   newest first, like a blog, and marks the unread ones seen (their "New" badge
   stays until the page is left). Bodies are Markdown, rendered read-only by
   Tiptap (`components/markdown-view.tsx`, with single line breaks kept through
-  a `marked` instance of its own), so no HTML from the text reaches the page.
+  a `marked` instance of its own per view, and the text's headings moved two
+  levels down under the post's or dialog's `<h2>`), so no HTML from the text
+  reaches the page.
   In the admin editor, "Translate from German" fills the English title and
   text through the translator module's `/translate` with its default engine
   (`lib/announcement-translation.ts`): only each line's words go out, list

@@ -95,7 +95,8 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   if (announcements && !startChecked) {
     setStartChecked(true)
     const unread = unreadNews(announcements)
-    if (unread.length > 0 && pathname !== NEWS_PATH) setNews({ open: true, items: unread })
+    if (unread.length > 0 && pathname.replace(/\/+$/, '') !== NEWS_PATH)
+      setNews({ open: true, items: unread })
   }
 
   const closeNews = (viewedIds: string[]): void => {

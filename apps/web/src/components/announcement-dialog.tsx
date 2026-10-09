@@ -58,7 +58,7 @@ export function AnnouncementDialog({
           // Long texts scroll inside the dialog; the buttons stay in view.
           <div className="max-h-96 overflow-y-auto">
             <Suspense fallback={<Spinner label={t('common.loading')} />}>
-              <MarkdownView markdown={body} breaks />
+              <MarkdownView markdown={body} breaks headingOffset={2} />
             </Suspense>
           </div>
         ) : null}
