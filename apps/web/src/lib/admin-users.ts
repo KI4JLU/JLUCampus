@@ -45,7 +45,10 @@ export function formatUserDate(iso: string, language: string): string {
   )
 }
 
-/** The server's `conflict`: an admin revoking their own role, which would also leave none. */
+/**
+ * The server's `conflict`: an admin taking their own admin role away, or leaving the app without
+ * an admin.
+ */
 export function isRoleConflict(error: unknown): boolean {
   return error instanceof ApiRequestError && error.code === 'conflict'
 }
