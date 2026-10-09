@@ -8,7 +8,6 @@ import {
   type AdminAnnouncement,
   type AnnouncementInput,
   type AnnouncementKind,
-  type AnnouncementSide,
   type Language
 } from '@justcampus/shared'
 import { ApiRequestError } from './api'
@@ -31,7 +30,6 @@ export interface AnnouncementFormState {
   selector: string
   /** Empty for every page. */
   path: string
-  side: AnnouncementSide
 }
 
 export function initialAnnouncementForm(
@@ -44,8 +42,7 @@ export function initialAnnouncementForm(
       enabled: false,
       texts: { de: { title: '', body: '' }, en: { title: '', body: '' } },
       selector: '',
-      path: '',
-      side: 'bottom'
+      path: ''
     }
   }
   const { target } = announcement
@@ -57,8 +54,7 @@ export function initialAnnouncementForm(
       en: { ...announcement.texts.en }
     },
     selector: target?.selector ?? '',
-    path: target?.path ?? '',
-    side: target?.side ?? 'bottom'
+    path: target?.path ?? ''
   }
 }
 
@@ -126,10 +122,7 @@ export function validateAnnouncementForm(
     kind: state.kind,
     enabled: state.enabled,
     texts: state.texts,
-    target:
-      state.kind === 'hint'
-        ? { selector: state.selector, path: path ? path : null, side: state.side }
-        : null
+    target: state.kind === 'hint' ? { selector: state.selector, path: path ? path : null } : null
   })
   const errors = result.success ? {} : toFieldErrors(result.error.issues, t)
   if (state.kind === 'hint' && selectorProblem(state.selector, query)) {

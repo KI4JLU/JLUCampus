@@ -1,17 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@ki4jlu/design-system'
+import { Button } from '@ki4jlu/design-system'
 import type { Language } from '@justcampus/shared'
 import { textIn, type UserNews } from '@/lib/announcements'
-import { AnnouncementBody } from './announcement-body'
+import { AnnouncementDialog } from './announcement-dialog'
 
 interface NewsDialogProps {
   open: boolean
@@ -61,32 +53,25 @@ export function NewsDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => (next ? undefined : close())}>
-      <DialogContent closeLabel={t('common.close')} onCloseAutoFocus={onCloseAutoFocus}>
-        <DialogHeader>
-          <DialogDescription>
-            {!item
-              ? t('announcements.news.empty')
-              : items.length > 1
-                ? t('announcements.news.meta', {
-                    date: formatDate(item.publishedAt, language),
-                    current: page + 1,
-                    total: items.length
-                  })
-                : formatDate(item.publishedAt, language)}
-          </DialogDescription>
-          <DialogTitle>{text ? text.title : t('announcements.news.title')}</DialogTitle>
-        </DialogHeader>
-        {text ? (
-          // Long texts scroll inside the dialog; the buttons stay in view.
-          <div className="max-h-96 overflow-y-auto">
-            <AnnouncementBody body={text.body} />
-          </div>
-        ) : null}
-        <p className="sr-only" aria-live="polite">
-          {announced}
-        </p>
-        <DialogFooter>
+    <AnnouncementDialog
+      open={open}
+      onClose={close}
+      onCloseAutoFocus={onCloseAutoFocus}
+      meta={
+        !item
+          ? t('announcements.news.empty')
+          : items.length > 1
+            ? t('announcements.news.meta', {
+                date: formatDate(item.publishedAt, language),
+                current: page + 1,
+                total: items.length
+              })
+            : formatDate(item.publishedAt, language)
+      }
+      title={text ? text.title : t('announcements.news.title')}
+      body={text ? text.body : null}
+      footer={
+        <>
           {items.length > 1 ? (
             <Button variant="secondary" disabled={page === 0} onClick={() => goTo(page - 1)}>
               {t('announcements.news.back')}
@@ -97,9 +82,13 @@ export function NewsDialog({
           ) : (
             <Button onClick={() => goTo(page + 1)}>{t('announcements.news.next')}</Button>
           )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </>
+      }
+    >
+      <p className="sr-only" aria-live="polite">
+        {announced}
+      </p>
+    </AnnouncementDialog>
   )
 }
 

@@ -3,9 +3,9 @@
  *
  * - `news` (feature updates and the like) open once as a dialog the next time a user opens the
  *   app; several unread ones are paged. Users can read them again later from the account menu.
- * - `hint` attaches a small pop-up to one element of the app, found by a CSS selector, optionally
- *   only on pages matching `path`. It opens when the user clicks that element (or anything in it),
- *   one hint at a time, and once acknowledged it does not open again.
+ * - `hint` belongs to one element of the app, found by a CSS selector, optionally only on pages
+ *   matching `path`. When the user clicks that element (or anything in it), the hint opens as a
+ *   dialog like a news item, one at a time; once acknowledged it does not open again.
  *
  * A user sees an announcement until they acknowledge it (`ANNOUNCEMENTS_API.seen`), stored per
  * user on the server, so it does not come back on another device. Who receives an announcement is
@@ -37,10 +37,6 @@ export const announcementTextsSchema = z.object({
 })
 export type AnnouncementTexts = z.infer<typeof announcementTextsSchema>
 
-export const ANNOUNCEMENT_SIDES = ['top', 'right', 'bottom', 'left'] as const
-export const announcementSideSchema = z.enum(ANNOUNCEMENT_SIDES)
-export type AnnouncementSide = z.infer<typeof announcementSideSchema>
-
 /**
  * A page path the hint is limited to: starts with `/`; a trailing `*` matches every path with
  * that prefix (`/c/*`). `null` means every page.
@@ -52,11 +48,14 @@ export const announcementPathSchema = z
   .max(ANNOUNCEMENT_PATH_MAX)
   .regex(/^\/[^*\s]*\*?$/, { message: 'Path must start with / and may end with a single *' })
 
-/** Where a `hint` pops up. The server cannot check the selector; the admin page does. */
+/**
+ * The element whose click opens a `hint`, and the pages it does so on. The server cannot check the
+ * selector; the admin page does. Targets stored before hints opened as dialogs carry a `side`;
+ * parsing drops it like any unknown key.
+ */
 export const announcementTargetSchema = z.object({
   selector: z.string().trim().min(1).max(ANNOUNCEMENT_SELECTOR_MAX),
-  path: announcementPathSchema.nullable(),
-  side: announcementSideSchema
+  path: announcementPathSchema.nullable()
 })
 export type AnnouncementTarget = z.infer<typeof announcementTargetSchema>
 

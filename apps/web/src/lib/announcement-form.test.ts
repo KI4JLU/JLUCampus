@@ -28,7 +28,7 @@ const hint: AdminAnnouncement = {
     de: { title: 'Mehr Apps', body: 'Hier finden Sie weitere Apps.' },
     en: { title: 'More apps', body: 'Find more apps here.' }
   },
-  target: { selector: '[data-tour="more-apps"]', path: null, side: 'right' },
+  target: { selector: '[data-tour="more-apps"]', path: null },
   publishedAt: '2026-10-01T00:00:00.000Z',
   seenCount: 3,
   createdAt: '2026-10-01T00:00:00.000Z',
@@ -48,7 +48,6 @@ describe('initialAnnouncementForm', () => {
     const state = initialAnnouncementForm(null)
     expect(state.kind).toBe('news')
     expect(state.enabled).toBe(false)
-    expect(state.side).toBe('bottom')
   })
 
   it('takes a hint with every-page target as an empty path', () => {
@@ -91,11 +90,10 @@ describe('validateAnnouncementForm', () => {
       ...filled,
       kind: 'hint' as const,
       selector: ' #a ',
-      path: ' ',
-      side: 'left' as const
+      path: ' '
     }
     const result = validateAnnouncementForm(state, t, query)
-    expect(result.ok && result.input.target).toEqual({ selector: '#a', path: null, side: 'left' })
+    expect(result.ok && result.input.target).toEqual({ selector: '#a', path: null })
   })
 
   it('requires both languages', () => {

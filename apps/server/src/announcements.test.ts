@@ -276,7 +276,7 @@ describe('announcement routes', () => {
     const replacement = {
       ...input,
       kind: 'hint',
-      target: { selector: '#dashboard', path: '/', side: 'bottom' },
+      target: { selector: '#dashboard', path: '/' },
       texts: { de: { title: 'Tipp', body: 'Text' }, en: { title: 'Hint', body: 'Text' } },
       enabled: false
     }

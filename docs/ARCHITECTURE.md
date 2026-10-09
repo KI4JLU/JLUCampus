@@ -603,7 +603,9 @@ and English texts in jsonb, a nullable hint target, an enabled flag and creation
 and update timestamps. `published_at` is the first time the message was enabled
 and stays unchanged after disabling or editing it. `announcement_seen` stores
 acknowledgements with a composite key of announcement and user, a `seen_at`
-timestamp and cascading foreign keys.
+timestamp and cascading foreign keys. Hint targets saved while hints were pop-ups
+still carry a `side` in jsonb; responses are parsed through the shared
+schemas, which drop it, so no migration was needed.
 
 `ANNOUNCEMENTS_API` in shared defines the contract. Admins list, create, read,
 replace and delete messages at `/api/admin/announcements` and `/:id`; the list
@@ -686,28 +688,31 @@ allows every signed-in user and is the entry point for future audience rules.
   opens the unread news as a paged dialog once the app has started and marks
   every page the user viewed seen when it closes; the account menu's "What's
   new" reopens all news. Hints never open by themselves: a document-level
-  listener (capture phase, never stopping the event) opens the oldest unread,
+  listener (capture phase, never stopping the event) finds the oldest unread,
   path-matching hint whose selector `closest()`-matches the clicked element
-  (`hintForClick`), as a non-modal `Popover` anchored on that element, while
-  the element's own action runs as usual. On pop-up triggers (`aria-haspopup`)
-  the press and Enter/Space/ArrowDown count too, because Radix opens menus on
-  them and a modal menu keeps the click from its trigger. One hint at a time:
-  clicks open nothing while a hint or the news are open. A hint waits while a
-  modal layer is open (`pointer-events: none` on `<body>`, e.g. the dialog its
-  own button opened) and shows once it closes; it closes unseen when its
-  element leaves the page or the view (`useAnchorLeaves`), and opens again on
-  the next click. "Got it", close and Escape mark it seen (retried, else the
-  list goes stale and brings it back). Outside clicks keep it; the "More apps"
-  panel ignores clicks into it. Tab leaves the hint into the page instead of
-  looping in it. Shell elements carry stable `data-tour` attributes
-  (`src/lib/tour-targets.ts`, sidebar rows `sidebar-component-<id>`) that the
-  admin editor offers as selectors. "Test on page" stores the unsaved form in
-  `sessionStorage` (`lib/announcement-preview.ts`); while it is on, a click on
-  the element on any page opens it, marked as a preview, without marking it
-  seen, for the admin who started it only (cleared on sign-out). A toast says
-  so on arrival, and another one when a page has no such element on screen
-  after a few seconds (`useVisibleTarget`). The editor takes the form back
-  when it opens. Pure logic sits in `lib/announcements.ts` and
+  (`hintForClick`) and opens it as a dialog shaped like a news item
+  (`AnnouncementDialog`, shared with the news dialog), while the element's own
+  action runs as usual. On pop-up triggers (`aria-haspopup`) the press and
+  Enter/Space/ArrowDown count too, because Radix opens menus on them and a
+  modal menu keeps the click from its trigger. One hint at a time: clicks open
+  nothing while a hint or the news are open. The hint opens a tick after the
+  click; if a modal layer is open by then (`pointer-events: none` on
+  `<body>`, e.g. the dialog its own button opened) it waits and opens once that
+  closes, a check made only before its own dialog opens. Non-modal panels
+  ("More apps") stay open underneath and ignore clicks into the hint
+  (`isInAnnouncementHint`). "Got it", the close button, Escape and a click
+  beside the dialog mark it seen (retried, else the list goes stale and brings
+  it back); Radix returns the focus to the clicked element. Shell elements
+  carry stable `data-tour` attributes (`src/lib/tour-targets.ts`, sidebar rows
+  `sidebar-component-<id>`) that the admin editor offers as selectors. "Test
+  on page" stores the unsaved form in `sessionStorage`
+  (`lib/announcement-preview.ts`); while it is on, a click on the element on
+  any page opens the same dialog with a "Preview" badge and "Back to editor" /
+  "End preview", without marking it seen, for the admin who started it only
+  (cleared on sign-out); closing it keeps the preview on. A toast says so on
+  arrival, and another one when a page has no such element on screen after a
+  few seconds (`useVisibleTarget`). The editor takes the form back when it
+  opens. Pure logic sits in `lib/announcements.ts` and
   `lib/announcement-form.ts`.
 - i18n: `i18next` + `react-i18next`, resources `src/i18n/de.json` and
   `en.json`. Language = user's saved language, else browser detector, else

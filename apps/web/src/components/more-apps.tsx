@@ -12,7 +12,7 @@ import {
   PopoverTrigger
 } from '@ki4jlu/design-system'
 import type { Component } from '@justcampus/shared'
-import { isInAnnouncementHint } from '@/lib/hint-anchor'
+import { isInAnnouncementHint } from '@/lib/hint-layer'
 import { TOUR } from '@/lib/tour-targets'
 import type { SidebarArrangement } from '@/lib/use-sidebar-arrangement'
 import { cn } from '@/lib/utils'
@@ -99,7 +99,7 @@ export function MoreAppsPanel({
           : 'flex max-h-(--radix-popover-content-available-height) w-[min(24rem,calc(100vw-1.5rem))] flex-col p-0'
       }
       // Working in the sidebar rows is part of this, not a click away from it.
-      // So is reading the hint that "More apps" may have opened beside it.
+      // So is reading the hint dialog a click on "More apps" may have opened over it.
       onInteractOutside={(event) => {
         const inList = event.target instanceof Node && listRef.current?.contains(event.target)
         if (inList || isInAnnouncementHint(event.target)) event.preventDefault()

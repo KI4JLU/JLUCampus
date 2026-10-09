@@ -919,7 +919,7 @@
     },
     "announcements": {
       "title": "Ankündigungen verwalten",
-      "description": "Neuigkeiten öffnen sich für alle Nutzenden einmal als Dialog, wenn sie die App das nächste Mal öffnen. Element-Hinweise öffnen sich einmal, wenn Nutzende auf das Element klicken, zu dem sie gehören.",
+      "description": "Neuigkeiten öffnen sich für alle Nutzenden einmal als Dialog, wenn sie die App das nächste Mal öffnen. Element-Hinweise öffnen sich einmal als Dialog, wenn Nutzende auf das Element klicken, zu dem sie gehören.",
       "newAnnouncement": "Neue Ankündigung",
       "loadFailed": "Die Ankündigungen konnten nicht geladen werden.",
       "kinds": {
@@ -929,12 +929,6 @@
       "status": {
         "active": "Aktiv",
         "draft": "Entwurf"
-      },
-      "sides": {
-        "top": "Oben",
-        "right": "Rechts",
-        "bottom": "Unten",
-        "left": "Links"
       },
       "table": {
         "caption": "Alle Ankündigungen, die neuesten zuerst",
@@ -973,7 +967,7 @@
         "kind": "Art",
         "kindHints": {
           "news": "Öffnet sich einmal als Dialog, wenn Nutzende die App das nächste Mal öffnen.",
-          "hint": "Öffnet sich als kleines Pop-up, wenn Nutzende auf das Element klicken, und nur einmal: Nach „Verstanden“ erscheint es nicht wieder."
+          "hint": "Öffnet sich als Dialog wie eine Neuigkeit, wenn Nutzende auf das Element klicken, und nur einmal: Nach „Verstanden“ erscheint er nicht wieder."
         },
         "enabled": "Aktiv",
         "enabledHint": "Inaktive Ankündigungen bleiben als Entwurf gespeichert und erreichen niemanden.",
@@ -981,7 +975,7 @@
         "body": "Text",
         "bodyHint": "Reiner Text. Eine Leerzeile beginnt einen neuen Absatz.",
         "target": "Ziel",
-        "targetDescription": "Das Element, dessen Klick den Hinweis öffnet, und auf welchen Seiten. „Auf Seite testen“ zeigt ihn nur Ihnen, ohne zu speichern.",
+        "targetDescription": "Das Element, dessen Klick den Hinweis als Dialog öffnet, und auf welchen Seiten. „Auf Seite testen“ zeigt ihn nur Ihnen, ohne zu speichern.",
         "suggestion": "Bekanntes Element",
         "suggestionHint": "Setzt den Selektor für ein Element, das die App dauerhaft markiert.",
         "suggestionPlaceholder": "Element wählen",
@@ -991,7 +985,6 @@
         "selectorHint": "Ein Klick auf ein passendes Element oder auf etwas darin öffnet den Hinweis.",
         "path": "Seitenpfad",
         "pathHint": "Leer: jede Seite. Ein * am Ende passt auf alle Pfade mit diesem Anfang, z. B. /c/*.",
-        "side": "Seite des Elements",
         "test": "Auf Seite testen",
         "restored": "Ihre ungespeicherten Änderungen aus der Vorschau sind wiederhergestellt.",
         "saveFailed": "Die Ankündigung konnte nicht gespeichert werden.",
@@ -1023,7 +1016,8 @@
       "done": "Fertig"
     },
     "hint": {
-      "gotIt": "Verstanden"
+      "gotIt": "Verstanden",
+      "label": "Hinweis"
     },
     "preview": {
       "badge": "Vorschau",

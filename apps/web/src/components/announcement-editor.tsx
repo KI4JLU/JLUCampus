@@ -31,11 +31,9 @@ import {
   ANNOUNCEMENT_KINDS,
   ANNOUNCEMENT_PATH_MAX,
   ANNOUNCEMENT_SELECTOR_MAX,
-  ANNOUNCEMENT_SIDES,
   ANNOUNCEMENT_TITLE_MAX,
   LANGUAGES,
   announcementKindSchema,
-  announcementSideSchema,
   type AdminAnnouncement,
   type Language
 } from '@justcampus/shared'
@@ -389,8 +387,8 @@ interface TargetSectionProps {
 }
 
 /**
- * Where a hint pops up: the element (picked from the app's marked elements or as any CSS
- * selector, checked as it is typed), the pages it shows on and the side of the element.
+ * Which click opens a hint: the element (picked from the app's marked elements or as any CSS
+ * selector, checked as it is typed) and the pages it does so on.
  */
 function TargetSection({
   formId,
@@ -512,25 +510,6 @@ function TargetSection({
               autoComplete="off"
               onChange={(event) => onChange({ path: event.target.value })}
             />
-          )}
-        </Field>
-        <Field id={`${formId}-side`} label={t('admin.announcements.form.side')}>
-          {(control) => (
-            <Select
-              value={state.side}
-              onValueChange={(value) => onChange({ side: announcementSideSchema.parse(value) })}
-            >
-              <SelectTrigger {...control}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ANNOUNCEMENT_SIDES.map((side) => (
-                  <SelectItem key={side} value={side}>
-                    {t(`admin.announcements.sides.${side}`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           )}
         </Field>
       </div>

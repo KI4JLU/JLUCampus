@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 
 /** Attributes whose change may show or hide an element. */
-export const WATCHED_ATTRIBUTES = ['class', 'style', 'hidden', 'open', 'data-state', 'aria-hidden']
+const WATCHED_ATTRIBUTES = ['class', 'style', 'hidden', 'open', 'data-state', 'aria-hidden']
 
 export interface VisibleTarget {
   /** Which selector found it. */
@@ -36,7 +36,7 @@ function queryAll(selector: string): Element[] {
 }
 
 /** Whether the element is rendered with a size: not `hidden`, `display: none` or invisible. */
-export function isRendered(element: Element): boolean {
+function isRendered(element: Element): boolean {
   const box = element.getBoundingClientRect()
   if (box.width === 0 && box.height === 0) return false
   return element.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) ?? true

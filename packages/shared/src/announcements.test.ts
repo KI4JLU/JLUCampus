@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { announcementInputSchema, announcementPathMatches } from './announcements'
+import {
+  adminAnnouncementSchema,
+  announcementInputSchema,
+  announcementPathMatches,
+  announcementTargetSchema
+} from './announcements'
 
 const texts = {
   de: { title: 'Neu', body: 'Text' },
@@ -43,7 +48,7 @@ describe('announcementInputSchema', () => {
     expect(
       announcementInputSchema.safeParse({
         kind: 'hint',
-        target: { selector: '[data-tour="more-apps"]', path: '/c/*', side: 'right' },
+        target: { selector: '[data-tour="more-apps"]', path: '/c/*' },
         enabled: true,
         texts
       }).success
@@ -54,10 +59,27 @@ describe('announcementInputSchema', () => {
     expect(
       announcementInputSchema.safeParse({
         kind: 'hint',
-        target: { selector: 'button', path: '/c/*/x', side: 'top' },
+        target: { selector: 'button', path: '/c/*/x' },
         enabled: true,
         texts
       }).success
     ).toBe(false)
+  })
+
+  it('drops the side stored with older hints', () => {
+    const stored = { selector: '#more-apps', path: null, side: 'right' }
+    expect(announcementTargetSchema.parse(stored)).toEqual({ selector: '#more-apps', path: null })
+    const parsed = adminAnnouncementSchema.parse({
+      id: '00000000-0000-4000-8000-000000000001',
+      kind: 'hint',
+      target: stored,
+      enabled: true,
+      texts,
+      publishedAt: '2026-10-01T00:00:00.000Z',
+      seenCount: 0,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z'
+    })
+    expect(parsed.target).toEqual({ selector: '#more-apps', path: null })
   })
 })

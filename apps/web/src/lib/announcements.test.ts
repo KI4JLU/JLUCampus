@@ -42,7 +42,7 @@ function hint(
   return {
     id: id(n),
     kind: 'hint',
-    target: { selector: `#target-${n}`, path, side: 'bottom' },
+    target: { selector: `#target-${n}`, path },
     texts: texts(`Hint ${n}`),
     publishedAt,
     seen
@@ -146,7 +146,7 @@ describe('hintForClick', () => {
   it('skips a hint with an invalid selector', () => {
     const broken: UserAnnouncement = {
       ...hint(7, '2026-09-01T00:00:00.000Z'),
-      target: { selector: '[broken', path: null, side: 'top' }
+      target: { selector: '[broken', path: null }
     } as UserAnnouncement
     expect(hintForClick([broken, ...announcements], '/c/abc', closest)?.hint.id).toBe(id(3))
     expect(closestMatch('[broken', closest)).toBeNull()
@@ -180,8 +180,7 @@ describe('preview drafts', () => {
       ...initialAnnouncementForm(null),
       kind: 'hint',
       selector: '[data-tour="more-apps"]',
-      path: '/c/*',
-      side: 'right'
+      path: '/c/*'
     }
   }
 
@@ -197,7 +196,7 @@ describe('preview drafts', () => {
     expect(parsePreview(JSON.stringify({ ...preview, ownerId: undefined }))).toBeNull()
     expect(
       parsePreview(
-        serializePreview({ ...preview, form: { ...preview.form, side: 'middle' } } as never)
+        serializePreview({ ...preview, form: { ...preview.form, kind: 'banner' } } as never)
       )
     ).toBeNull()
   })

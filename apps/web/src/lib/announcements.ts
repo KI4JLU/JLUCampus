@@ -1,7 +1,6 @@
 import { z } from 'zod'
 import {
   ANNOUNCEMENT_KINDS,
-  ANNOUNCEMENT_SIDES,
   announcementPathMatches,
   type Language,
   type Me,
@@ -130,8 +129,7 @@ const previewSchema = z.object({
     enabled: z.boolean(),
     texts: z.object({ de: textDraftSchema, en: textDraftSchema }),
     selector: z.string(),
-    path: z.string(),
-    side: z.enum(ANNOUNCEMENT_SIDES)
+    path: z.string()
   })
 })
 
