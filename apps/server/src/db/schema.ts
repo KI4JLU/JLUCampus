@@ -1,4 +1,7 @@
 import type {
+  AnnouncementKind,
+  AnnouncementTarget,
+  AnnouncementTexts,
   ComponentConfig,
   Dashboard,
   Sidebar,
@@ -425,6 +428,31 @@ export const transcriptionSummary = pgTable(
     ),
     index('transcription_summary_expires_idx').on(table.expiresAt)
   ]
+)
+
+export const announcement = pgTable('announcement', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').$type<AnnouncementKind>().notNull(),
+  texts: jsonb('texts').$type<AnnouncementTexts>().notNull(),
+  target: jsonb('target').$type<AnnouncementTarget>(),
+  enabled: boolean('enabled').notNull().default(true),
+  publishedAt: timestamp('published_at', { withTimezone: true }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow()
+})
+
+export const announcementSeen = pgTable(
+  'announcement_seen',
+  {
+    announcementId: uuid('announcement_id')
+      .notNull()
+      .references(() => announcement.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [primaryKey({ columns: [table.announcementId, table.userId] })]
 )
 
 export const folderTemplate = pgTable(

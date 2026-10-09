@@ -44,6 +44,7 @@ import { z } from 'zod'
 
 import { ApiError, parseBody, validationIssues } from './api.js'
 import { changeUserRole, orderAdminUsers, toAdminUser } from './admin-users.js'
+import { registerAnnouncementRoutes } from './announcements.js'
 import { auth, getSession } from './auth.js'
 import { applySecretsPatch, componentTypeChangeConflicts } from './component-secrets.js'
 import { db } from './db/index.js'
@@ -277,6 +278,7 @@ app.use('/api/admin/*', async (context, next) => {
 })
 
 registerModuleRoutes(app)
+registerAnnouncementRoutes(app)
 
 app.get(API.adminUsers, async (context) => {
   const rows = await db.select().from(user)

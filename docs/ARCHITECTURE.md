@@ -596,6 +596,25 @@ Validation errors return `400` with `code: 'validation'` and Zod issues.
 Responses are shaped exactly as the shared schemas describe (dates as ISO
 strings).
 
+### Announcements
+
+`announcement` stores `news` and element-bound `hint` messages, with German
+and English texts in jsonb, a nullable hint target, an enabled flag and creation
+and update timestamps. `published_at` is the first time the message was enabled
+and stays unchanged after disabling or editing it. `announcement_seen` stores
+acknowledgements with a composite key of announcement and user, a `seen_at`
+timestamp and cascading foreign keys.
+
+`ANNOUNCEMENTS_API` in shared defines the contract. Admins list, create, read,
+replace and delete messages at `/api/admin/announcements` and `/:id`; the list
+sorts by creation time and includes acknowledgement counts. `POST /:id/reset`
+clears all acknowledgements. Signed-in users get enabled messages, newest first
+by publication time, with their own `seen` flag at `GET /api/announcements`.
+`POST /api/announcements/:id/seen` acknowledges a visible message idempotently
+and returns 204; unknown, disabled or invisible messages return 404. Both user
+routes use `visibleTo` in `apps/server/src/announcements.ts`, which currently
+allows every signed-in user and is the entry point for future audience rules.
+
 ## Web app
 
 - Routes (TanStack Router, code-based like JLU Mail, **browser history**):
