@@ -1036,7 +1036,7 @@
     },
     "announcements": {
       "title": "Ankündigungen verwalten",
-      "description": "Neuigkeiten öffnen sich für alle Nutzenden einmal als Dialog, wenn sie die App das nächste Mal öffnen. Element-Hinweise öffnen sich einmal als Dialog, wenn Nutzende auf das Element klicken, zu dem sie gehören; die Aktion des Elements folgt erst nach „Verstanden“.",
+      "description": "Neuigkeiten öffnen sich für alle Nutzenden einmal als Dialog, wenn sie die App das nächste Mal öffnen, und stehen danach auf der Seite „Neuigkeiten“. Element-Hinweise öffnen sich einmal als Dialog, wenn Nutzende auf das Element klicken, zu dem sie gehören; die Aktion des Elements folgt erst nach „Verstanden“.",
       "newAnnouncement": "Neue Ankündigung",
       "loadFailed": "Die Ankündigungen konnten nicht geladen werden.",
       "kinds": {
@@ -1083,14 +1083,14 @@
         "generalDescription": "Was für eine Ankündigung es ist und ob sie Nutzende erreicht.",
         "kind": "Art",
         "kindHints": {
-          "news": "Öffnet sich einmal als Dialog, wenn Nutzende die App das nächste Mal öffnen.",
+          "news": "Öffnet sich einmal als Dialog, wenn Nutzende die App das nächste Mal öffnen, und steht dauerhaft auf der Seite „Neuigkeiten“.",
           "hint": "Öffnet sich als Dialog wie eine Neuigkeit, wenn Nutzende auf das Element klicken. Die Aktion des Elements folgt erst nach „Verstanden“; danach erscheint der Hinweis nicht wieder."
         },
         "enabled": "Aktiv",
         "enabledHint": "Inaktive Ankündigungen bleiben als Entwurf gespeichert und erreichen niemanden.",
         "title": "Titel",
         "body": "Text",
-        "bodyHint": "Reiner Text. Eine Leerzeile beginnt einen neuen Absatz.",
+        "bodyHint": "Markdown: **fett**, *kursiv*, „- “ am Zeilenanfang für Listen, [Text](https://…) für Links. Eine Leerzeile beginnt einen neuen Absatz.",
         "target": "Ziel",
         "targetDescription": "Das Element, dessen Klick den Hinweis als Dialog öffnet, und auf welchen Seiten. „Auf Seite testen“ zeigt ihn nur Ihnen, ohne zu speichern.",
         "suggestion": "Bekanntes Element",
@@ -1130,7 +1130,10 @@
       "pageChanged": "Neuigkeit {{current}} von {{total}}: {{title}}",
       "back": "Zurück",
       "next": "Weiter",
-      "done": "Fertig"
+      "done": "Fertig",
+      "all": "Alle Neuigkeiten",
+      "new": "Neu",
+      "loadFailed": "Die Neuigkeiten konnten nicht geladen werden."
     },
     "hint": {
       "gotIt": "Verstanden",

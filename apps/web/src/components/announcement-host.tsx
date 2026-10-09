@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -6,7 +6,6 @@ import { Badge, Button } from '@ki4jlu/design-system'
 import { announcementPathMatches, type Language } from '@justcampus/shared'
 import { currentLanguage } from '@/i18n'
 import {
-  allNews,
   closestMatch,
   hintForClick,
   previewOwnedBy,
@@ -22,12 +21,14 @@ import {
   useAnnouncementPreview
 } from '@/lib/announcement-preview'
 import { hintMarker, isReplaying, replayClick } from '@/lib/hint-layer'
-import { OpenNewsContext } from '@/lib/news-context'
 import { announcementsQuery, meQuery, useMarkAnnouncementSeen } from '@/lib/queries'
 import { toast } from '@/lib/toast'
 import { useVisibleTarget } from '@/lib/use-visible-target'
 import { AnnouncementDialog } from './announcement-dialog'
 import { NewsDialog } from './news-dialog'
+
+/** The news page, where the unread news need no dialog. */
+const NEWS_PATH = '/news'
 
 /** How long a preview looks for its element on a page before it says it found none. */
 const PREVIEW_NOT_FOUND_MS = 4000
@@ -53,24 +54,20 @@ type OpenedHint =
   { kind: 'hint'; id: string; element: Element } | { kind: 'preview'; element: Element }
 
 interface NewsSession {
-  /** Remounts the dialog per opening, so it starts on its first page. */
-  key: number
   open: boolean
   items: UserNews[]
-  /** Gets the focus back as the dialog closes. */
-  opener: HTMLElement | null
 }
 
 /**
  * Shows the user's announcements in the signed-in app: unread news as a dialog once the app has
- * started, and an unread hint, as a dialog of its own, when the user clicks its element.
+ * started (unless it started on the news page, which shows them anyway), and an unread hint, as a dialog of its own, when the user clicks its element.
  * Listeners on the document (capture phase, so they see every click first) find the hint: the
  * oldest unread one for the page whose element is the clicked one or contains it. The click is held
  * back, so the info comes first; "Got it" then plays the click again and the element's action
  * runs. Closing the hint otherwise cancels the action. One hint at a time: clicks open nothing
  * while a hint or the news are open. While an admin tries a hint out
- * from its editor, that preview takes the hints' place, for that admin only. `children` (the app
- * frame) can reopen the news from `OpenNewsContext`.
+ * from its editor, that preview takes the hints' place, for that admin only. `children` is the
+ * app frame.
  */
 export function AnnouncementHost({ children }: { children: ReactNode }): React.JSX.Element {
   // Re-renders on a language switch, which shows the other language at once.
@@ -98,19 +95,8 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   if (announcements && !startChecked) {
     setStartChecked(true)
     const unread = unreadNews(announcements)
-    if (unread.length > 0) setNews({ key: 0, open: true, items: unread, opener: null })
+    if (unread.length > 0 && pathname !== NEWS_PATH) setNews({ open: true, items: unread })
   }
-
-  const openNews = useCallback(
-    (opener: HTMLElement | null) =>
-      setNews((current) => ({
-        key: (current?.key ?? 0) + 1,
-        open: true,
-        items: allNews(announcements ?? []),
-        opener
-      })),
-    [announcements]
-  )
 
   const closeNews = (viewedIds: string[]): void => {
     setNews((current) => (current ? { ...current, open: false } : current))
@@ -191,21 +177,10 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   }
 
   return (
-    <OpenNewsContext.Provider value={openNews}>
+    <>
       {children}
       {news ? (
-        <NewsDialog
-          key={news.key}
-          open={news.open}
-          items={news.items}
-          language={language}
-          onClose={closeNews}
-          onCloseAutoFocus={(event) => {
-            if (!news.opener?.isConnected) return
-            event.preventDefault()
-            news.opener.focus()
-          }}
-        />
+        <NewsDialog open={news.open} items={news.items} language={language} onClose={closeNews} />
       ) : null}
       {previewing ? <PreviewNotices pathname={pathname} selector={preview.form.selector} /> : null}
       {openPreview ? (
@@ -230,7 +205,7 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
           onClosed={afterClose}
         />
       ) : null}
-    </OpenNewsContext.Provider>
+    </>
   )
 }
 

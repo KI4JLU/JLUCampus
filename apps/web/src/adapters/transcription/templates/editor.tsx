@@ -92,7 +92,7 @@ import {
   type TemplateDraft
 } from './structure'
 
-const MarkdownView = lazy(() => import('../summary/markdown-view'))
+const MarkdownView = lazy(() => import('@/components/markdown-view'))
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 

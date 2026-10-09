@@ -8,7 +8,6 @@ import {
   hintForClick,
   hintQueue,
   isPreviewFor,
-  paragraphsOf,
   parsePreview,
   previewOwnedBy,
   previewPathFor,
@@ -62,24 +61,6 @@ describe('textIn', () => {
   it('picks the UI language', () => {
     expect(textIn(texts('A'), 'de').title).toBe('A (de)')
     expect(textIn(texts('A'), 'en').title).toBe('A (en)')
-  })
-})
-
-describe('paragraphsOf', () => {
-  it('splits paragraphs at blank lines and keeps single line breaks', () => {
-    expect(paragraphsOf('One\ntwo\n\nThree\n  \n\nFour')).toEqual([
-      ['One', 'two'],
-      ['Three'],
-      ['Four']
-    ])
-  })
-
-  it('handles Windows line breaks and surrounding blank lines', () => {
-    expect(paragraphsOf('\r\n\r\nA\r\nB\r\n\r\nC\r\n')).toEqual([['A', 'B'], ['C']])
-  })
-
-  it('has no paragraphs for an empty body', () => {
-    expect(paragraphsOf('  \n ')).toEqual([])
   })
 })
 

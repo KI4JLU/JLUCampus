@@ -20,27 +20,19 @@ export function textIn(
   return texts[language]
 }
 
-/**
- * The body's paragraphs, each as its lines: blank lines separate paragraphs, single line breaks
- * stay line breaks.
- */
-export function paragraphsOf(body: string): string[][] {
-  return body
-    .replace(/\r\n?/g, '\n')
-    .trim()
-    .split(/\n[^\S\n]*\n\s*/)
-    .map((paragraph) => paragraph.split('\n').map((line) => line.trim()))
-    .filter((lines) => lines.some(Boolean))
-}
-
 const byPublishedAt = (a: UserAnnouncement, b: UserAnnouncement): number =>
   Date.parse(a.publishedAt) - Date.parse(b.publishedAt)
 
-/** Every news item, newest first: what "What's new" pages through. */
+/** Every news item, newest first: what the news page lists. */
 export function allNews(announcements: readonly UserAnnouncement[]): UserNews[] {
   return announcements
     .filter((item): item is UserNews => item.kind === 'news')
     .sort((a, b) => byPublishedAt(b, a))
+}
+
+/** The day a news item was published, e.g. "16. September 2026". */
+export function newsDate(publishedAt: string, language: Language): string {
+  return new Intl.DateTimeFormat(language, { dateStyle: 'long' }).format(new Date(publishedAt))
 }
 
 /** The news the user has not acknowledged, newest first: what opens by itself. */

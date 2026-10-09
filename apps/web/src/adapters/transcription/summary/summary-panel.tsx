@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { Notice } from '../notice'
 import { skeletonHeadlines, type SummaryState } from './use-summary'
 
-const MarkdownView = lazy(() => import('./markdown-view'))
+const MarkdownView = lazy(() => import('@/components/markdown-view'))
 
 const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 

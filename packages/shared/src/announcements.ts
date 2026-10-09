@@ -2,7 +2,7 @@
  * Announcements: messages admins publish to users, written in every UI language.
  *
  * - `news` (feature updates and the like) open once as a dialog the next time a user opens the
- *   app; several unread ones are paged. Users can read them again later from the account menu.
+ *   app; several unread ones are paged. All of them stay on the news page (`/news`), newest first.
  * - `hint` belongs to one element of the app, found by a CSS selector, optionally only on pages
  *   matching `path`. When the user clicks that element (or anything in it), the click is held back and the
  *   hint opens as a dialog like a news item, one at a time; "Got it" then lets the click through.
@@ -24,7 +24,10 @@ export const ANNOUNCEMENT_BODY_MAX = 4000
 export const ANNOUNCEMENT_SELECTOR_MAX = 500
 export const ANNOUNCEMENT_PATH_MAX = 300
 
-/** Title and text in one language. The body is plain text; blank lines separate paragraphs. */
+/**
+ * Title and text in one language. The body is Markdown; single line breaks stay line breaks, blank
+ * lines separate paragraphs.
+ */
 export const announcementTextSchema = z.object({
   title: z.string().trim().min(1).max(ANNOUNCEMENT_TITLE_MAX),
   body: z.string().trim().min(1).max(ANNOUNCEMENT_BODY_MAX)

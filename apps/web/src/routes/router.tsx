@@ -30,6 +30,7 @@ import { AppLayout } from './app-layout'
 import { ComponentPage } from './component-page'
 import { DashboardPage } from './dashboard-page'
 import { LoginPage } from './login-page'
+import { NewsPage } from './news-page'
 
 async function requireSession({ location }: { location: ParsedLocation }): Promise<void> {
   try {
@@ -77,6 +78,12 @@ const componentRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/c/$componentId',
   component: ComponentPage
+})
+
+const newsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/news',
+  component: NewsPage
 })
 
 const adminComponentsRoute = createRoute({
@@ -164,6 +171,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     dashboardRoute,
     componentRoute,
+    newsRoute,
     adminComponentsRoute,
     adminNewComponentRoute,
     adminComponentRoute,
