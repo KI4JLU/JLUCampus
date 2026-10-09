@@ -661,9 +661,13 @@ export async function executePython(code: string): Promise<TranslatorPythonRespo
   )
 }
 
-/** The glossaries the user can apply: public ones and their own. */
-export function useTranslatorGlossaries(): UseQueryResult<TranslatorGlossaryList> {
+/**
+ * The glossaries the user can apply: public ones and their own. Not fetched (`enabled` false) for
+ * users without the glossaries function, whom the server would refuse.
+ */
+export function useTranslatorGlossaries(enabled = true): UseQueryResult<TranslatorGlossaryList> {
   return useQuery({
+    enabled,
     queryKey: queryKeys.translatorGlossaries,
     queryFn: async ({ signal }) =>
       translatorGlossaryListSchema.parse(

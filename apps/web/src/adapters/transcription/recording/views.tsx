@@ -30,6 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@ki4jlu/design-system'
+import { useFeature } from '@/lib/features'
 import { decodesLocally, formatTime, WaveformPlayer } from '../audio'
 import { Notice } from '../notice'
 import { useTranscriptionWorkspace } from '../use-workspace'
@@ -44,7 +45,8 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 /**
  * Regular recording and live transcription as tabs of one work area, as in kiChat. While something
  * records, the other tab stays closed; live transcription needs a live mode, recording needs
- * speech recognition to upload to.
+ * speech recognition to upload to. A user whose roles do not allow live transcription gets
+ * recording alone, without tabs.
  */
 export function RecordingTabs({
   current,
@@ -56,7 +58,9 @@ export function RecordingTabs({
   const { t } = useTranslation()
   const { capabilities, setView } = useTranscriptionWorkspace()
   const { state } = useRecording()
+  const live = useFeature('transcription.live')
   const busy = isRecordingBusy(state.status)
+  if (!live) return <div className="flex flex-col gap-stack-lg">{children}</div>
   const tabs: { kind: RecordingKind; label: string; available: boolean }[] = [
     {
       kind: 'record',

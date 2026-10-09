@@ -22,6 +22,7 @@ import {
   TooltipTrigger
 } from '@ki4jlu/design-system'
 import type { TranscriptionTemplate } from '@justcampus/shared'
+import { useFeature } from '@/lib/features'
 import { meQuery } from '@/lib/queries'
 import { toast } from '@/lib/toast'
 import { transcriptQuery, useTranscriptionCapabilities, useTranscriptionTemplates } from '../api'
@@ -53,7 +54,7 @@ import {
 import { formatTranscript, protocolText, segmentsJson, transcriptPlainText } from './format'
 import { ActiveFormatName } from './export-settings'
 import { focusTranscriptFormatting } from './formatting-focus'
-import { useSpeakerLabels } from './hooks'
+import { useExportCategory, useSpeakerLabels } from './hooks'
 import { CopyAction } from './parts'
 import { subtitleCues, toSrt, toVtt } from './subtitles'
 import { exportActions, useExportState, type ExportState } from './store'
@@ -64,7 +65,8 @@ const ICON = { 'aria-hidden': true, className: 'size-4' } as const
 /**
  * The Export tab's work area (T-41 to T-49): the preview of what is chosen in the side column,
  * with its template or format, and the footer that downloads or copies it. The template editor
- * takes the area's place while it is open.
+ * takes the area's place while it is open. Templates are for summaries, which a user's roles may
+ * not allow; then they are neither loaded nor offered.
  */
 export function ExportView(): React.JSX.Element {
   const { t } = useTranslation()
@@ -73,7 +75,8 @@ export function ExportView(): React.JSX.Element {
   const { draft, session, libraryOpen, selectedId } = useTemplateState(
     templateScope(me?.id, component.id)
   )
-  const templates = useTranscriptionTemplates()
+  const summaries = useFeature('transcription.summaries')
+  const templates = useTranscriptionTemplates(summaries)
 
   const active = activeTemplate(
     templates.data,
@@ -83,22 +86,24 @@ export function ExportView(): React.JSX.Element {
 
   return (
     <>
-      {draft ? (
+      {draft && summaries ? (
         <TemplateEditor key={session} draft={draft} />
       ) : currentDocument ? (
         <ExportPreview document={currentDocument} templates={templates} template={active} />
       ) : (
         <p className="m-0">{t('transcription.export.noTranscriptLoaded')}</p>
       )}
-      <TemplateLibraryDialog
-        open={libraryOpen}
-        onOpenChange={templateActions.setLibraryOpen}
-        activeId={active?.id ?? null}
-        onChoose={(id) => {
-          templateActions.select(id)
-          templateActions.setLibraryOpen(false)
-        }}
-      />
+      {summaries ? (
+        <TemplateLibraryDialog
+          open={libraryOpen}
+          onOpenChange={templateActions.setLibraryOpen}
+          activeId={active?.id ?? null}
+          onChoose={(id) => {
+            templateActions.select(id)
+            templateActions.setLibraryOpen(false)
+          }}
+        />
+      ) : null}
     </>
   )
 }
@@ -129,8 +134,9 @@ function ExportPreview({
   const state = useExportState()
   const labels = useSpeakerLabels()
   const { transcript, segments, speakerColors } = document
-  const { category, flags } = state
-  const format = currentFormat(state)
+  const { flags } = state
+  const category = useExportCategory()
+  const format = currentFormat({ ...state, category })
   const visibleOfTranscript = state.visibleSpeakers[transcript.id]
   const visible = useMemo(() => visibleOfTranscript ?? {}, [visibleOfTranscript])
 
@@ -413,7 +419,7 @@ function ExportFooter({
   copyText: () => string
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const { category } = useExportState()
+  const category = useExportCategory()
   const id = useId()
   const formats = formatsOf(category)
   // kiChat names the format by its id in capitals ("Als MARKDOWN herunterladen").

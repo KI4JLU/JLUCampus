@@ -225,7 +225,11 @@ export interface TranslatorApi {
 export interface TranslatorContext {
   engines: readonly TranslatorEngine[]
   defaultEngine: TranslatorEngineId | null
+  /** Whether document translation is offered: set up by the admin and allowed to the user. */
   documents: boolean
+  /** Whether the user may rewrite texts and use the AI editor (their roles' functions). */
+  rephrase: boolean
+  create: boolean
   /** Ids of the glossaries the user can use; `null` until they are known. */
   glossaryIds: readonly string[] | null
 }
@@ -259,6 +263,8 @@ export class TranslatorStore {
     engines: [],
     defaultEngine: null,
     documents: false,
+    rephrase: false,
+    create: false,
     glossaryIds: null
   }
   private detectTimer: unknown = null
@@ -340,8 +346,10 @@ export class TranslatorStore {
       this.state.mode === 'documents'
         ? context.documents
         : this.state.mode === 'create'
-          ? context.engines.some((engine) => engine.kind === 'llm')
-          : true
+          ? context.create && context.engines.some((engine) => engine.kind === 'llm')
+          : this.state.mode === 'rephrase'
+            ? context.rephrase
+            : true
     if (!offered && context.engines.length > 0) this.set({ mode: 'translate' })
   }
 

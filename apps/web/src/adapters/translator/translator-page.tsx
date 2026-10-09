@@ -24,6 +24,7 @@ import {
   useTranslatorGlossaries
 } from '@/lib/queries'
 import { useComponentName } from '@/lib/component-name'
+import { useFeature } from '@/lib/features'
 import { SIDE_PANEL_MEDIA } from '@/lib/page-side-panel'
 import { useMediaQuery } from '@/lib/use-media-query'
 import { cn } from '@/lib/utils'
@@ -57,14 +58,19 @@ function carriesFiles(event: React.DragEvent): boolean {
  * navigation: the modes (translate a text, translate documents, rewrite a text, create a text with
  * the AI editor), the language model and the settings of the mode. Below `lg` the modes sit above
  * the work area and the settings in a card below it. The state lives in the tab's session, so a
- * reload keeps text and settings.
+ * reload keeps text and settings. Documents, rewriting, the editor and glossaries are functions a
+ * user's roles may not allow; the page leaves them out then.
  */
 export function TranslatorPage({ component }: ComponentViewProps<'translator'>): React.JSX.Element {
   const { t } = useTranslation()
   const componentName = useComponentName()
   const id = useId()
   const engines = useTranslatorEngines()
-  const glossaries = useTranslatorGlossaries()
+  const canDocuments = useFeature('translator.documents')
+  const canRephrase = useFeature('translator.rephrase')
+  const canCompose = useFeature('translator.compose')
+  const canGlossaries = useFeature('translator.glossaries')
+  const glossaries = useTranslatorGlossaries(canGlossaries)
   const [manageGlossaries, setManageGlossaries] = useState(false)
   const dropTarget = useRef<DocumentDropTarget | null>(null)
   const wide = useMediaQuery(SIDE_PANEL_MEDIA)
@@ -97,24 +103,41 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
   const state = useSyncExternalStore(store.subscribe, store.getState)
 
   const list = engines.data
+  const documents = (list?.documents ?? false) && canDocuments
   useEffect(() => {
     store.setContext({
       engines: list?.engines ?? [],
       defaultEngine: list?.defaultEngine ?? null,
-      documents: list?.documents ?? false,
-      glossaryIds: glossaries.data
-        ? glossaries.data.glossaries.map((glossary) => glossary.id)
-        : null
+      documents,
+      rephrase: canRephrase,
+      create: canCompose,
+      // Without the function no glossary applies, so none stays selected.
+      glossaryIds: !canGlossaries
+        ? []
+        : glossaries.data
+          ? glossaries.data.glossaries.map((glossary) => glossary.id)
+          : null
     })
-  }, [store, list, glossaries.data])
+  }, [store, list, documents, canRephrase, canCompose, canGlossaries, glossaries.data])
 
   const notSetUp = list?.engines.length === 0
   const hasLlm = list?.engines.some((engine) => engine.kind === 'llm') ?? false
+  const permitted = (mode: TranslatorMode): boolean =>
+    mode === 'documents'
+      ? canDocuments
+      : mode === 'rephrase'
+        ? canRephrase
+        : mode === 'create'
+          ? canCompose
+          : true
   const modes = TRANSLATOR_MODES.filter(
-    (mode) => (mode !== 'documents' || list?.documents) && (mode !== 'create' || hasLlm)
+    (mode) =>
+      permitted(mode) && (mode !== 'documents' || documents) && (mode !== 'create' || hasLlm)
   )
-  // A mode that is not offered (any more) shows translating instead.
-  const mode: TranslatorMode = list && !modes.includes(state.mode) ? 'translate' : state.mode
+  // A mode that is not offered (any more) shows translating instead; what the module offers is
+  // known with the engines, what the user may use at once.
+  const mode: TranslatorMode =
+    (list && !modes.includes(state.mode)) || !permitted(state.mode) ? 'translate' : state.mode
   const engine = store.engineFor(mode)
   const maximized = mode === 'create' && editorMaximized
 
@@ -128,6 +151,7 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
     engine,
     llmProvider: list?.llmProvider ?? null,
     glossaries: glossaries.data?.glossaries,
+    glossariesOffered: canGlossaries,
     onMode: switchMode,
     onEngine: (choice) => store.selectEngine(choice.id),
     onLive: (live) => store.setLive(live),
@@ -149,7 +173,7 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
         onDragEnter={(event) => {
           // Files dragged over the text go to the document translator, as in HAWKI. The settings
           // column is rendered from here too, so drags over it arrive as well.
-          if (!carriesFiles(event) || mode === 'documents' || !list?.documents) return
+          if (!carriesFiles(event) || mode === 'documents' || !documents) return
           if (mode === 'translate' || mode === 'rephrase') {
             event.preventDefault()
             switchMode('documents')
@@ -215,7 +239,7 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
               <AlertDescription>{t('component.translator.notSetUpDescription')}</AlertDescription>
             </Alert>
           ) : null}
-          {list?.documents ? (
+          {documents ? (
             // Kept while other modes are shown, so a batch goes on translating meanwhile.
             <div hidden={mode !== 'documents'}>
               <DocumentTranslator
@@ -240,7 +264,12 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
               />
             </Suspense>
           ) : (
-            <TextBoard id={id} store={store} disabled={notSetUp || !list} />
+            <TextBoard
+              id={id}
+              store={store}
+              disabled={notSetUp || !list}
+              canRephrase={canRephrase}
+            />
           )}
           <PageSidePanel
             label={t('component.translator.settings')}
@@ -264,11 +293,13 @@ export function TranslatorPage({ component }: ComponentViewProps<'translator'>):
           </PageSidePanel>
         </Container>
       </div>
-      <GlossaryDialog
-        open={manageGlossaries}
-        onOpenChange={setManageGlossaries}
-        list={glossaries.data}
-      />
+      {canGlossaries ? (
+        <GlossaryDialog
+          open={manageGlossaries}
+          onOpenChange={setManageGlossaries}
+          list={glossaries.data}
+        />
+      ) : null}
     </>
   )
 }
