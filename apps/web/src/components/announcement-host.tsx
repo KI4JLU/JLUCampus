@@ -8,14 +8,19 @@ import { currentLanguage } from '@/i18n'
 import {
   allNews,
   hintQueue,
+  previewOwnedBy,
   textIn,
   unreadNews,
   type AnnouncementPreview,
   type UserNews
 } from '@/lib/announcements'
-import { endAnnouncementPreview, useAnnouncementPreview } from '@/lib/announcement-preview'
+import {
+  clearAnnouncementPreview,
+  endAnnouncementPreview,
+  useAnnouncementPreview
+} from '@/lib/announcement-preview'
 import { OpenNewsContext } from '@/lib/news-context'
-import { announcementsQuery, useMarkAnnouncementSeen } from '@/lib/queries'
+import { announcementsQuery, meQuery, useMarkAnnouncementSeen } from '@/lib/queries'
 import { toast } from '@/lib/toast'
 import { useVisibleTarget } from '@/lib/use-visible-target'
 import { HintPopover } from './hint-popover'
@@ -36,8 +41,8 @@ interface NewsSession {
 /**
  * Shows the user's announcements in the signed-in app: unread news as a dialog once the app has
  * started, then the hints of the current page one at a time, never both at once. While an admin
- * tries a hint out from its editor, that preview takes the hints' place. `children` (the app frame)
- * can reopen the news from `OpenNewsContext`.
+ * tries a hint out from its editor, that preview takes the hints' place, for that admin only.
+ * `children` (the app frame) can reopen the news from `OpenNewsContext`.
  */
 export function AnnouncementHost({ children }: { children: ReactNode }): React.JSX.Element {
   // Re-renders on a language switch, which shows the other language at once.
@@ -45,7 +50,11 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   const language = currentLanguage()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { data: announcements } = useQuery(announcementsQuery)
-  const preview = useAnnouncementPreview()
+  const { data: me } = useQuery(meQuery)
+  const stored = useAnnouncementPreview()
+  // Another user's preview left in this tab (or one whose admin role is gone) is dropped unseen.
+  const preview = previewOwnedBy(stored, me) ? stored : null
+  const foreignPreview = stored !== null && me !== undefined && preview === null
   const markSeen = useMarkAnnouncementSeen()
   const [news, setNews] = useState<NewsSession | null>(null)
   const [startChecked, setStartChecked] = useState(false)
@@ -73,6 +82,10 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
     const unseen = new Set(announcements?.filter((item) => !item.seen).map((item) => item.id))
     viewedIds.filter((id) => unseen.has(id)).forEach((id) => markSeen.mutate(id))
   }
+
+  useEffect(() => {
+    if (foreignPreview) clearAnnouncementPreview()
+  }, [foreignPreview])
 
   const newsOpen = news?.open ?? false
   const previewing = preview?.active === true && preview.form.kind === 'hint'

@@ -76,6 +76,7 @@ import {
 } from '@justcampus/shared'
 import { transcriptionKeys } from '@/adapters/transcription/api'
 import { ApiRequestError, apiFetch, isUnauthorized } from './api'
+import { retrySeen, seenRetryDelay } from './announcements'
 import { applyComponentInput } from './component-secrets'
 import { isLater } from './feed'
 
@@ -974,13 +975,17 @@ export function useSetUserRole(): UseMutationResult<
 }
 
 /**
- * Marks an announcement acknowledged. The cached list says so at once and keeps saying so when the
- * request fails, so a hint the user closed does not come back before the next refetch.
+ * Marks an announcement acknowledged. The cached list says so at once, so the hint goes away and
+ * the next one may show. The request is idempotent and retried while the server is unreachable or
+ * failing; when it still fails, the list is marked stale, so its next fetch (the next app start at
+ * the latest) brings the announcement back rather than losing it.
  */
 export function useMarkAnnouncementSeen(): UseMutationResult<void, Error, string> {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => apiFetch<void>(ANNOUNCEMENTS_API.seen(id), { method: 'POST' }),
+    retry: retrySeen,
+    retryDelay: seenRetryDelay,
     onMutate: async (id) => {
       await client.cancelQueries({ queryKey: queryKeys.announcements })
       client.setQueryData<UserAnnouncementList>(queryKeys.announcements, (list) =>
@@ -992,7 +997,10 @@ export function useMarkAnnouncementSeen(): UseMutationResult<void, Error, string
             }
           : list
       )
-    }
+    },
+    // Not refetched at once: the hint the user just closed would pop up again right away.
+    onError: () =>
+      client.invalidateQueries({ queryKey: queryKeys.announcements, refetchType: 'none' })
   })
 }
 

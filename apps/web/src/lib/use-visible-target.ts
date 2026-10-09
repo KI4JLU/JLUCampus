@@ -1,45 +1,6 @@
-import { useCallback, useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 
 const WATCHED_ATTRIBUTES = ['class', 'style', 'hidden', 'open', 'data-state', 'aria-hidden']
-
-/**
- * Re-checks on every change to the page's elements or their visibility, and on resizes (a
- * column folds, a breakpoint hides an element). The browser batches mutations per task.
- */
-function subscribe(onChange: () => void): () => void {
-  const observer = new MutationObserver(onChange)
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: WATCHED_ATTRIBUTES
-  })
-  window.addEventListener('resize', onChange)
-  return () => {
-    observer.disconnect()
-    window.removeEventListener('resize', onChange)
-  }
-}
-
-/** Whether the element takes up room on screen: rendered, not `hidden`, not `display: none`. */
-function isVisible(element: Element): boolean {
-  if (element.getClientRects().length === 0) return false
-  const box = element.getBoundingClientRect()
-  if (box.width === 0 && box.height === 0) return false
-  return element.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) ?? true
-}
-
-/** The first element matching `selector` that is visible; an invalid selector finds nothing. */
-export function findVisible(selector: string): Element | null {
-  try {
-    for (const element of document.querySelectorAll(selector)) {
-      if (isVisible(element)) return element
-    }
-  } catch {
-    /* Not CSS: the admin page warns about it, users just never see the hint. */
-  }
-  return null
-}
 
 export interface VisibleTarget {
   /** Which selector found it. */
@@ -48,30 +9,129 @@ export interface VisibleTarget {
 }
 
 /**
- * The element of the first selector that has one visible on the page, kept up to date as the
- * page renders (elements may appear late, e.g. after a query), changes or hides it.
+ * The first group, in order, with an eligible item, and that item. Groups are the elements each
+ * selector of the queue finds; a group without an eligible one (none on the page, or none on
+ * screen) passes the turn to the next.
  */
-export function useVisibleTarget(selectors: readonly string[]): VisibleTarget | null {
-  // A new array with the same selectors keeps the snapshot function.
-  const key = JSON.stringify(selectors)
-  const getElement = useCallback((): Element | null => {
-    for (const selector of JSON.parse(key) as string[]) {
-      const element = findVisible(selector)
-      if (element) return element
-    }
-    return null
-  }, [key])
-  // The element itself is the snapshot: it stays the same object while nothing changed.
-  const element = useSyncExternalStore(subscribe, getElement)
-  if (!element) return null
-  const index = selectors.findIndex((selector) => matches(element, selector))
-  return index === -1 ? null : { index, element }
+export function firstEligible<T>(
+  groups: readonly (readonly T[])[],
+  isEligible: (item: T) => boolean
+): { index: number; item: T } | null {
+  for (const [index, group] of groups.entries()) {
+    const item = group.find(isEligible)
+    if (item !== undefined) return { index, item }
+  }
+  return null
 }
 
-function matches(element: Element, selector: string): boolean {
+/** The elements `selector` finds; an invalid selector finds nothing. */
+function queryAll(selector: string): Element[] {
   try {
-    return element.matches(selector)
+    return [...document.querySelectorAll(selector)]
   } catch {
-    return false
+    // Not CSS: the admin page warns about it, users just never see the hint.
+    return []
   }
+}
+
+/** Whether the element is rendered with a size: not `hidden`, `display: none` or invisible. */
+function isRendered(element: Element): boolean {
+  const box = element.getBoundingClientRect()
+  if (box.width === 0 && box.height === 0) return false
+  return element.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) ?? true
+}
+
+interface TargetWatcher {
+  subscribe: (onChange: () => void) => () => void
+  getSnapshot: () => VisibleTarget | null
+}
+
+/**
+ * Watches the elements the selectors find: which are on the page (a `MutationObserver`, so late
+ * renders count) and which intersect the viewport, unclipped by scrolling containers (an
+ * `IntersectionObserver`, which reports as the user scrolls or the layout moves). The snapshot is
+ * the first selector's element that is both, so an element scrolled out of view lets the next
+ * hint in the queue show.
+ */
+function createTargetWatcher(selectors: readonly string[]): TargetWatcher {
+  let snapshot: VisibleTarget | null = null
+  const onScreen = new Set<Element>()
+  const listeners = new Set<() => void>()
+  let stop: (() => void) | null = null
+
+  const start = (): (() => void) => {
+    const observed = new Set<Element>()
+    const intersections = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && entry.intersectionRatio > 0) onScreen.add(entry.target)
+        else onScreen.delete(entry.target)
+      }
+      evaluate()
+    })
+
+    const evaluate = (): void => {
+      const groups = selectors.map(queryAll)
+      const found = new Set(groups.flat())
+      for (const element of found) {
+        if (!observed.has(element)) {
+          observed.add(element)
+          intersections.observe(element)
+        }
+      }
+      for (const element of observed) {
+        if (!found.has(element)) {
+          observed.delete(element)
+          onScreen.delete(element)
+          intersections.unobserve(element)
+        }
+      }
+      const next = firstEligible(groups, (element) => onScreen.has(element) && isRendered(element))
+      if (next?.item === snapshot?.element && next?.index === snapshot?.index) return
+      snapshot = next ? { index: next.index, element: next.item } : null
+      listeners.forEach((listener) => listener())
+    }
+
+    const mutations = new MutationObserver(evaluate)
+    mutations.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: WATCHED_ATTRIBUTES
+    })
+    window.addEventListener('resize', evaluate)
+    evaluate()
+    return () => {
+      mutations.disconnect()
+      intersections.disconnect()
+      window.removeEventListener('resize', evaluate)
+      onScreen.clear()
+      snapshot = null
+    }
+  }
+
+  return {
+    subscribe: (onChange) => {
+      listeners.add(onChange)
+      stop ??= start()
+      return () => {
+        listeners.delete(onChange)
+        if (listeners.size === 0) {
+          stop?.()
+          stop = null
+        }
+      }
+    },
+    getSnapshot: () => snapshot
+  }
+}
+
+/**
+ * The element of the first selector that has one on screen, kept up to date as the page renders
+ * (elements may appear late, e.g. after a query), changes, scrolls or hides it.
+ */
+export function useVisibleTarget(selectors: readonly string[]): VisibleTarget | null {
+  // A new array with the same selectors keeps the watcher.
+  const key = JSON.stringify(selectors)
+  const watcher = useMemo(() => createTargetWatcher(JSON.parse(key) as string[]), [key])
+  return useSyncExternalStore(watcher.subscribe, watcher.getSnapshot)
 }

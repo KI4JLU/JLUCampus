@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { Link, useBlocker, useNavigate, useRouter } from '@tanstack/react-router'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { ArrowLeftIcon, PlayIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -58,6 +58,7 @@ import { isPreviewFor, previewPathFor, textIn } from '@/lib/announcements'
 import type { FieldErrors } from '@/lib/component-form'
 import {
   componentsQuery,
+  meQuery,
   queryKeys,
   useCreateAnnouncement,
   useUpdateAnnouncement
@@ -96,12 +97,13 @@ export function AnnouncementEditor({ announcement }: AnnouncementEditorProps): R
   const formId = useId()
   const formRef = useRef<HTMLFormElement>(null)
   const announcementId = announcement?.id ?? null
+  const { data: me } = useSuspenseQuery(meQuery)
   // The values as loaded or last saved; the form has unsaved changes while it differs from them.
   const [baseline, setBaseline] = useState(() => initialAnnouncementForm(announcement))
   // The form a preview of this announcement took along, if the admin comes back from one.
   const [restored] = useState(() => {
     const preview = readAnnouncementPreview()
-    return isPreviewFor(preview, announcementId) ? preview.form : null
+    return isPreviewFor(preview, announcementId, me) ? preview.form : null
   })
   const [state, setState] = useState<AnnouncementFormState>(restored ?? baseline)
   const [errors, setErrors] = useState<FieldErrors>({})
@@ -197,7 +199,7 @@ export function AnnouncementEditor({ announcement }: AnnouncementEditorProps): R
       showErrors({ 'target.selector': t('admin.announcements.form.errors.selectorInvalid') })
       return
     }
-    startAnnouncementPreview({ announcementId, form: state })
+    startAnnouncementPreview({ ownerId: me.id, announcementId, form: state })
     // A path prefix that is no page of its own (`/c/` of `/c/*`) starts on the dashboard instead.
     const path = previewPathFor(state.path)
     const isPage = router.getMatchedRoutes(path)[2] !== undefined

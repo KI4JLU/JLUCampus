@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { AnnouncementTexts, UserAnnouncement } from '@justcampus/shared'
 import { initialAnnouncementForm } from './announcement-form'
+import { ApiRequestError } from './api'
 import {
   allNews,
   hintQueue,
   isPreviewFor,
   paragraphsOf,
   parsePreview,
+  previewOwnedBy,
   previewPathFor,
+  retrySeen,
+  SEEN_RETRIES,
+  seenRetryDelay,
   serializePreview,
   textIn,
   unreadNews,
@@ -123,8 +128,10 @@ describe('previewPathFor', () => {
 })
 
 describe('preview drafts', () => {
+  const admin = { id: 'admin-1', role: 'admin' as const }
   const preview: AnnouncementPreview = {
     active: true,
+    ownerId: admin.id,
     announcementId: id(3),
     form: {
       ...initialAnnouncementForm(null),
@@ -143,6 +150,8 @@ describe('preview drafts', () => {
     expect(parsePreview(null)).toBeNull()
     expect(parsePreview('{not json')).toBeNull()
     expect(parsePreview(JSON.stringify({ active: true }))).toBeNull()
+    // An older draft without its owner is nobody's.
+    expect(parsePreview(JSON.stringify({ ...preview, ownerId: undefined }))).toBeNull()
     expect(
       parsePreview(
         serializePreview({ ...preview, form: { ...preview.form, side: 'middle' } } as never)
@@ -150,10 +159,42 @@ describe('preview drafts', () => {
     ).toBeNull()
   })
 
-  it('belongs to the editor of its announcement only', () => {
-    expect(isPreviewFor(preview, id(3))).toBe(true)
-    expect(isPreviewFor(preview, null)).toBe(false)
-    expect(isPreviewFor({ ...preview, announcementId: null }, null)).toBe(true)
-    expect(isPreviewFor(null, null)).toBe(false)
+  it('shows only to the admin who started it', () => {
+    expect(previewOwnedBy(preview, admin)).toBe(true)
+    expect(previewOwnedBy(preview, { id: 'admin-2', role: 'admin' })).toBe(false)
+    expect(previewOwnedBy(preview, { id: 'user-1', role: 'user' })).toBe(false)
+    // The same account after losing the admin role.
+    expect(previewOwnedBy(preview, { id: admin.id, role: 'user' })).toBe(false)
+    expect(previewOwnedBy(preview, undefined)).toBe(false)
+    expect(previewOwnedBy(null, admin)).toBe(false)
+  })
+
+  it('belongs to the editor of its admin and announcement only', () => {
+    expect(isPreviewFor(preview, id(3), admin)).toBe(true)
+    expect(isPreviewFor(preview, null, admin)).toBe(false)
+    expect(isPreviewFor({ ...preview, announcementId: null }, null, admin)).toBe(true)
+    expect(isPreviewFor(preview, id(3), { id: 'admin-2', role: 'admin' })).toBe(false)
+    expect(isPreviewFor(null, null, admin)).toBe(false)
+  })
+})
+
+describe('acknowledgement retries', () => {
+  it('retries network and server failures a few times', () => {
+    const offline = new TypeError('Failed to fetch')
+    const failing = new ApiRequestError(503, null)
+    for (let count = 0; count < SEEN_RETRIES; count++) {
+      expect(retrySeen(count, offline)).toBe(true)
+      expect(retrySeen(count, failing)).toBe(true)
+    }
+    expect(retrySeen(SEEN_RETRIES, offline)).toBe(false)
+  })
+
+  it('does not retry what the server refused', () => {
+    expect(retrySeen(0, new ApiRequestError(404, null))).toBe(false)
+    expect(retrySeen(0, new ApiRequestError(401, null))).toBe(false)
+  })
+
+  it('backs off between attempts', () => {
+    expect([0, 1, 2, 5].map(seenRetryDelay)).toEqual([1000, 2000, 4000, 10_000])
   })
 })

@@ -4,9 +4,11 @@ import {
   ANNOUNCEMENT_SIDES,
   announcementPathMatches,
   type Language,
+  type Me,
   type UserAnnouncement
 } from '@justcampus/shared'
 import type { AnnouncementFormState, AnnouncementTextDraft } from './announcement-form'
+import { ApiRequestError } from './api'
 
 export type UserNews = Extract<UserAnnouncement, { kind: 'news' }>
 export type UserHint = Extract<UserAnnouncement, { kind: 'hint' }>
@@ -74,10 +76,13 @@ export function previewPathFor(path: string): string {
 
 /**
  * A hint tried out from its editor before it is saved. While `active` it shows on every page whose
- * element it finds; afterwards it waits, inactive, for its editor to take the form back.
+ * element it finds; afterwards it waits, inactive, for its editor to take the form back. Only the
+ * admin who started it sees it (see `previewOwnedBy`).
  */
 export interface AnnouncementPreview {
   active: boolean
+  /** The admin who started it. */
+  ownerId: string
   /** The announcement being edited; `null` for a new one. */
   announcementId: string | null
   form: AnnouncementFormState
@@ -87,6 +92,7 @@ const textDraftSchema = z.object({ title: z.string(), body: z.string() })
 
 const previewSchema = z.object({
   active: z.boolean(),
+  ownerId: z.string().min(1),
   announcementId: z.string().nullable(),
   form: z.object({
     kind: z.enum(ANNOUNCEMENT_KINDS),
@@ -113,10 +119,42 @@ export function parsePreview(raw: string | null): AnnouncementPreview | null {
   }
 }
 
-/** Whether the stored preview belongs to the editor of `announcementId` (`null`: a new one). */
+/**
+ * Whether `user` may see the stored preview: the admin who started it, still an admin. The tab's
+ * storage outlives a session, so anyone else signing in there must not see the unsaved text.
+ */
+export function previewOwnedBy(
+  preview: AnnouncementPreview | null,
+  user: Pick<Me, 'id' | 'role'> | null | undefined
+): preview is AnnouncementPreview {
+  return preview !== null && user?.role === 'admin' && preview.ownerId === user.id
+}
+
+/**
+ * Whether the stored preview belongs to `user`'s editor of `announcementId` (`null`: a new
+ * announcement).
+ */
 export function isPreviewFor(
   preview: AnnouncementPreview | null,
-  announcementId: string | null
+  announcementId: string | null,
+  user: Pick<Me, 'id' | 'role'> | null | undefined
 ): preview is AnnouncementPreview {
-  return preview !== null && preview.announcementId === announcementId
+  return previewOwnedBy(preview, user) && preview.announcementId === announcementId
+}
+
+/** How often acknowledging is tried again after the first attempt. */
+export const SEEN_RETRIES = 3
+
+/**
+ * Whether a failed acknowledgement is tried again: on network errors and server failures, not when
+ * the server refused it (an announcement gone or not meant for the user, a session that ended).
+ */
+export function retrySeen(failureCount: number, error: Error): boolean {
+  if (error instanceof ApiRequestError && error.status < 500) return false
+  return failureCount < SEEN_RETRIES
+}
+
+/** Waits 1, 2, 4 … seconds between attempts, at most 10. */
+export function seenRetryDelay(failureCount: number): number {
+  return Math.min(1000 * 2 ** failureCount, 10_000)
 }

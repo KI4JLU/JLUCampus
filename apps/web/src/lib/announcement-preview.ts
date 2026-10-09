@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import { parsePreview, serializePreview, type AnnouncementPreview } from './announcements'
+import { onSignOut } from './sign-out-cleanups'
 
 const STORAGE_KEY = 'justcampus.announcement-preview'
 
@@ -52,7 +53,10 @@ export function endAnnouncementPreview(): void {
   if (preview?.active) write({ ...preview, active: false })
 }
 
-/** Forgets the preview and its form, once the editor has them back. */
+/** Forgets the preview and its form, once the editor has them back or they are not the user's. */
 export function clearAnnouncementPreview(): void {
   if (read() !== null) write(null)
 }
+
+// The unsaved text must not wait in the tab for the next person to sign in.
+onSignOut(clearAnnouncementPreview)

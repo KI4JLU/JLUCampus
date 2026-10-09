@@ -687,14 +687,16 @@ allows every signed-in user and is the entry point for future audience rules.
   every page the user viewed seen when it closes; the account menu's "What's
   new" reopens all news. Then the current page's unread hints (oldest first,
   `announcementPathMatches`) take turns as a non-modal `Popover` anchored on
-  the first one whose selector finds a visible element (`useVisibleTarget`,
-  a `MutationObserver`); "Got it", close and Escape mark it seen, a vanished
-  element only hides it. Shell elements carry stable `data-tour` attributes
+  the first one whose selector finds an element on screen (`useVisibleTarget`:
+  a `MutationObserver` and an `IntersectionObserver`, so a scrolled-away
+  element passes the turn); "Got it", close and Escape mark it seen (retried,
+  else the list goes stale and brings it back), a vanished element only hides
+  it. Tab leaves the hint into the page instead of looping in it. Shell elements carry stable `data-tour` attributes
   (`src/lib/tour-targets.ts`, sidebar rows `sidebar-component-<id>`) that the
   admin editor offers as selectors. "Test on page" stores the unsaved form in
   `sessionStorage` (`lib/announcement-preview.ts`) and shows it on every page,
-  marked as a preview, without marking it seen; the editor takes the form
-  back when it opens. Pure logic sits in `lib/announcements.ts` and
+  marked as a preview, without marking it seen, to the admin who started it
+  only (cleared on sign-out); the editor takes the form back when it opens. Pure logic sits in `lib/announcements.ts` and
   `lib/announcement-form.ts`.
 - i18n: `i18next` + `react-i18next`, resources `src/i18n/de.json` and
   `en.json`. Language = user's saved language, else browser detector, else
