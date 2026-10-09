@@ -76,7 +76,7 @@ import {
 } from '@justcampus/shared'
 import { transcriptionKeys } from '@/adapters/transcription/api'
 import { ApiRequestError, apiFetch, isUnauthorized } from './api'
-import { retrySeen, seenRetryDelay } from './announcements'
+import { retrySeen, SeenByOtherUserError, seenRetryDelay } from './announcements'
 import { applyComponentInput } from './component-secrets'
 import { isLater } from './feed'
 
@@ -980,13 +980,23 @@ export function useSetUserRole(): UseMutationResult<
  * failing; when it still fails, the list is marked stale, so its next fetch (the next app start at
  * the latest) brings the announcement back rather than losing it.
  */
-export function useMarkAnnouncementSeen(): UseMutationResult<void, Error, string> {
+export function useMarkAnnouncementSeen(): UseMutationResult<
+  void,
+  Error,
+  { id: string; userId: string }
+> {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => apiFetch<void>(ANNOUNCEMENTS_API.seen(id), { method: 'POST' }),
+    // Every attempt checks who is signed in: sign-out clears the cache but not pending retries.
+    mutationFn: ({ id, userId }: { id: string; userId: string }) => {
+      if (client.getQueryData<Me>(queryKeys.me)?.id !== userId) {
+        return Promise.reject(new SeenByOtherUserError())
+      }
+      return apiFetch<void>(ANNOUNCEMENTS_API.seen(id), { method: 'POST' })
+    },
     retry: retrySeen,
     retryDelay: seenRetryDelay,
-    onMutate: async (id) => {
+    onMutate: async ({ id }) => {
       await client.cancelQueries({ queryKey: queryKeys.announcements })
       client.setQueryData<UserAnnouncementList>(queryKeys.announcements, (list) =>
         list

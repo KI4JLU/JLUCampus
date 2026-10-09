@@ -56,6 +56,9 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   const preview = previewOwnedBy(stored, me) ? stored : null
   const foreignPreview = stored !== null && me !== undefined && preview === null
   const markSeen = useMarkAnnouncementSeen()
+  const acknowledge = (id: string): void => {
+    if (me) markSeen.mutate({ id, userId: me.id })
+  }
   const [news, setNews] = useState<NewsSession | null>(null)
   const [startChecked, setStartChecked] = useState(false)
 
@@ -80,7 +83,7 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   const closeNews = (viewedIds: string[]): void => {
     setNews((current) => (current ? { ...current, open: false } : current))
     const unseen = new Set(announcements?.filter((item) => !item.seen).map((item) => item.id))
-    viewedIds.filter((id) => unseen.has(id)).forEach((id) => markSeen.mutate(id))
+    viewedIds.filter((id) => unseen.has(id)).forEach(acknowledge)
   }
 
   useEffect(() => {
@@ -115,7 +118,7 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
           pathname={pathname}
           language={language}
           paused={newsOpen}
-          onSeen={(id) => markSeen.mutate(id)}
+          onSeen={acknowledge}
         />
       ) : null}
     </OpenNewsContext.Provider>

@@ -146,10 +146,23 @@ export function isPreviewFor(
 export const SEEN_RETRIES = 3
 
 /**
+ * Thrown instead of sending an acknowledgement when the user who closed the announcement is no
+ * longer the one signed in, so a retry never acknowledges it for the next person on the device.
+ */
+export class SeenByOtherUserError extends Error {
+  constructor() {
+    super('The signed-in user changed before the acknowledgement was sent')
+    this.name = 'SeenByOtherUserError'
+  }
+}
+
+/**
  * Whether a failed acknowledgement is tried again: on network errors and server failures, not when
- * the server refused it (an announcement gone or not meant for the user, a session that ended).
+ * the server refused it (an announcement gone or not meant for the user, a session that ended) or
+ * the signed-in user changed.
  */
 export function retrySeen(failureCount: number, error: Error): boolean {
+  if (error instanceof SeenByOtherUserError) return false
   if (error instanceof ApiRequestError && error.status < 500) return false
   return failureCount < SEEN_RETRIES
 }

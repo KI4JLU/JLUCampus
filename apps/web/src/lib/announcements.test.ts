@@ -12,6 +12,7 @@ import {
   previewPathFor,
   retrySeen,
   SEEN_RETRIES,
+  SeenByOtherUserError,
   seenRetryDelay,
   serializePreview,
   textIn,
@@ -196,5 +197,9 @@ describe('acknowledgement retries', () => {
 
   it('backs off between attempts', () => {
     expect([0, 1, 2, 5].map(seenRetryDelay)).toEqual([1000, 2000, 4000, 10_000])
+  })
+
+  it('does not retry once another user is signed in', () => {
+    expect(retrySeen(0, new SeenByOtherUserError())).toBe(false)
   })
 })
