@@ -103,7 +103,7 @@
     "loadFailedTitle": "Komponente konnte nicht geladen werden",
     "loadFailedDescription": "Der Server antwortet nicht. Bitte versuchen Sie es erneut.",
     "notFoundTitle": "Komponente nicht gefunden",
-    "notFoundDescription": "Diese Komponente gibt es nicht mehr oder sie wurde deaktiviert.",
+    "notFoundDescription": "Diese Komponente gibt es nicht mehr, sie wurde deaktiviert oder Ihre Rollen erlauben sie nicht.",
     "iframe": {
       "urlLabel": "Adresse (URL)",
       "urlHint": "Die Website, die auf der Seite der Komponente eingebettet wird. Nur https, http nur für localhost."
@@ -668,6 +668,7 @@
       "components": "Komponenten",
       "folders": "Ordner-Vorlagen",
       "presets": "Layout-Vorlagen",
+      "roles": "Rollen",
       "users": "Nutzende",
       "modules": "Module"
     },
@@ -864,9 +865,125 @@
         "dashboardEmptyDescription": "Fügen Sie JLU-Widgets, Ordner, Verknüpfungen und Feeds hinzu, die neue Nutzende auf ihrem Dashboard vorfinden sollen."
       }
     },
+    "roles": {
+      "title": "Rollen verwalten",
+      "description": "Rollen legen fest, welche Komponenten und Funktionen Nutzende verwenden dürfen. Eine Rolle erhalten Nutzende automatisch über ihre Keycloak-Rollen und -Gruppen oder von Hand; sie dürfen alles, was eine ihrer Rollen erlaubt.",
+      "newRole": "Neue Rolle",
+      "loadFailed": "Die Rollen konnten nicht geladen werden.",
+      "builtIn": {
+        "everyone": "Alle Nutzenden",
+        "admin": "Admin"
+      },
+      "builtInBadge": "Eingebaut",
+      "table": {
+        "caption": "Alle Rollen, die eingebauten zuerst",
+        "assignment": "Automatisch für",
+        "members": "Von Hand zugewiesen",
+        "permissions": "Rechte",
+        "everyone": "Alle angemeldeten Nutzenden",
+        "keycloakRoles": "Keycloak-Rollen: {{names}}",
+        "keycloakGroups": "Keycloak-Gruppen: {{names}}",
+        "manualOnly": "Nur von Hand",
+        "memberCount_one": "{{count}} Person",
+        "memberCount_other": "{{count}} Personen",
+        "notApplicable": "Entfällt",
+        "allPermissions": "Alle Rechte",
+        "noPermissions": "Keine Rechte",
+        "permissionSummary": "{{components}} · {{features}}",
+        "componentCount_one": "{{count}} Komponente",
+        "componentCount_other": "{{count}} Komponenten",
+        "featureCount_one": "{{count}} Funktion",
+        "featureCount_other": "{{count}} Funktionen",
+        "empty": "Noch keine Rollen."
+      },
+      "actions": {
+        "menu": "Aktionen für {{name}}",
+        "edit": "Bearbeiten"
+      },
+      "delete": {
+        "title": "Rolle löschen?",
+        "description": "Wer „{{name}}“ hat, verliert die Rechte dieser Rolle, soweit keine andere Rolle sie gibt.",
+        "done": "„{{name}}“ gelöscht.",
+        "failed": "Die Rolle konnte nicht gelöscht werden."
+      },
+      "form": {
+        "createTitle": "Neue Rolle",
+        "editTitle": "Rolle bearbeiten: {{name}}",
+        "back": "Alle Rollen",
+        "general": "Allgemein",
+        "description": "Der Name erscheint in der Verwaltung, etwa bei den Nutzenden.",
+        "everyoneDescription": "Jede angemeldete Person hat diese Rolle; was sie erlaubt, dürfen alle.",
+        "adminDescription": "Admins dürfen alles, auch die Verwaltung.",
+        "name": "Name",
+        "builtInNameHint": "Eingebaute Rollen behalten ihren Namen.",
+        "automatic": "Automatische Zuweisung",
+        "automaticDescription": "Wer bei der Anmeldung eine dieser Keycloak-Rollen oder -Gruppen hat, erhält die Rolle automatisch. Die Namen müssen genau übereinstimmen.",
+        "keycloakRoles": "Keycloak-Rollen",
+        "keycloakRolesHint": "Namen von Realm-Rollen, z. B. staff. Mehrere durch Kommas getrennt.",
+        "keycloakGroups": "Keycloak-Gruppen",
+        "keycloakGroupsHint": "Vollständige Pfade, z. B. /Studierende. Mehrere durch Kommas getrennt.",
+        "add": "Hinzufügen",
+        "remove": "{{name}} entfernen",
+        "noNames": "Keine",
+        "components": "Komponenten",
+        "componentsDescription": "Die Komponenten, die Nutzende mit dieser Rolle verwenden dürfen. Deaktivierte Komponenten sieht niemand, bis sie wieder aktiv sind.",
+        "allComponents": "Alle auswählen",
+        "noComponents": "Keine auswählen",
+        "disabled": "Deaktiviert",
+        "componentsFailed": "Die Komponenten konnten nicht geladen werden.",
+        "componentsEmpty": "Noch keine Komponenten angelegt.",
+        "features": "Funktionen",
+        "featuresDescription": "Einzelne Funktionen in den Modulen. Sie wirken nur zusammen mit der Komponente des Moduls.",
+        "permissions": "Rechte",
+        "adminPermissions": "Admins dürfen alles, inkl. Verwaltung.",
+        "saveFailed": "Die Rolle konnte nicht gespeichert werden.",
+        "created": "Rolle angelegt.",
+        "updated": "Rolle gespeichert.",
+        "notFoundTitle": "Rolle nicht gefunden",
+        "notFoundDescription": "Diese Rolle gibt es nicht mehr.",
+        "loadFailedTitle": "Die Rolle konnte nicht geladen werden.",
+        "loadFailedDescription": "Der Server antwortet nicht. Bitte versuchen Sie es erneut.",
+        "unsavedDescription": "Ihre Änderungen an dieser Rolle sind noch nicht gespeichert. Wenn Sie die Seite verlassen, gehen sie verloren.",
+        "errors": {
+          "name": "Geben Sie einen Namen mit höchstens {{max}} Zeichen ein.",
+          "names": "Höchstens {{max}} Namen.",
+          "lockout": "Nicht gespeichert: Diese Änderung würde Ihnen selbst die Admin-Rolle nehmen oder die App ohne Admin lassen."
+        }
+      },
+      "features": {
+        "translator": {
+          "documents": {
+            "label": "Dokumente übersetzen",
+            "description": "Ganze Dateien übersetzen lassen."
+          },
+          "rephrase": {
+            "label": "Umformulieren",
+            "description": "Texte im Übersetzer umschreiben lassen."
+          },
+          "compose": {
+            "label": "KI-Editor",
+            "description": "Texte mit dem KI-Editor des Übersetzers verfassen."
+          },
+          "glossaries": {
+            "label": "Glossare",
+            "description": "Eigene Glossare anlegen und beim Übersetzen verwenden."
+          }
+        },
+        "transcription": {
+          "live": {
+            "label": "Live-Transkription",
+            "description": "Gesprochenes schon während der Aufnahme mitschreiben lassen."
+          },
+          "summaries": {
+            "label": "KI-Zusammenfassungen",
+            "description": "Zusammenfassungen eines Transkripts schreiben lassen und Vorlagen dafür verwalten."
+          }
+        }
+      }
+    },
     "users": {
       "title": "Nutzende verwalten",
-      "description": "Alle, die sich schon einmal bei JLU Campus angemeldet haben. Hier vergeben und entziehen Sie die Admin-Rolle der App; Rollen und Gruppen in Keycloak ändern sie nicht.",
+      "description": "Alle, die sich schon einmal bei JLU Campus angemeldet haben. Hier weisen Sie ihnen Rollen der App von Hand zu; Rollen und Gruppen in Keycloak ändern sich dadurch nicht.",
       "loadFailed": "Die Nutzenden konnten nicht geladen werden.",
       "search": "Nutzende suchen",
       "searchPlaceholder": "Nach Name oder E-Mail suchen",
@@ -875,7 +992,7 @@
       "table": {
         "caption": "Alle Nutzenden, Admins zuerst",
         "email": "E-Mail",
-        "role": "Rolle",
+        "role": "Rollen",
         "lastSignIn": "Letzte Anmeldung",
         "empty": "Noch hat sich niemand angemeldet.",
         "noMatch": "Niemand passt zu „{{query}}“."
@@ -887,26 +1004,24 @@
       "role": {
         "admin": "Admin",
         "user": "Standard",
-        "grant": "Zum Admin ernennen",
-        "revoke": "Admin-Rechte entziehen",
-        "grantHint": "Admins verwalten Komponenten, Vorlagen und die Admin-Rechte anderer.",
-        "revokeHint": "Die Rolle gilt nur in JLU Campus, unabhängig von Keycloak.",
-        "selfHint": "Sie können sich die Admin-Rechte nicht selbst entziehen.",
-        "granted": "„{{name}}“ ist jetzt Admin.",
-        "revoked": "„{{name}}“ ist kein Admin mehr.",
-        "conflict": "Niemand kann sich die Admin-Rechte selbst entziehen, und es muss mindestens ein Admin bleiben.",
-        "failed": "Die Rolle konnte nicht geändert werden."
+        "viaKeycloak": "über Keycloak",
+        "assign": "Rollen zuweisen",
+        "assignHint": "Von Hand zugewiesene Rollen gelten zusätzlich zu denen über Keycloak.",
+        "saved": "Rollen von „{{name}}“ gespeichert.",
+        "conflict": "Niemand kann sich die Admin-Rolle selbst nehmen, und es muss mindestens ein Admin bleiben.",
+        "failed": "Die Rollen konnten nicht gespeichert werden."
       },
-      "confirm": {
-        "grantTitle": "Zum Admin ernennen?",
-        "grantDescription": "„{{name}}“ erhält Zugriff auf den Adminbereich und kann dort Komponenten, Vorlagen und die Admin-Rechte anderer verwalten.",
-        "grantAction": "Zum Admin ernennen",
-        "revokeTitle": "Admin-Rechte entziehen?",
-        "revokeDescription": "„{{name}}“ verliert den Zugriff auf den Adminbereich. Rollen und Gruppen in Keycloak bleiben unverändert.",
-        "revokeAction": "Entziehen"
+      "assign": {
+        "title": "Rollen zuweisen",
+        "description": "Rollen, die „{{name}}“ von Hand zugewiesen sind. Rollen über Keycloak gelten unabhängig davon und richten sich nach der letzten Anmeldung.",
+        "roles": "Rollen",
+        "automatic": "Automatisch über Keycloak",
+        "selfAdminHint": "Ihre eigene Admin-Rolle können Sie nicht entfernen.",
+        "loadFailed": "Die Rollen konnten nicht geladen werden.",
+        "empty": "Außer „Alle Nutzenden“ gibt es noch keine Rollen."
       },
       "details": {
-        "role": "Rolle in JLU Campus",
+        "role": "Rollen in JLU Campus",
         "keycloakRoles": "Keycloak-Rollen",
         "keycloakGroups": "Keycloak-Gruppen",
         "keycloakHint": "Rollen und Gruppen stammen von der letzten Anmeldung.",

@@ -1,3 +1,4 @@
+import { FEATURE_KEYS } from '@justcampus/shared'
 import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -123,6 +124,14 @@ describe('DeepL', () => {
     )
     const app = new Hono<AppEnvironment>()
     app.use('*', async (context, next) => {
+      context.set(
+        'access',
+        Promise.resolve({
+          isAdmin: false,
+          componentIds: new Set(['component']),
+          features: new Set(FEATURE_KEYS)
+        })
+      )
       context.set('session', { user: { id: 'user' } } as AppEnvironment['Variables']['session'])
       context.set('module', {
         type: 'translator',

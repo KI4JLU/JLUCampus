@@ -586,8 +586,10 @@ export function useTranscriptionFormats(): UseQueryResult<TranscriptionFormat[]>
   })
 }
 
-export function useTranscriptionTemplates(): UseQueryResult<TranscriptionTemplate[]> {
+/** Not fetched (`enabled` false) for users without AI summaries, whom the server would refuse. */
+export function useTranscriptionTemplates(enabled = true): UseQueryResult<TranscriptionTemplate[]> {
   return useQuery({
+    enabled,
     queryKey: transcriptionKeys.templates,
     queryFn: ({ signal }) => listTemplates(signal),
     retry

@@ -22,6 +22,7 @@ import { ComponentIcon } from '@/components/component-icon'
 import { useComponentName } from '@/lib/component-name'
 import type { ComponentOf, ComponentViewProps } from '../../types'
 import { useTranscriptionCapabilities, useTranscriptionJobs, useTranscripts } from '../api'
+import { useOfferedCapabilities } from '../capabilities'
 import { setTranscriptionTarget, type TranscriptionTarget } from './target-store'
 
 /**
@@ -85,7 +86,7 @@ function TileHeader({ component }: ComponentViewProps<'transcription'>): React.J
 /** A new transcription: the entry choice, or straight to upload or recording; the running jobs. */
 export function QuickTile({ component }: ComponentViewProps<'transcription'>): React.JSX.Element {
   const { t } = useTranslation()
-  const capabilities = useTranscriptionCapabilities().data
+  const capabilities = useOfferedCapabilities()
   const batch = capabilities?.batch ?? false
   const live = (capabilities?.realtimeModes.length ?? 0) > 0
   const { active } = useWidgetJobs(batch)

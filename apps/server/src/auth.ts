@@ -236,7 +236,6 @@ export const auth = betterAuth({
   session: { cookieCache: { enabled: false } },
   user: {
     additionalFields: {
-      role: { type: 'string', defaultValue: 'user', input: false },
       language: { type: 'string', required: false, input: true }
     }
   },

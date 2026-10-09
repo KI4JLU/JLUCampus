@@ -1,4 +1,11 @@
-import { widgetRefKey, type Dashboard, type Sidebar, type WidgetRef } from '@justcampus/shared'
+import {
+  FEATURE_KEYS,
+  type FeatureKey,
+  widgetRefKey,
+  type Dashboard,
+  type Sidebar,
+  type WidgetRef
+} from '@justcampus/shared'
 
 export function isCompleteOrder(
   currentIds: readonly string[],
@@ -334,4 +341,63 @@ export function tooSmall(
   if (tile.w < minimum.minW) axes.push('w')
   if (tile.h < minimum.minH) axes.push('h')
   return axes
+}
+
+export interface AccessRole {
+  id: string
+  builtIn: 'everyone' | 'admin' | null
+  keycloakRoles: readonly string[]
+  keycloakGroups: readonly string[]
+  componentIds: readonly string[]
+  features: readonly FeatureKey[]
+}
+
+export interface RoleClaims {
+  keycloakRoles: readonly string[]
+  keycloakGroups: readonly string[]
+}
+
+/** Keycloak names match exactly, including group paths and case. */
+export function keycloakRoleIds(roles: readonly AccessRole[], claims: RoleClaims): string[] {
+  return roles
+    .filter(
+      (role) =>
+        role.builtIn !== 'everyone' &&
+        (role.keycloakRoles.some((name) => claims.keycloakRoles.includes(name)) ||
+          role.keycloakGroups.some((name) => claims.keycloakGroups.includes(name)))
+    )
+    .map(({ id }) => id)
+}
+
+export function heldRoles<T extends AccessRole>(
+  roles: readonly T[],
+  manualRoleIds: readonly string[],
+  claims: RoleClaims
+): T[] {
+  const automatic = new Set(keycloakRoleIds(roles, claims))
+  return roles.filter(
+    (role) =>
+      role.builtIn === 'everyone' || manualRoleIds.includes(role.id) || automatic.has(role.id)
+  )
+}
+
+export interface UserAccess {
+  isAdmin: boolean
+  componentIds: Set<string>
+  features: Set<FeatureKey>
+}
+
+export function roleAccess(
+  roles: readonly AccessRole[],
+  manualRoleIds: readonly string[],
+  claims: RoleClaims,
+  allComponentIds: readonly string[]
+): UserAccess {
+  const held = heldRoles(roles, manualRoleIds, claims)
+  const isAdmin = held.some((role) => role.builtIn === 'admin')
+  return {
+    isAdmin,
+    componentIds: new Set(isAdmin ? allComponentIds : held.flatMap((role) => role.componentIds)),
+    features: new Set(isAdmin ? FEATURE_KEYS : held.flatMap((role) => role.features))
+  }
 }

@@ -29,6 +29,10 @@ import {
   type AdminComponentList,
   type AdminUser,
   type AdminUserList,
+  type AdminUserPatch,
+  type AppRole,
+  type AppRoleInput,
+  type AppRoleList,
   type Component,
   type ComponentInput,
   type ComponentList,
@@ -66,10 +70,10 @@ import {
   type TranslatorPythonResponse,
   type TranslatorSuggestRequest,
   type UserFeed,
-  type UserRole,
   type WidgetList
 } from '@justcampus/shared'
 import { transcriptionKeys } from '@/adapters/transcription/api'
+import { accessChanged } from './access'
 import { ApiRequestError, apiFetch, isUnauthorized } from './api'
 import { applyComponentInput } from './component-secrets'
 import { isLater } from './feed'
@@ -111,6 +115,9 @@ export const queryKeys = {
   adminPreset: (id: string) => ['admin', 'preset', id] as const,
   adminPresetAudiences: ['admin', 'preset-audiences'] as const,
   adminUsers: ['admin', 'users'] as const,
+  adminRoles: ['admin', 'roles'] as const,
+  adminRole: (id: string) => ['admin', 'role', id] as const,
+  adminRoleAudiences: ['admin', 'role-audiences'] as const,
   feed: (url: string) => ['feed', url] as const,
   translatorEngines: ['translator', 'engines'] as const,
   translatorDocuments: ['translator', 'documents'] as const,
@@ -121,10 +128,12 @@ export const queryKeys = {
  * The app shell keeps this query mounted, so it doubles as a heartbeat: each request lets the
  * server keep the Keycloak session alive that embedded sites sign in with (`keycloak-session.ts`
  * on the server), also while the user works inside an embedded site, records or transcribes.
+ * When an answer allows other components or functions than the one before (an admin changed the
+ * user's roles), everything they shape loads again (`invalidateAccess`).
  */
 export const meQuery = queryOptions({
   queryKey: queryKeys.me,
-  queryFn: () => apiFetch<Me>(API.me),
+  queryFn: async () => checkAccess(queryClient, await apiFetch<Me>(API.me)),
   staleTime: 5 * 60_000,
   refetchInterval: 4 * 60_000,
   refetchIntervalInBackground: true
@@ -383,11 +392,45 @@ export const adminUsersQuery = queryOptions({
   select: (data) => data.users
 })
 
+/** Built-in roles first (everyone, admin), then by name. */
+export const adminRolesQuery = queryOptions({
+  queryKey: queryKeys.adminRoles,
+  queryFn: () => apiFetch<AppRoleList>(API.adminRoles),
+  select: (data) => data.roles
+})
+
+type RoleQueryKey = ReturnType<typeof queryKeys.adminRole>
+type RoleQueryOptions = UndefinedInitialDataOptions<AppRole, Error, AppRole, RoleQueryKey> & {
+  queryKey: DataTag<RoleQueryKey, AppRole, Error>
+}
+
+/**
+ * One role for its editor, fresh whenever the editor opens; while it is open only its own saves
+ * change the entry, so the form's baseline never shifts under it. An answer from the server
+ * (`not_found`) is not retried.
+ */
+export function adminRoleQuery(id: string): RoleQueryOptions {
+  return queryOptions({
+    queryKey: queryKeys.adminRole(id),
+    queryFn: () => apiFetch<AppRole>(API.adminRole(id)),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: (count, error) => !(error instanceof ApiRequestError) && count < 2
+  })
+}
+
+/** Keycloak role and group names seen at sign-ins, suggested in a role's automatic assignment. */
+export const adminRoleAudiencesQuery = queryOptions({
+  queryKey: queryKeys.adminRoleAudiences,
+  queryFn: () => apiFetch<PresetAudienceSuggestions>(API.adminRoleAudiences),
+  staleTime: 5 * 60_000
+})
+
 export function useUpdateMe(): UseMutationResult<Me, Error, MePatch> {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (patch: MePatch) => apiFetch<Me>(API.me, { method: 'PATCH', json: patch }),
-    onSuccess: (me) => client.setQueryData(queryKeys.me, me)
+    onSuccess: (me) => client.setQueryData(queryKeys.me, checkAccess(client, me))
   })
 }
 
@@ -461,6 +504,33 @@ export function useSaveDashboard(
       return client.invalidateQueries({ queryKey: queryKeys.dashboard })
     }
   })
+}
+
+/**
+ * Changed roles reach what the user sees: the components and their widgets, sidebar and dashboard,
+ * the folder templates, and what the modules offer. A page of a component no longer allowed then
+ * finds it gone.
+ */
+/**
+ * Reloads what the user's roles shape when a fresh `/me` answer (poll or own PATCH) allows other
+ * components or functions than the cached one; must run before the answer replaces the cache.
+ */
+function checkAccess(client: QueryClient, me: Me): Me {
+  const previous = client.getQueryData<Me>(queryKeys.me)
+  if (previous && accessChanged(previous, me)) void invalidateAccess(client)
+  return me
+}
+
+function invalidateAccess(client: QueryClient): Promise<void> {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: queryKeys.components }),
+    client.invalidateQueries({ queryKey: queryKeys.widgets }),
+    client.invalidateQueries({ queryKey: queryKeys.sidebar }),
+    client.invalidateQueries({ queryKey: queryKeys.dashboard }),
+    client.invalidateQueries({ queryKey: queryKeys.folderTemplates }),
+    client.invalidateQueries({ queryKey: queryKeys.translatorEngines }),
+    client.invalidateQueries({ queryKey: transcriptionKeys.capabilities })
+  ]).then(() => undefined)
 }
 
 /**
@@ -621,9 +691,13 @@ export async function executePython(code: string): Promise<TranslatorPythonRespo
   )
 }
 
-/** The glossaries the user can apply: public ones and their own. */
-export function useTranslatorGlossaries(): UseQueryResult<TranslatorGlossaryList> {
+/**
+ * The glossaries the user can apply: public ones and their own. Not fetched (`enabled` false) for
+ * users without the glossaries function, whom the server would refuse.
+ */
+export function useTranslatorGlossaries(enabled = true): UseQueryResult<TranslatorGlossaryList> {
   return useQuery({
+    enabled,
     queryKey: queryKeys.translatorGlossaries,
     queryFn: async ({ signal }) =>
       translatorGlossaryListSchema.parse(
@@ -902,23 +976,76 @@ export function useReorderLayoutPresets(): UseMutationResult<
 }
 
 /**
- * Grants or revokes a user's admin role. The list shows the answer at once and is then refetched
- * for the server's order, admins first.
+ * Replaces the roles an admin assigned to a user by hand. The list shows the answer at once and is
+ * then refetched for the server's order, admins first; the roles' member counts change with it.
  */
-export function useSetUserRole(): UseMutationResult<
+export function useSetUserRoles(): UseMutationResult<
   AdminUser,
   Error,
-  { id: string; role: UserRole }
+  { id: string; patch: AdminUserPatch }
 > {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, role }: { id: string; role: UserRole }) =>
-      apiFetch<AdminUser>(API.adminUser(id), { method: 'PATCH', json: { role } }),
+    mutationFn: ({ id, patch }: { id: string; patch: AdminUserPatch }) =>
+      apiFetch<AdminUser>(API.adminUser(id), { method: 'PATCH', json: patch }),
     onSuccess: (user) => {
       client.setQueryData<AdminUserList>(queryKeys.adminUsers, (list) =>
         list ? { users: list.users.map((item) => (item.id === user.id ? user : item)) } : list
       )
-      return client.invalidateQueries({ queryKey: queryKeys.adminUsers })
+      return Promise.all([
+        client.invalidateQueries({ queryKey: queryKeys.adminUsers }),
+        client.invalidateQueries({ queryKey: queryKeys.adminRoles })
+      ]).then(() => undefined)
+    }
+  })
+}
+
+/**
+ * A role change reaches the role list, the users (their Keycloak-given roles, the member counts)
+ * and the signed-in user's own functions.
+ */
+function invalidateRoles(client: QueryClient): Promise<void> {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: queryKeys.adminRoles }),
+    client.invalidateQueries({ queryKey: queryKeys.adminUsers }),
+    client.invalidateQueries({ queryKey: queryKeys.me })
+  ]).then(() => undefined)
+}
+
+export function useCreateRole(): UseMutationResult<AppRole, Error, AppRoleInput> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AppRoleInput) =>
+      apiFetch<AppRole>(API.adminRoles, { method: 'POST', json: input }),
+    onSuccess: () => invalidateRoles(client)
+  })
+}
+
+/** Full replace of one role; its editor keeps the answer as its new baseline. */
+export function useUpdateRole(): UseMutationResult<
+  AppRole,
+  Error,
+  { id: string; input: AppRoleInput }
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: AppRoleInput }) =>
+      apiFetch<AppRole>(API.adminRole(id), { method: 'PUT', json: input }),
+    onSuccess: (role) => {
+      client.setQueryData(queryKeys.adminRole(role.id), role)
+      return invalidateRoles(client)
+    }
+  })
+}
+
+/** Deletes a custom role; its cached copy goes unless its editor is still open. */
+export function useDeleteRole(): UseMutationResult<void, Error, string> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiFetch<void>(API.adminRole(id), { method: 'DELETE' }),
+    onSuccess: (_data, id) => {
+      client.removeQueries({ queryKey: queryKeys.adminRole(id), type: 'inactive' })
+      return invalidateRoles(client)
     }
   })
 }

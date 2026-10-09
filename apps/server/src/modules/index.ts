@@ -3,6 +3,7 @@ import { desc } from 'drizzle-orm'
 import type { Hono, MiddlewareHandler } from 'hono'
 import type { ZodType } from 'zod'
 
+import { getAccess, grantEveryoneComponent } from '../access.js'
 import { ApiError } from '../api.js'
 import { db } from '../db/index.js'
 import { component } from '../db/schema.js'
@@ -26,6 +27,9 @@ function moduleMiddleware(enabledOnly: boolean): MiddlewareHandler<AppEnvironmen
       enabledOnly
     )
     if (!runtime) throw new ApiError(404, 'not_found', 'Module not found')
+    if (enabledOnly && !(await getAccess(context)).componentIds.has(runtime.componentId)) {
+      throw new ApiError(403, 'forbidden', 'Component permission required')
+    }
     context.set('module', runtime as AnyModuleRuntime)
     await next()
   }
@@ -68,16 +72,20 @@ export async function ensureSingletonComponents(): Promise<void> {
       .from(component)
       .orderBy(desc(component.sortOrder))
       .limit(1)
-    await db
-      .insert(component)
-      .values({
-        ...builtIn,
-        iconUrl: null,
-        singleton: true,
-        secrets: {},
-        sortOrder: (last?.sortOrder ?? -1) + 1
-      })
-      .onConflictDoNothing()
+    await db.transaction(async (transaction) => {
+      const [created] = await transaction
+        .insert(component)
+        .values({
+          ...builtIn,
+          iconUrl: null,
+          singleton: true,
+          secrets: {},
+          sortOrder: (last?.sortOrder ?? -1) + 1
+        })
+        .onConflictDoNothing()
+        .returning({ id: component.id })
+      if (created) await grantEveryoneComponent(created.id, transaction)
+    })
   }
 }
 

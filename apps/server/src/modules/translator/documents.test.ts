@@ -1,3 +1,4 @@
+import { FEATURE_KEYS } from '@justcampus/shared'
 import { Hono } from 'hono'
 import { SQL } from 'drizzle-orm'
 import { PgDialect } from 'drizzle-orm/pg-core'
@@ -35,6 +36,14 @@ vi.mock('../../db/index.js', () => ({
 function app(enabled: boolean): Hono<AppEnvironment> {
   const testApp = new Hono<AppEnvironment>()
   testApp.use('*', async (context, next) => {
+    context.set(
+      'access',
+      Promise.resolve({
+        isAdmin: false,
+        componentIds: new Set(['component']),
+        features: new Set(FEATURE_KEYS)
+      })
+    )
     context.set('session', { user: { id: 'owner' } } as AppEnvironment['Variables']['session'])
     context.set('module', {
       type: 'translator',

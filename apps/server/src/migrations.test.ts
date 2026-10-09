@@ -1,3 +1,4 @@
+import { FEATURE_KEYS } from '@justcampus/shared'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
@@ -24,5 +25,22 @@ describe('migration journal', () => {
       expect(entry.when, entry.tag).toBeGreaterThan(newest)
       newest = entry.when
     }
+  })
+})
+
+describe('role migration', () => {
+  const migration = readFileSync(new URL('../drizzle/0020_app_roles.sql', import.meta.url), 'utf8')
+
+  it('grants every current function to everyone to preserve existing access', () => {
+    const features = migration.match(/'everyone', 'Alle Nutzenden', '([^']+)'::jsonb/)?.[1]
+    expect(JSON.parse(features!)).toEqual(FEATURE_KEYS)
+    expect(migration).toContain('CROSS JOIN "component" c')
+  })
+
+  it('copies legacy admins before dropping their role column', () => {
+    const copy = migration.indexOf("u.role = 'admin'")
+    const drop = migration.indexOf('ALTER TABLE "user" DROP COLUMN "role"')
+    expect(copy).toBeGreaterThan(0)
+    expect(drop).toBeGreaterThan(copy)
   })
 })

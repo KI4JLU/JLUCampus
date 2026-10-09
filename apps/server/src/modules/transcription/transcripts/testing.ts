@@ -1,3 +1,4 @@
+import { FEATURE_KEYS } from '@justcampus/shared'
 import { TRANSCRIPTION_DEFAULT_CONFIG, type TranscriptionComponentConfig } from '@justcampus/shared'
 import { Hono } from 'hono'
 import type { Server } from 'node:http'
@@ -32,6 +33,14 @@ export function testApp(
 ): Hono<AppEnvironment> {
   const app = new Hono<AppEnvironment>()
   app.use('*', async (context, next) => {
+    context.set(
+      'access',
+      Promise.resolve({
+        isAdmin: false,
+        componentIds: new Set([COMPONENT_ID]),
+        features: new Set(FEATURE_KEYS)
+      })
+    )
     context.set('session', {
       user: { id: options.userId ?? 'alice', language: options.language ?? 'de' }
     } as unknown as AppEnvironment['Variables']['session'])

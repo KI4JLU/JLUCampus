@@ -141,6 +141,13 @@
       "when": 1791443010665,
       "tag": "0019_component_name_translations",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791528129130,
+      "tag": "0020_app_roles",
+      "breakpoints": true
     }
   ]
 }

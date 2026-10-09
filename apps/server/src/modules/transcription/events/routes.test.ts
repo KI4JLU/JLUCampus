@@ -10,7 +10,8 @@ const state = vi.hoisted(() => ({
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   list: vi.fn(),
-  start: vi.fn()
+  start: vi.fn(),
+  access: vi.fn()
 }))
 vi.mock('./hub.js', () => ({
   transcriptionEventsHub: {
@@ -25,8 +26,13 @@ vi.mock('./hub.js', () => ({
 vi.mock('../jobs/store.js', () => ({ listJobs: state.list }))
 vi.mock('../jobs/rows.js', () => ({ publicJob: (row: unknown) => row }))
 vi.mock('../../context.js', () => ({ getModuleRuntime: () => ({ componentId: 'component' }) }))
+vi.mock('../realtime/access.js', () => ({ hasModuleAccess: state.access }))
 
-import { eventsRouter, TRANSCRIPTION_EVENTS_MAX_AGE_MS } from './index.js'
+import {
+  eventsRouter,
+  TRANSCRIPTION_EVENTS_ACCESS_CHECK_MS,
+  TRANSCRIPTION_EVENTS_MAX_AGE_MS
+} from './index.js'
 
 const app = new Hono<AppEnvironment>()
 app.use('*', (context, next) => {
@@ -43,6 +49,7 @@ beforeEach(() => {
   state.subscribe.mockClear()
   state.start.mockReset().mockResolvedValue(undefined)
   state.list.mockReset().mockResolvedValue([])
+  state.access.mockReset().mockResolvedValue(true)
 })
 afterEach(() => {
   state.close()
@@ -112,6 +119,26 @@ describe('transcription event stream', () => {
       }
     })()
     await vi.advanceTimersByTimeAsync(TRANSCRIPTION_EVENTS_MAX_AGE_MS - 25_000)
+    await draining
+    expect(state.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('closes once the user may no longer use the component', async () => {
+    vi.useFakeTimers()
+    const { read, reader: stream } = await reader()
+    await read()
+    await read()
+    const draining = (async () => {
+      while (!(await stream.read()).done) {
+        /* drain heartbeats */
+      }
+    })()
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_EVENTS_ACCESS_CHECK_MS)
+    expect(state.access).toHaveBeenCalledWith('user', 'component')
+    expect(state.unsubscribe).not.toHaveBeenCalled()
+    state.access.mockResolvedValue(false)
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_EVENTS_ACCESS_CHECK_MS)
     await draining
     expect(state.unsubscribe).toHaveBeenCalledTimes(1)
     expect(vi.getTimerCount()).toBe(0)

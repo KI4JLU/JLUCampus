@@ -43,7 +43,8 @@ import { useTranscriptionWorkspace } from '../use-workspace'
 import type { ExportCategory } from './files'
 import { isSpeakerVisible, speakerColorId, speakerLabel, speakersInOrder } from './format'
 import { TRANSCRIPT_FORMATTING_ID } from './formatting-focus'
-import { useSpeakerLabels } from './hooks'
+import { useFeature } from '@/lib/features'
+import { useExportCategory, useSpeakerLabels } from './hooks'
 import { SpeakerAvatar } from './parts'
 import { formatDetails, isChoice, uniqueFormatName } from './presets'
 import { exportActions, useExportState } from './store'
@@ -60,7 +61,7 @@ const PRESET_ICONS: Record<TranscriptPresetId, ReactNode> = {
 
 /** The export's settings in the side column: what to export, and how the transcript looks. */
 export function ExportSettings(): React.JSX.Element {
-  const { category } = useExportState()
+  const category = useExportCategory()
   return (
     <div className="flex flex-col gap-stack-lg">
       <CategoryChoice />
@@ -77,21 +78,30 @@ interface CategoryOption {
   description: string
 }
 
-/** kiChat's export cards in their groups: documents, video, data (T-41). */
+/**
+ * kiChat's export cards in their groups: documents, video, data (T-41). The summary only for users
+ * whose roles allow AI summaries.
+ */
 function CategoryChoice(): React.JSX.Element {
   const { t } = useTranslation()
-  const { category } = useExportState()
+  const category = useExportCategory()
+  const summaries = useFeature('transcription.summaries')
   const id = useId()
-  const groups: { label: string; options: CategoryOption[] }[] = [
-    {
-      label: t('transcription.export.categoryDocuments'),
-      options: [
+  const summary: CategoryOption[] = summaries
+    ? [
         {
           value: 'summary',
           icon: <ListChecksIcon {...ICON} />,
           title: t('transcription.export.summary'),
           description: t('transcription.export.summaryDesc')
-        },
+        }
+      ]
+    : []
+  const groups: { label: string; options: CategoryOption[] }[] = [
+    {
+      label: t('transcription.export.categoryDocuments'),
+      options: [
+        ...summary,
         {
           value: 'transcript',
           icon: <MessagesSquareIcon {...ICON} />,

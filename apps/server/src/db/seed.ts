@@ -2,34 +2,40 @@ import { COMPONENT_WIDGETS, type ComponentType } from '@justcampus/shared'
 import { eq, sql } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 
+import { ensureBuiltInRoles, grantEveryoneComponent } from '../access.js'
 import { client, db } from './index.js'
 import { component, folderTemplate, folderTemplateItem, layoutPreset } from './schema.js'
 
 try {
+  await ensureBuiltInRoles()
   const result = await db.select({ count: sql<number>`count(*)::int` }).from(component)
   const count = result[0]?.count ?? 0
 
   if (count === 0) {
-    await db.insert(component).values([
-      {
-        name: 'JLU website',
-        type: 'iframe',
-        icon: 'graduation-cap',
-        iconUrl: null,
-        config: { url: 'https://www.uni-giessen.de' },
-        enabled: true,
-        sortOrder: 0
-      },
-      {
-        name: 'Stud.IP',
-        type: 'iframe',
-        icon: 'book-open',
-        iconUrl: null,
-        config: { url: 'https://studip.uni-giessen.de' },
-        enabled: true,
-        sortOrder: 1
-      }
-    ])
+    const inserted = await db
+      .insert(component)
+      .values([
+        {
+          name: 'JLU website',
+          type: 'iframe',
+          icon: 'graduation-cap',
+          iconUrl: null,
+          config: { url: 'https://www.uni-giessen.de' },
+          enabled: true,
+          sortOrder: 0
+        },
+        {
+          name: 'Stud.IP',
+          type: 'iframe',
+          icon: 'book-open',
+          iconUrl: null,
+          config: { url: 'https://studip.uni-giessen.de' },
+          enabled: true,
+          sortOrder: 1
+        }
+      ])
+      .returning({ id: component.id })
+    for (const { id } of inserted) await grantEveryoneComponent(id)
     console.log('Inserted example components')
   } else {
     console.log('Component catalogue is not empty; skipped seed')

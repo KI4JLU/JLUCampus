@@ -2,81 +2,119 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./db/index.js', () => ({ db: {} }))
 
-import { orderAdminUsers, requireRoleChange, toAdminUser } from './admin-users.js'
-import { ApiError } from './api.js'
+import type { RoleRow } from './access.js'
+import { orderAdminUsers, requireAdminContinuity, toAdminUser } from './admin-users.js'
+import { user } from './db/schema.js'
+
+const now = new Date('2026-10-04T12:00:00Z')
+const adminId = '00000000-0000-4000-8000-000000000001'
+const everyoneId = '00000000-0000-4000-8000-000000000002'
+const roles: RoleRow[] = [
+  {
+    id: adminId,
+    builtIn: 'admin',
+    name: 'Admin',
+    keycloakRoles: ['staff'],
+    keycloakGroups: ['/admins'],
+    features: [],
+    componentIds: [],
+    createdAt: now,
+    updatedAt: now
+  },
+  {
+    id: everyoneId,
+    builtIn: 'everyone',
+    name: 'Alle Nutzenden',
+    keycloakRoles: [],
+    keycloakGroups: [],
+    features: [],
+    componentIds: [],
+    createdAt: now,
+    updatedAt: now
+  }
+]
+const row: typeof user.$inferSelect = {
+  id: 'alice',
+  name: 'Alice',
+  email: 'alice@example.com',
+  image: null,
+  username: null,
+  givenName: null,
+  familyName: null,
+  language: null,
+  emailVerified: true,
+  keycloakRoles: [],
+  keycloakGroups: [],
+  createdAt: now,
+  updatedAt: now,
+  lastSignInAt: now,
+  layoutInitializedAt: now
+}
+const admin = toAdminUser(row, roles, [{ roleId: adminId, userId: row.id, createdAt: now }])
+const bob = toAdminUser({ ...row, id: 'bob' }, roles, [])
 
 describe('admin users', () => {
-  const rows = [
-    { id: 'a', role: 'admin', name: 'zoe' },
-    { id: 'b', role: 'admin', name: 'Alice' },
-    { id: 'c', role: 'user', name: 'bob' },
-    { id: 'd', role: 'user', name: 'Aaron' }
-  ]
-
-  it('orders admins first, then names without case sensitivity', () => {
+  it('orders effective admins first, then names without case sensitivity', () => {
+    const rows = [
+      { ...admin, id: 'a', name: 'zoe' },
+      { ...admin, id: 'b', name: 'Alice' },
+      { ...bob, id: 'c', name: 'bob' },
+      { ...bob, id: 'd', name: 'Aaron' }
+    ]
     expect(orderAdminUsers(rows).map((row) => row.id)).toEqual(['b', 'a', 'd', 'c'])
     expect(rows.map((row) => row.id)).toEqual(['a', 'b', 'c', 'd'])
   })
 
-  it('allows grants, other-admin revocations and unchanged roles', () => {
-    expect(() => requireRoleChange(rows, 'a', 'c', 'admin')).not.toThrow()
-    expect(() => requireRoleChange(rows, 'a', 'b', 'user')).not.toThrow()
-    expect(() => requireRoleChange(rows, 'a', 'a', 'admin')).not.toThrow()
-    expect(() => requireRoleChange(rows, 'a', 'c', 'user')).not.toThrow()
-  })
-
-  it('rejects self-revocation and revoking the only remaining admin', () => {
-    expect(() => requireRoleChange(rows, 'a', 'a', 'user')).toThrow(ApiError)
-    expect(() => requireRoleChange([rows[0]!], 'a', 'a', 'user')).toThrow(
-      expect.objectContaining({ status: 409, code: 'conflict' })
-    )
-  })
-
-  it('rechecks the acting admin after a concurrent revocation', () => {
-    const afterRevocation = rows.map((row) => (row.id === 'b' ? { ...row, role: 'user' } : row))
-    expect(() => requireRoleChange(afterRevocation, 'b', 'a', 'user')).toThrow(
-      'At least one admin must remain'
-    )
-    expect(() => requireRoleChange(rows, 'c', 'a', 'user')).toThrow('Admin role required')
-  })
-
-  it('returns not_found for an unknown target', () => {
-    expect(() => requireRoleChange(rows, 'a', 'missing', 'admin')).toThrow(
-      expect.objectContaining({ status: 404, code: 'not_found' })
-    )
-  })
-
-  it('serializes dates and omits fields outside the shared contract', () => {
-    const now = new Date('2026-10-04T12:00:00Z')
-    const row = {
-      id: 'a',
+  it('serializes manual and Keycloak memberships, excluding everyone', () => {
+    const output = toAdminUser({ ...row, keycloakRoles: ['staff'] }, roles, [
+      { roleId: adminId, userId: 'alice', createdAt: now },
+      { roleId: everyoneId, userId: 'alice', createdAt: now },
+      { roleId: adminId, userId: 'bob', createdAt: now }
+    ])
+    expect(output).toEqual({
+      id: 'alice',
       name: 'Alice',
       email: 'alice@example.com',
       image: null,
       role: 'admin',
-      username: null,
-      givenName: null,
-      familyName: null,
-      language: null,
-      emailVerified: true,
-      keycloakRoles: ['user'],
-      keycloakGroups: [],
-      createdAt: now,
-      updatedAt: now,
-      lastSignInAt: now,
-      layoutInitializedAt: now
-    }
-    expect(toAdminUser(row)).toEqual({
-      id: 'a',
-      name: 'Alice',
-      email: 'alice@example.com',
-      image: null,
-      role: 'admin',
-      keycloakRoles: ['user'],
+      roleIds: [adminId],
+      keycloakRoleIds: [adminId],
+      keycloakRoles: ['staff'],
       keycloakGroups: [],
       createdAt: now.toISOString(),
       lastSignInAt: now.toISOString()
     })
-    expect(toAdminUser({ ...row, lastSignInAt: null }).lastSignInAt).toBeNull()
+    expect(
+      toAdminUser({ ...row, keycloakGroups: ['/admins'], lastSignInAt: null }, roles, [])
+    ).toMatchObject({ role: 'admin', roleIds: [], keycloakRoleIds: [adminId], lastSignInAt: null })
+  })
+
+  it('allows revocations that keep the acting admin and an effective admin', () => {
+    expect(() =>
+      requireAdminContinuity([admin, { ...bob, role: 'admin' }], [admin, bob], 'alice')
+    ).not.toThrow()
+    expect(() => requireAdminContinuity([admin], [admin], 'alice')).not.toThrow()
+  })
+
+  it('refuses self-revocation even when another effective admin remains', () => {
+    expect(() =>
+      requireAdminContinuity(
+        [admin, bob],
+        [
+          { ...admin, role: 'user' },
+          { ...bob, role: 'admin' }
+        ],
+        'alice'
+      )
+    ).toThrow('You cannot revoke your own admin role')
+  })
+
+  it('protects the last effective admin and rechecks a revoked actor', () => {
+    expect(() => requireAdminContinuity([admin], [{ ...admin, role: 'user' }])).toThrow(
+      'At least one admin must remain'
+    )
+    expect(() => requireAdminContinuity([admin, bob], [admin, bob], 'bob')).toThrow(
+      'Admin role required'
+    )
   })
 })

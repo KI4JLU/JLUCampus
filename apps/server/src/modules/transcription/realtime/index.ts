@@ -7,11 +7,13 @@ import {
 import { Hono, type Context } from 'hono'
 import type WebSocket from 'ws'
 
+import { getAccess, requireFeature } from '../../../access.js'
 import { env } from '../../../env.js'
 import { isTrustedWebSocketOrigin, trustedOrigins } from '../../../origin.js'
 import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { defaultRealtimeMode, realtimeModes } from '../config.js'
+import { hasLiveAccess } from './access.js'
 import { realtimeAvailability, realtimeTarget } from './gateway.js'
 import { clientEvents } from './protocol.js'
 import { CLOSE, LiveSession, SessionSlots, type ClientSocket } from './relay.js'
@@ -36,6 +38,8 @@ const origins = trustedOrigins(env.CORS_ORIGINS, env.BETTER_AUTH_URL)
  * left out while the server's probe finds that the gateway refuses, such as a key that may not use
  * the realtime model; `onpremUnavailable` says why.
  */
+realtimeRouter.use('/realtime/*', requireFeature('transcription.live'))
+
 realtimeRouter.get('/realtime/config', async (context) => {
   const { config, secrets } = getModuleRuntime(context, 'transcription')
   let modes = realtimeModes(config, secrets)
@@ -58,11 +62,17 @@ realtimeRouter.get('/realtime/config', async (context) => {
  * gateway) comes as an `error` event on the open socket, since a browser cannot read the status
  * of a refused upgrade.
  */
-function liveGuard(context: Context<AppEnvironment>): Response | null {
+async function liveGuard(context: Context<AppEnvironment>): Promise<Response | null> {
   if (!context.get('session')) {
     return context.json(
       { error: { code: 'unauthorized', message: 'Authentication required' } },
       401
+    )
+  }
+  if (!(await getAccess(context)).features.has('transcription.live')) {
+    return context.json(
+      { error: { code: 'forbidden', message: 'Function permission required' } },
+      403
     )
   }
   if (!isTrustedWebSocketOrigin(context.req.header('Origin'), origins)) {
@@ -91,11 +101,11 @@ function clientSocket(raw: WebSocket): ClientSocket {
 
 realtimeRouter.get(
   '/live',
-  async (context, next) => liveGuard(context) ?? (await next()),
+  async (context, next) => (await liveGuard(context)) ?? (await next()),
   upgradeWebSocket((context) => {
     const typed = context as Context<AppEnvironment>
     const mode = context.req.query('mode') as TranscriptionRealtimeMode
-    const { config, secrets } = getModuleRuntime(typed, 'transcription')
+    const { config, secrets, componentId } = getModuleRuntime(typed, 'transcription')
     const userId = typed.get('session').user.id
     const target = realtimeModes(config, secrets).includes(mode)
       ? realtimeTarget(mode, config, secrets)
@@ -117,7 +127,12 @@ realtimeRouter.get(
           client.close(CLOSE.tryAgain, 'busy')
           return
         }
-        session = new LiveSession({ target, client, onEnd: release })
+        session = new LiveSession({
+          target,
+          client,
+          onEnd: release,
+          checkAccess: () => hasLiveAccess(userId, componentId)
+        })
         void session.start()
       },
       onMessage: (event) => session?.receive(event.data as string | ArrayBuffer),

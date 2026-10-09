@@ -103,7 +103,7 @@
     "loadFailedTitle": "Component could not be loaded",
     "loadFailedDescription": "The server is not responding. Please try again.",
     "notFoundTitle": "Component not found",
-    "notFoundDescription": "This component no longer exists or has been disabled.",
+    "notFoundDescription": "This component no longer exists, has been disabled, or your roles do not allow it.",
     "iframe": {
       "urlLabel": "Address (URL)",
       "urlHint": "The website embedded on the component's page. https only; http is allowed for localhost."
@@ -668,6 +668,7 @@
       "components": "Components",
       "folders": "Folder templates",
       "presets": "Layout presets",
+      "roles": "Roles",
       "users": "Users",
       "modules": "Modules"
     },
@@ -864,9 +865,125 @@
         "dashboardEmptyDescription": "Add JLU widgets, folders, shortcuts and feeds that new users should find on their dashboard."
       }
     },
+    "roles": {
+      "title": "Manage roles",
+      "description": "Roles decide which components and functions users may use. Users get a role automatically through their Keycloak roles and groups, or by hand; they may use everything one of their roles allows.",
+      "newRole": "New role",
+      "loadFailed": "The roles could not be loaded.",
+      "builtIn": {
+        "everyone": "All users",
+        "admin": "Administrators"
+      },
+      "builtInBadge": "Built in",
+      "table": {
+        "caption": "All roles, the built-in ones first",
+        "assignment": "Automatically for",
+        "members": "Assigned by hand",
+        "permissions": "Permissions",
+        "everyone": "All signed-in users",
+        "keycloakRoles": "Keycloak roles: {{names}}",
+        "keycloakGroups": "Keycloak groups: {{names}}",
+        "manualOnly": "By hand only",
+        "memberCount_one": "{{count}} user",
+        "memberCount_other": "{{count}} users",
+        "notApplicable": "Not applicable",
+        "allPermissions": "All permissions",
+        "noPermissions": "No permissions",
+        "permissionSummary": "{{components}} · {{features}}",
+        "componentCount_one": "{{count}} component",
+        "componentCount_other": "{{count}} components",
+        "featureCount_one": "{{count}} function",
+        "featureCount_other": "{{count}} functions",
+        "empty": "No roles yet."
+      },
+      "actions": {
+        "menu": "Actions for {{name}}",
+        "edit": "Edit"
+      },
+      "delete": {
+        "title": "Delete role?",
+        "description": "Whoever has “{{name}}” loses what this role allows, unless another role allows it.",
+        "done": "“{{name}}” deleted.",
+        "failed": "The role could not be deleted."
+      },
+      "form": {
+        "createTitle": "New role",
+        "editTitle": "Edit role: {{name}}",
+        "back": "All roles",
+        "general": "General",
+        "description": "The name shows in the administration, for example with the users.",
+        "everyoneDescription": "Every signed-in user has this role; what it allows, everyone may use.",
+        "adminDescription": "Administrators may do everything, including the administration.",
+        "name": "Name",
+        "builtInNameHint": "Built-in roles keep their name.",
+        "automatic": "Automatic assignment",
+        "automaticDescription": "Whoever signs in with one of these Keycloak roles or groups gets the role automatically. The names must match exactly.",
+        "keycloakRoles": "Keycloak roles",
+        "keycloakRolesHint": "Names of realm roles, e.g. staff. Separate several with commas.",
+        "keycloakGroups": "Keycloak groups",
+        "keycloakGroupsHint": "Full paths, e.g. /Studierende. Separate several with commas.",
+        "add": "Add",
+        "remove": "Remove {{name}}",
+        "noNames": "None",
+        "components": "Components",
+        "componentsDescription": "The components users with this role may use. Nobody sees disabled components until they are enabled again.",
+        "allComponents": "Select all",
+        "noComponents": "Select none",
+        "disabled": "Disabled",
+        "componentsFailed": "The components could not be loaded.",
+        "componentsEmpty": "No components yet.",
+        "features": "Functions",
+        "featuresDescription": "Single functions within the modules. They only take effect together with the module's component.",
+        "permissions": "Permissions",
+        "adminPermissions": "Administrators may do everything, including the administration.",
+        "saveFailed": "The role could not be saved.",
+        "created": "Role created.",
+        "updated": "Role saved.",
+        "notFoundTitle": "Role not found",
+        "notFoundDescription": "This role no longer exists.",
+        "loadFailedTitle": "The role could not be loaded.",
+        "loadFailedDescription": "The server is not responding. Please try again.",
+        "unsavedDescription": "Your changes to this role are not saved yet. If you leave the page, they are lost.",
+        "errors": {
+          "name": "Enter a name of at most {{max}} characters.",
+          "names": "At most {{max}} names.",
+          "lockout": "Not saved: this change would take your own admin role away or leave the app without an administrator."
+        }
+      },
+      "features": {
+        "translator": {
+          "documents": {
+            "label": "Translate documents",
+            "description": "Have whole files translated."
+          },
+          "rephrase": {
+            "label": "Rephrase",
+            "description": "Have texts rewritten in the translator."
+          },
+          "compose": {
+            "label": "AI editor",
+            "description": "Write texts with the translator's AI editor."
+          },
+          "glossaries": {
+            "label": "Glossaries",
+            "description": "Create glossaries and use them when translating."
+          }
+        },
+        "transcription": {
+          "live": {
+            "label": "Live transcription",
+            "description": "Have speech written down while it is being recorded."
+          },
+          "summaries": {
+            "label": "AI summaries",
+            "description": "Have summaries of a transcript written and manage their templates."
+          }
+        }
+      }
+    },
     "users": {
       "title": "Manage users",
-      "description": "Everyone who has signed in to JLU Campus. Grant and revoke the app's admin role here; roles and groups in Keycloak do not change it.",
+      "description": "Everyone who has signed in to JLU Campus. Assign the app's roles by hand here; roles and groups in Keycloak do not change.",
       "loadFailed": "The users could not be loaded.",
       "search": "Search users",
       "searchPlaceholder": "Search by name or e-mail",
@@ -875,7 +992,7 @@
       "table": {
         "caption": "All users, admins first",
         "email": "E-mail",
-        "role": "Role",
+        "role": "Roles",
         "lastSignIn": "Last sign-in",
         "empty": "Nobody has signed in yet.",
         "noMatch": "No user matches “{{query}}”."
@@ -887,26 +1004,24 @@
       "role": {
         "admin": "Admin",
         "user": "Standard",
-        "grant": "Make admin",
-        "revoke": "Revoke admin rights",
-        "grantHint": "Admins manage components, templates and the admin rights of others.",
-        "revokeHint": "The role only applies in JLU Campus, independently of Keycloak.",
-        "selfHint": "You cannot revoke your own admin rights.",
-        "granted": "“{{name}}” is now an admin.",
-        "revoked": "“{{name}}” is no longer an admin.",
-        "conflict": "Nobody can revoke their own admin rights, and at least one admin must remain.",
-        "failed": "The role could not be changed."
+        "viaKeycloak": "via Keycloak",
+        "assign": "Assign roles",
+        "assignHint": "Roles assigned by hand apply in addition to those via Keycloak.",
+        "saved": "Roles of “{{name}}” saved.",
+        "conflict": "Nobody can take away their own admin role, and at least one administrator must remain.",
+        "failed": "The roles could not be saved."
       },
-      "confirm": {
-        "grantTitle": "Make admin?",
-        "grantDescription": "“{{name}}” gets access to the administration area and can manage components, templates and the admin rights of others there.",
-        "grantAction": "Make admin",
-        "revokeTitle": "Revoke admin rights?",
-        "revokeDescription": "“{{name}}” loses access to the administration area. Roles and groups in Keycloak stay as they are.",
-        "revokeAction": "Revoke"
+      "assign": {
+        "title": "Assign roles",
+        "description": "Roles assigned to “{{name}}” by hand. Roles via Keycloak apply regardless and follow the last sign-in.",
+        "roles": "Roles",
+        "automatic": "Automatically via Keycloak",
+        "selfAdminHint": "You cannot remove your own admin role.",
+        "loadFailed": "The roles could not be loaded.",
+        "empty": "There are no roles yet besides “All users”."
       },
       "details": {
-        "role": "Role in JLU Campus",
+        "role": "Roles in JLU Campus",
         "keycloakRoles": "Keycloak roles",
         "keycloakGroups": "Keycloak groups",
         "keycloakHint": "Roles and groups are those of the last sign-in.",
