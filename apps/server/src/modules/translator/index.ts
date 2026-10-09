@@ -129,6 +129,15 @@ async function viewer(context: Context<AppEnvironment>): Promise<GlossaryViewer>
   return glossaryViewer(user.id, (await getAccess(context)).isAdmin)
 }
 
+async function requireGlossaryAccess(
+  context: Context<AppEnvironment>,
+  glossaryIds: readonly string[]
+): Promise<void> {
+  if (glossaryIds.length > 0 && !(await getAccess(context)).features.has('translator.glossaries')) {
+    throw new ApiError(403, 'forbidden', 'Function permission required')
+  }
+}
+
 function llmTarget(runtime: ModuleRuntime<'translator'>, model: string): LlmTarget {
   return { baseUrl: runtime.config.llmBaseUrl!, apiKey: runtime.secrets.llmApiKey, model }
 }
@@ -276,6 +285,7 @@ translatorApp.post('/documents', async (context) => {
         'Request validation failed',
         validationIssues(parsed.error)
       )
+    await requireGlossaryAccess(context, parsed.data.glossaryIds)
     const file = new File([uploaded], filename, { type: uploaded.type })
     const signal = upstreamSignal(context.req.raw.signal)
     // A glossary needs a source language at DeepL. As in HAWKI, a document whose language is
@@ -411,6 +421,7 @@ translatorApp.delete('/documents/:id', async (context) => {
 
 translatorApp.post('/translate', async (context) => {
   const input = await parseBody(context, translateRequestSchema)
+  await requireGlossaryAccess(context, input.glossaryIds)
   const runtime = getModuleRuntime(context, 'translator')
   const { config, secrets, componentId } = runtime
   const engine = resolveEngine(input.engine, config, secrets)
@@ -427,6 +438,7 @@ translatorApp.post('/translate', async (context) => {
 
 translatorApp.post('/rephrase', async (context) => {
   const input = await parseBody(context, rephraseRequestSchema)
+  await requireGlossaryAccess(context, input.glossaryIds)
   const runtime = getModuleRuntime(context, 'translator')
   const { config, secrets, componentId } = runtime
   const engine = resolveEngine(input.engine, config, secrets)

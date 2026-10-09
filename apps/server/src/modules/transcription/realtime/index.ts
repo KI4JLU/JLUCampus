@@ -13,6 +13,7 @@ import { isTrustedWebSocketOrigin, trustedOrigins } from '../../../origin.js'
 import { getModuleRuntime } from '../../context.js'
 import type { AppEnvironment } from '../../types.js'
 import { defaultRealtimeMode, realtimeModes } from '../config.js'
+import { hasLiveAccess } from './access.js'
 import { realtimeAvailability, realtimeTarget } from './gateway.js'
 import { clientEvents } from './protocol.js'
 import { CLOSE, LiveSession, SessionSlots, type ClientSocket } from './relay.js'
@@ -104,7 +105,7 @@ realtimeRouter.get(
   upgradeWebSocket((context) => {
     const typed = context as Context<AppEnvironment>
     const mode = context.req.query('mode') as TranscriptionRealtimeMode
-    const { config, secrets } = getModuleRuntime(typed, 'transcription')
+    const { config, secrets, componentId } = getModuleRuntime(typed, 'transcription')
     const userId = typed.get('session').user.id
     const target = realtimeModes(config, secrets).includes(mode)
       ? realtimeTarget(mode, config, secrets)
@@ -126,7 +127,12 @@ realtimeRouter.get(
           client.close(CLOSE.tryAgain, 'busy')
           return
         }
-        session = new LiveSession({ target, client, onEnd: release })
+        session = new LiveSession({
+          target,
+          client,
+          onEnd: release,
+          checkAccess: () => hasLiveAccess(userId, componentId)
+        })
         void session.start()
       },
       onMessage: (event) => session?.receive(event.data as string | ArrayBuffer),

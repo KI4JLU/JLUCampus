@@ -1043,6 +1043,7 @@ describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 …
       stuck?: boolean
       slow?: boolean
       onEnd?: () => void
+      checkAccess?: () => Promise<boolean>
     } = {}
   ): Scripted {
     const client = new FakeClient()
@@ -1058,6 +1059,7 @@ describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 …
         model
       },
       client,
+      checkAccess: options.checkAccess,
       onEnd: () => {
         ended += 1
         options.onEnd?.()
@@ -1109,6 +1111,93 @@ describe('live sessions against a scripted gateway (reviews W-1 … W-8, X-1 …
     for (const event of client.events) text += browser.handle(event).text ?? ''
     return { text, browser }
   }
+
+  it.each(['onprem', 'openai'] as const)(
+    'rechecks %s access every minute and stops audio and both sockets after revocation',
+    async (mode) => {
+      vi.useFakeTimers()
+      const checkAccess = vi
+        .fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+      const { client, live, streams, ended } = scripted(mode, {
+        checkAccess,
+        limits: { watchIntervalMs: 1000, idleMs: 600_000 }
+      })
+      try {
+        await live.start()
+        await vi.advanceTimersByTimeAsync(59_999)
+        expect(checkAccess).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(checkAccess).toHaveBeenCalledTimes(1)
+        expect(live.closed).toBe(false)
+        live.receive(append(100, mode === 'onprem' ? 16_000 : 24_000))
+        const stream = streams[0]!
+        expect(stream.of('input_audio_buffer.append')).toHaveLength(1)
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(checkAccess).toHaveBeenCalledTimes(2)
+        expect(client.closed).toEqual({ code: CLOSE.policy, reason: 'permission_revoked' })
+        expect(live.closed).toBe(true)
+        live.receive(append(100, mode === 'onprem' ? 16_000 : 24_000))
+        expect(stream.of('input_audio_buffer.append')).toHaveLength(1)
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(stream.readyState).toBe(WebSocket.CLOSED)
+        expect(ended()).toBe(true)
+        expect(checkAccess).toHaveBeenCalledTimes(2)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        live.close()
+        await vi.advanceTimersByTimeAsync(1000)
+        vi.useRealTimers()
+      }
+    }
+  )
+
+  it('does not overlap access reads while a database check is pending', async () => {
+    vi.useFakeTimers()
+    let resolve!: (allowed: boolean) => void
+    const checkAccess = vi.fn(
+      () =>
+        new Promise<boolean>((done) => {
+          resolve = done
+        })
+    )
+    const { client, live } = scripted('onprem', {
+      checkAccess,
+      limits: { watchIntervalMs: 1000, idleMs: 600_000 }
+    })
+    try {
+      await live.start()
+      await vi.advanceTimersByTimeAsync(180_000)
+      expect(checkAccess).toHaveBeenCalledTimes(1)
+      resolve(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.closed).toEqual({ code: CLOSE.policy, reason: 'permission_revoked' })
+    } finally {
+      live.close()
+      await vi.advanceTimersByTimeAsync(1000)
+      vi.useRealTimers()
+    }
+  })
+
+  it('closes the socket when its fresh access check fails', async () => {
+    vi.useFakeTimers()
+    const { client, live } = scripted('onprem', {
+      checkAccess: vi.fn(async () => {
+        throw new Error('database unavailable')
+      }),
+      limits: { watchIntervalMs: 1000, idleMs: 600_000 }
+    })
+    try {
+      await live.start()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(client.closed).toEqual({ code: CLOSE.error, reason: 'access_check_failed' })
+    } finally {
+      live.close()
+      await vi.advanceTimersByTimeAsync(1000)
+      vi.useRealTimers()
+    }
+  })
 
   it('W-1: commits gpt-realtime-whisper’s audio at a quiet frame or after the longest turn', async () => {
     const { live, streams } = scripted('openai')

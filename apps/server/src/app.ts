@@ -127,7 +127,8 @@ async function readMe(context: Context<AppEnvironment>): Promise<Me> {
   return meSchema.parse({
     ...record,
     role: access.isAdmin ? 'admin' : 'user',
-    features: [...access.features]
+    features: [...access.features],
+    componentIds: [...access.componentIds]
   })
 }
 

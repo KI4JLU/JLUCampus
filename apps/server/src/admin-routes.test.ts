@@ -5,10 +5,13 @@ import {
   componentListSchema,
   widgetListSchema,
   dashboardSchema,
+  meSchema,
   folderTemplateListSchema,
   FEATURE_KEYS
 } from '@justcampus/shared'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { hasLiveAccess } from './modules/transcription/realtime/access.js'
 
 const state = vi.hoisted(() => ({
   actorId: 'alice',
@@ -678,15 +681,88 @@ describe('component access and me', () => {
     )
   })
 
-  it('returns derived roles and all admin features', async () => {
-    const admin = await app.request('/api/me')
-    expect(await admin.json()).toMatchObject({ role: 'admin', features: [...FEATURE_KEYS] })
-    state.actorId = 'carol'
-    state.tables.app_role![2]!.features = ['translator.documents']
-    expect(await (await app.request('/api/me')).json()).toMatchObject({
-      role: 'user',
-      features: ['translator.documents']
-    })
+  it.each(['GET', 'PATCH'])(
+    'returns allowed components, including disabled ones, from %s me',
+    async (method) => {
+      state.tables.component![0]!.enabled = false
+      state.tables.component![1]!.enabled = false
+      const me = (): Response | Promise<Response> =>
+        method === 'GET' ? app.request('/api/me') : request('PATCH', '/api/me', { language: 'en' })
+      const admin = await me()
+      expect(admin.status).toBe(200)
+      expect(meSchema.parse(await admin.json())).toMatchObject({
+        role: 'admin',
+        features: [...FEATURE_KEYS],
+        componentIds: [componentId, hiddenId],
+        language: method === 'PATCH' ? 'en' : null
+      })
+      state.actorId = 'carol'
+      state.tables.app_role![2]!.features = ['translator.documents']
+      const reader = await me()
+      expect(reader.status).toBe(200)
+      expect(meSchema.parse(await reader.json())).toMatchObject({
+        role: 'user',
+        features: ['translator.documents'],
+        componentIds: [componentId],
+        language: method === 'PATCH' ? 'en' : null
+      })
+      state.tables.app_role_component = []
+      expect(meSchema.parse(await (await me()).json()).componentIds).toEqual([])
+    }
+  )
+})
+
+describe('fresh live transcription access', () => {
+  beforeEach(() => {
+    state.tables.component![0]!.type = 'transcription'
+  })
+
+  it.each([
+    'feature',
+    'component grant',
+    'disabled component',
+    'deleted component',
+    'deleted user'
+  ])('detects a revoked %s after the socket opened', async (revoked) => {
+    expect(await hasLiveAccess('carol', componentId)).toBe(true)
+    switch (revoked) {
+      case 'feature':
+        state.tables.app_role![2]!.features = []
+        break
+      case 'component grant':
+        state.tables.app_role_component = []
+        break
+      case 'disabled component':
+        state.tables.component![0]!.enabled = false
+        break
+      case 'deleted component':
+        state.tables.component = []
+        break
+      case 'deleted user':
+        state.tables.user = []
+        break
+    }
+    expect(await hasLiveAccess('carol', componentId)).toBe(false)
+  })
+
+  it('detects revocation of the manual admin role that granted live access', async () => {
+    state.tables.app_role![2]!.features = []
+    state.tables.app_role_component = []
+    expect(await hasLiveAccess('alice', componentId)).toBe(true)
+    state.tables.app_role_member = state.tables.app_role_member!.filter(
+      (member) => member.userId !== 'alice'
+    )
+    expect(await hasLiveAccess('alice', componentId)).toBe(false)
+  })
+
+  it('detects revocation of the Keycloak rule that granted admin access', async () => {
+    state.tables.app_role![2]!.features = []
+    state.tables.app_role_component = []
+    state.tables.app_role![1]!.keycloakRoles = ['staff']
+    state.tables.user![2]!.keycloakRoles = ['staff']
+    expect(await hasLiveAccess('carol', componentId)).toBe(true)
+    state.tables.app_role![1]!.keycloakRoles = []
+    expect(await hasLiveAccess('carol', componentId)).toBe(false)
   })
 })
 
