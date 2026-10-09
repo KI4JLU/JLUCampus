@@ -693,6 +693,11 @@ allows every signed-in user and is the entry point for future audience rules.
   stays until the page is left). Bodies are Markdown, rendered read-only by
   Tiptap (`components/markdown-view.tsx`, with single line breaks kept through
   a `marked` instance of its own), so no HTML from the text reaches the page.
+  In the admin editor, "Translate from German" fills the English title and
+  text through the translator module's `/translate` with its default engine
+  (`lib/announcement-translation.ts`): only each line's words go out, list
+  markers, indentation and blank lines stay as written; the result is unsaved
+  until the admin saves.
   Hints never open by themselves: document-level
   listeners (capture phase) find the oldest unread, path-matching hint whose
   selector `closest()`-matches the pressed or clicked element (`hintForClick`)

@@ -1119,6 +1119,22 @@
           "selectorInvalid": "This is not a valid CSS selector.",
           "path": "Enter a path that starts with / and has at most one * at the end (at most {{max}} characters)."
         }
+      },
+      "translate": {
+        "button": "Translate from {{from}}",
+        "from": {
+          "de": "German",
+          "en": "English"
+        },
+        "pending": "Translating …",
+        "hint": "Fills title and text using the translator's default engine. Please check before saving.",
+        "needsSource": "Write the title and text in {{from}} first, then translate.",
+        "unavailable": "The translator is not set up, so translation is unavailable.",
+        "done": "Translated. Please check before saving.",
+        "failed": "The translation failed. Please try again.",
+        "replaceTitle": "Replace text?",
+        "replaceDescription": "This language's title and text are replaced by a translation from {{from}}.",
+        "replace": "Replace"
       }
     }
   },
