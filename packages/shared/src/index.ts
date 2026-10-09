@@ -142,6 +142,11 @@ export const meSchema = z.object({
   role: userRoleSchema,
   /** The module functions the user may use; every one of them for admins. */
   features: z.array(featureKeySchema),
+  /**
+   * The components the user's roles allow (enabled or not; every one for admins). Clients poll
+   * `API.me` and reload their component, sidebar and dashboard data when this changes.
+   */
+  componentIds: z.array(z.uuid()),
   /** `null` until the user picked one; clients then fall back to the browser language. */
   language: languageSchema.nullable()
 })
