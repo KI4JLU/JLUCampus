@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { CheckIcon, LogOutIcon, SettingsIcon, ShieldIcon } from 'lucide-react'
+import { CheckIcon, LogOutIcon, SettingsIcon, ShieldIcon, SparklesIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   DropdownMenuItem,
@@ -10,18 +10,24 @@ import {
 } from '@ki4jlu/design-system'
 import { LANGUAGES, type Me } from '@justcampus/shared'
 import { useLanguage } from '@/lib/language'
+import { useOpenNews } from '@/lib/news-context'
 import { signOut } from '@/lib/session'
 import { toast } from '@/lib/toast'
+import { TOUR } from '@/lib/tour-targets'
 import { UserSettingsDialog } from './user-settings-dialog'
 
 const ICON = { 'aria-hidden': true, width: '1em', height: '1em' } as const
 
-/** The signed-in user at the foot of the column, with settings, admin, language and sign-out. */
+/**
+ * The signed-in user at the foot of the column, with settings, the news, admin, language and
+ * sign-out.
+ */
 export function AccountMenu({ me }: { me: Me }): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { language, setLanguage } = useLanguage({ persist: true })
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const openNews = useOpenNews()
   const menuRef = useRef<HTMLDivElement>(null)
   const displayName = me.name || me.email
 
@@ -47,11 +53,17 @@ export function AccountMenu({ me }: { me: Me }): React.JSX.Element {
   }
 
   return (
-    <div ref={menuRef} className="contents">
+    <div ref={menuRef} className="contents" data-tour={TOUR.accountMenu}>
       <SidebarUserMenu initials={initialsOf(displayName)} name={displayName} role={me.email}>
         <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
           <SettingsIcon {...ICON} />
           {t('account.settings')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => openNews(menuRef.current?.querySelector('button') ?? null)}
+        >
+          <SparklesIcon {...ICON} />
+          {t('account.news')}
         </DropdownMenuItem>
         {me.role === 'admin' ? (
           <DropdownMenuItem asChild>

@@ -21,6 +21,7 @@ import {
   type FeedFields,
   type ShortcutFields
 } from '@/lib/dashboard'
+import { TOUR } from '@/lib/tour-targets'
 import type { ComponentWidget } from '@/lib/widgets'
 import { AddWidgetDialog } from './add-widget-dialog'
 import { DashboardGrid } from './dashboard-grid'
@@ -154,7 +155,11 @@ export function DashboardEditor({
   const actions = (
     <>
       {editing ? (
-        <Button variant="outline" onClick={() => setAdding(true)}>
+        <Button
+          variant="outline"
+          onClick={() => setAdding(true)}
+          data-tour={TOUR.dashboardAddWidget}
+        >
           <PlusIcon {...ICON} />
           {t('dashboard.addWidget')}
         </Button>
@@ -164,6 +169,7 @@ export function DashboardEditor({
           variant={editing ? 'default' : 'outline'}
           aria-pressed={editing}
           onClick={editing ? finishEditing : startEditing}
+          data-tour={TOUR.dashboardEdit}
         >
           {editing ? <CheckIcon {...ICON} /> : <PencilIcon {...ICON} />}
           {editing ? t('dashboard.done') : t('dashboard.edit')}
@@ -228,7 +234,7 @@ function EmptyDashboard({
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent className="flex justify-center">
-        <Button onClick={onAdd}>
+        <Button onClick={onAdd} data-tour={TOUR.dashboardAddWidget}>
           <PlusIcon {...ICON} />
           {t('dashboard.addWidget')}
         </Button>

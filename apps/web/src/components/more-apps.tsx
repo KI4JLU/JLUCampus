@@ -12,6 +12,7 @@ import {
   PopoverTrigger
 } from '@ki4jlu/design-system'
 import type { Component } from '@justcampus/shared'
+import { TOUR } from '@/lib/tour-targets'
 import type { SidebarArrangement } from '@/lib/use-sidebar-arrangement'
 import { cn } from '@/lib/utils'
 import { SidebarEditRow } from './sidebar-edit-row'
@@ -34,7 +35,7 @@ export function MoreAppsButton(): React.JSX.Element {
   const label = t('nav.moreApps')
   return (
     <PopoverTrigger asChild>
-      <NavItem type="button" label={label}>
+      <NavItem type="button" label={label} data-tour={TOUR.moreApps}>
         <GripIcon {...icon} />
         <span>{label}</span>
       </NavItem>

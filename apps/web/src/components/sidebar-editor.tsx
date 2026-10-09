@@ -11,6 +11,7 @@ import { externalLinkProps } from '@/lib/external'
 import { componentsQuery, sidebarQuery, useSaveSidebar } from '@/lib/queries'
 import { keepHiddenIds } from '@/lib/sidebar-hidden'
 import { toast } from '@/lib/toast'
+import { componentTourId } from '@/lib/tour-targets'
 import { useFeedHasUnread } from '@/lib/use-feed'
 import { useMediaQuery } from '@/lib/use-media-query'
 import { useSidebarArrangement } from '@/lib/use-sidebar-arrangement'
@@ -68,7 +69,7 @@ function SidebarComponentLink({
   const feedUrl = feedUrlOf(component)
   if (url) {
     return (
-      <NavItem asChild label={component.name}>
+      <NavItem asChild label={component.name} data-tour={componentTourId(component.id)}>
         <a {...externalLinkProps(url)}>
           <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} siteUrl={url} />
           <span className="truncate">{component.name}</span>
@@ -109,7 +110,13 @@ function ComponentPageLink({
   // Collapsed, the row's text is hidden and `label` is its name.
   const label = unread ? `${component.name} ${unreadText}` : component.name
   return (
-    <NavItem asChild label={label} active={active} className={unread ? 'relative' : undefined}>
+    <NavItem
+      asChild
+      label={label}
+      active={active}
+      className={unread ? 'relative' : undefined}
+      data-tour={componentTourId(component.id)}
+    >
       <Link to="/c/$componentId" params={{ componentId: component.id }}>
         <ComponentIcon icon={component.icon} iconUrl={component.iconUrl} />
         <span className="truncate">{component.name}</span>

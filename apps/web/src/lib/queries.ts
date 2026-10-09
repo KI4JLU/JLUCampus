@@ -12,6 +12,7 @@ import {
   type UseQueryResult
 } from '@tanstack/react-query'
 import {
+  ANNOUNCEMENTS_API,
   API,
   rephraseResponseSchema,
   translateResponseSchema,
@@ -25,8 +26,11 @@ import {
   translatorGlossaryListSchema,
   translatorModelListSchema,
   translatorSuggestResponseSchema,
+  type AdminAnnouncement,
+  type AdminAnnouncementList,
   type AdminComponent,
   type AdminComponentList,
+  type AnnouncementInput,
   type AdminUser,
   type AdminUserList,
   type Component,
@@ -65,6 +69,7 @@ import {
   type TranslatorModelsRequest,
   type TranslatorPythonResponse,
   type TranslatorSuggestRequest,
+  type UserAnnouncementList,
   type UserFeed,
   type UserRole,
   type WidgetList
@@ -111,6 +116,9 @@ export const queryKeys = {
   adminPreset: (id: string) => ['admin', 'preset', id] as const,
   adminPresetAudiences: ['admin', 'preset-audiences'] as const,
   adminUsers: ['admin', 'users'] as const,
+  announcements: ['announcements'] as const,
+  adminAnnouncements: ['admin', 'announcements'] as const,
+  adminAnnouncement: (id: string) => ['admin', 'announcement', id] as const,
   feed: (url: string) => ['feed', url] as const,
   translatorEngines: ['translator', 'engines'] as const,
   translatorDocuments: ['translator', 'documents'] as const,
@@ -382,6 +390,48 @@ export const adminUsersQuery = queryOptions({
   queryFn: () => apiFetch<AdminUserList>(API.adminUsers),
   select: (data) => data.users
 })
+
+/**
+ * The announcements meant for the user, with both languages. Polled rarely: news open when the app
+ * starts, and a hint published meanwhile can wait a few minutes. An answer from the server is not
+ * retried; announcements are never worth an error on screen.
+ */
+export const announcementsQuery = queryOptions({
+  queryKey: queryKeys.announcements,
+  queryFn: () => apiFetch<UserAnnouncementList>(ANNOUNCEMENTS_API.announcements),
+  select: (data) => data.announcements,
+  staleTime: 5 * 60_000,
+  refetchInterval: 15 * 60_000,
+  retry: (count, error) => !(error instanceof ApiRequestError) && count < 2
+})
+
+/** Every announcement, drafts too, newest first, with how many users acknowledged each. */
+export const adminAnnouncementsQuery = queryOptions({
+  queryKey: queryKeys.adminAnnouncements,
+  queryFn: () => apiFetch<AdminAnnouncementList>(ANNOUNCEMENTS_API.admin),
+  select: (data) => data.announcements
+})
+
+type AnnouncementQueryKey = ReturnType<typeof queryKeys.adminAnnouncement>
+type AnnouncementQueryOptions = UndefinedInitialDataOptions<
+  AdminAnnouncement,
+  Error,
+  AdminAnnouncement,
+  AnnouncementQueryKey
+> & {
+  queryKey: DataTag<AnnouncementQueryKey, AdminAnnouncement, Error>
+}
+
+/** One announcement for its editor; fetched like `adminComponentQuery`, for the same reasons. */
+export function adminAnnouncementQuery(id: string): AnnouncementQueryOptions {
+  return queryOptions({
+    queryKey: queryKeys.adminAnnouncement(id),
+    queryFn: () => apiFetch<AdminAnnouncement>(ANNOUNCEMENTS_API.adminOne(id)),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: (count, error) => !(error instanceof ApiRequestError) && count < 2
+  })
+}
 
 export function useUpdateMe(): UseMutationResult<Me, Error, MePatch> {
   const client = useQueryClient()
@@ -920,6 +970,82 @@ export function useSetUserRole(): UseMutationResult<
       )
       return client.invalidateQueries({ queryKey: queryKeys.adminUsers })
     }
+  })
+}
+
+/**
+ * Marks an announcement acknowledged. The cached list says so at once and keeps saying so when the
+ * request fails, so a hint the user closed does not come back before the next refetch.
+ */
+export function useMarkAnnouncementSeen(): UseMutationResult<void, Error, string> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiFetch<void>(ANNOUNCEMENTS_API.seen(id), { method: 'POST' }),
+    onMutate: async (id) => {
+      await client.cancelQueries({ queryKey: queryKeys.announcements })
+      client.setQueryData<UserAnnouncementList>(queryKeys.announcements, (list) =>
+        list
+          ? {
+              announcements: list.announcements.map((item) =>
+                item.id === id ? { ...item, seen: true } : item
+              )
+            }
+          : list
+      )
+    }
+  })
+}
+
+/** Announcement changes reach the admin list and what users are shown (the admin is one). */
+function invalidateAnnouncements(client: QueryClient): Promise<void> {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: queryKeys.adminAnnouncements }),
+    client.invalidateQueries({ queryKey: queryKeys.announcements })
+  ]).then(() => undefined)
+}
+
+export function useCreateAnnouncement(): UseMutationResult<
+  AdminAnnouncement,
+  Error,
+  AnnouncementInput
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AnnouncementInput) =>
+      apiFetch<AdminAnnouncement>(ANNOUNCEMENTS_API.admin, { method: 'POST', json: input }),
+    onSuccess: () => invalidateAnnouncements(client)
+  })
+}
+
+export function useUpdateAnnouncement(): UseMutationResult<
+  AdminAnnouncement,
+  Error,
+  { id: string; input: AnnouncementInput }
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: AnnouncementInput }) =>
+      apiFetch<AdminAnnouncement>(ANNOUNCEMENTS_API.adminOne(id), { method: 'PUT', json: input }),
+    onSuccess: () => invalidateAnnouncements(client)
+  })
+}
+
+export function useDeleteAnnouncement(): UseMutationResult<void, Error, string> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<void>(ANNOUNCEMENTS_API.adminOne(id), { method: 'DELETE' }),
+    onSuccess: () => invalidateAnnouncements(client)
+  })
+}
+
+/** Forgets every acknowledgement of an announcement, so all users see it again. */
+export function useResetAnnouncement(): UseMutationResult<AdminAnnouncement, Error, string> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<AdminAnnouncement>(ANNOUNCEMENTS_API.adminReset(id), { method: 'POST' }),
+    onSuccess: () => invalidateAnnouncements(client)
   })
 }
 

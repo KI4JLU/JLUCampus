@@ -3,6 +3,7 @@ import { Outlet } from '@tanstack/react-router'
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import type { Component } from '@justcampus/shared'
 import { isAvailableHere } from '@/adapters/registry'
+import { AnnouncementHost } from '@/components/announcement-host'
 import { AppFrame } from '@/components/app-frame'
 import { DesktopServices } from '@/desktop/desktop-services'
 import { componentsQuery, meQuery, sidebarQuery } from '@/lib/queries'
@@ -25,9 +26,11 @@ export function AppLayout(): React.JSX.Element {
 
   return (
     <>
-      <AppFrame me={me} sidebarComponents={sidebarComponents}>
-        <Outlet />
-      </AppFrame>
+      <AnnouncementHost>
+        <AppFrame me={me} sidebarComponents={sidebarComponents}>
+          <Outlet />
+        </AppFrame>
+      </AnnouncementHost>
       <DesktopServices sidebarComponents={sidebarComponents} />
     </>
   )

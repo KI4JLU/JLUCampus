@@ -621,7 +621,8 @@ allows every signed-in user and is the entry point for future audience rules.
   `/login`, `/` (dashboard), `/c/$componentId` (component full page),
   `/admin/components`, `/admin/components/new` and `/admin/components/$componentId` (the
   component editor), `/admin/folders`, `/admin/users` ("Nutzer" tab), `/admin/presets` and
-  `/admin/presets/$presetId` (admin only). Settings (language, colour scheme)
+  `/admin/presets/$presetId`, `/admin/announcements`, `/admin/announcements/new` and
+  `/admin/announcements/$announcementId` (admin only). Settings (language, colour scheme)
   are a `SettingsDialog` opened from the user menu, not a route.
   The preset editor reuses the user's dashboard grid and sidebar editor.
   The root route loads the session; unauthenticated users go to `/login`.
@@ -681,6 +682,20 @@ allows every signed-in user and is the entry point for future audience rules.
   Opening an RSS page or pressing a feed tile's "mark as read" button marks
   the feed read (`PUT /api/feed/read`); showing a tile does not, except that
   a feed never read is marked on first display so later entries can be new.
+- Announcements: `AnnouncementHost` (mounted once in `app-layout.tsx`)
+  opens the unread news as a paged dialog once the app has started and marks
+  every page the user viewed seen when it closes; the account menu's "What's
+  new" reopens all news. Then the current page's unread hints (oldest first,
+  `announcementPathMatches`) take turns as a non-modal `Popover` anchored on
+  the first one whose selector finds a visible element (`useVisibleTarget`,
+  a `MutationObserver`); "Got it", close and Escape mark it seen, a vanished
+  element only hides it. Shell elements carry stable `data-tour` attributes
+  (`src/lib/tour-targets.ts`, sidebar rows `sidebar-component-<id>`) that the
+  admin editor offers as selectors. "Test on page" stores the unsaved form in
+  `sessionStorage` (`lib/announcement-preview.ts`) and shows it on every page,
+  marked as a preview, without marking it seen; the editor takes the form
+  back when it opens. Pure logic sits in `lib/announcements.ts` and
+  `lib/announcement-form.ts`.
 - i18n: `i18next` + `react-i18next`, resources `src/i18n/de.json` and
   `en.json`. Language = user's saved language, else browser detector, else
   `de`. Changing it PATCHes `/api/me` and updates `<html lang>`.
