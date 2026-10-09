@@ -1,21 +1,29 @@
-import { useSyncExternalStore } from 'react'
+let replaying = false
 
-function subscribeToBodyStyle(onChange: () => void): () => void {
-  const observer = new MutationObserver(onChange)
-  observer.observe(document.body, { attributes: true, attributeFilter: ['style'] })
-  return () => observer.disconnect()
+/** Whether the events on their way come from `replayClick`, not from the user. */
+export function isReplaying(): boolean {
+  return replaying
 }
 
 /**
- * Whether a modal layer is open: a dialog, a menu or a select list. Radix makes the rest of the
- * page unclickable meanwhile (`pointer-events: none` on `<body>`), which is also what tells. A
- * hint's own dialog counts too, so ask before it opens.
+ * Plays a click on `element` again after a hint held it back: press, release and click, as a mouse
+ * would send them, so actions on the press (Radix menus and lists) run as well as those on the click.
  */
-export function useModalLayerOpen(): boolean {
-  return useSyncExternalStore(
-    subscribeToBodyStyle,
-    () => document.body.style.pointerEvents === 'none'
-  )
+export function replayClick(element: Element): void {
+  if (!element.isConnected) return
+  const mouse = { bubbles: true, cancelable: true, composed: true, button: 0, view: window }
+  const pointer = { ...mouse, pointerId: 1, pointerType: 'mouse', isPrimary: true }
+  replaying = true
+  try {
+    element.dispatchEvent(new PointerEvent('pointerdown', pointer))
+    element.dispatchEvent(new MouseEvent('mousedown', mouse))
+    element.dispatchEvent(new PointerEvent('pointerup', pointer))
+    element.dispatchEvent(new MouseEvent('mouseup', mouse))
+    if (element instanceof HTMLElement) element.click()
+    else element.dispatchEvent(new MouseEvent('click', mouse))
+  } finally {
+    replaying = false
+  }
 }
 
 const HINT_ATTRIBUTE = 'data-announcement-hint'

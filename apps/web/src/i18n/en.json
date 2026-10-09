@@ -919,7 +919,7 @@
     },
     "announcements": {
       "title": "Manage announcements",
-      "description": "News open once as a dialog for every user the next time they open the app. Element hints open once as a dialog when users click the element they belong to.",
+      "description": "News open once as a dialog for every user the next time they open the app. Element hints open once as a dialog when users click the element they belong to; the element's action follows only after “Got it”.",
       "newAnnouncement": "New announcement",
       "loadFailed": "The announcements could not be loaded.",
       "kinds": {
@@ -967,7 +967,7 @@
         "kind": "Type",
         "kindHints": {
           "news": "Opens once as a dialog the next time users open the app.",
-          "hint": "Opens as a dialog, like a news item, when users click the element, and only once: after “Got it” it does not appear again."
+          "hint": "Opens as a dialog, like a news item, when users click the element. The element's action follows only after “Got it”; after that the hint does not appear again."
         },
         "enabled": "Active",
         "enabledHint": "Inactive announcements stay saved as drafts and reach no one.",
@@ -982,7 +982,7 @@
         "suggestionShell": "App frame",
         "suggestionSidebar": "Components in the sidebar",
         "selector": "CSS selector",
-        "selectorHint": "A click on a matching element, or on anything inside it, opens the hint.",
+        "selectorHint": "A click on a matching element, or on anything inside it, opens the hint first, then the action.",
         "path": "Page path",
         "pathHint": "Empty: every page. A trailing * matches every path that starts with it, e.g. /c/*.",
         "test": "Test on page",

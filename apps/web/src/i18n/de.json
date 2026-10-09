@@ -919,7 +919,7 @@
     },
     "announcements": {
       "title": "Ankündigungen verwalten",
-      "description": "Neuigkeiten öffnen sich für alle Nutzenden einmal als Dialog, wenn sie die App das nächste Mal öffnen. Element-Hinweise öffnen sich einmal als Dialog, wenn Nutzende auf das Element klicken, zu dem sie gehören.",
+      "description": "Neuigkeiten öffnen sich für alle Nutzenden einmal als Dialog, wenn sie die App das nächste Mal öffnen. Element-Hinweise öffnen sich einmal als Dialog, wenn Nutzende auf das Element klicken, zu dem sie gehören; die Aktion des Elements folgt erst nach „Verstanden“.",
       "newAnnouncement": "Neue Ankündigung",
       "loadFailed": "Die Ankündigungen konnten nicht geladen werden.",
       "kinds": {
@@ -967,7 +967,7 @@
         "kind": "Art",
         "kindHints": {
           "news": "Öffnet sich einmal als Dialog, wenn Nutzende die App das nächste Mal öffnen.",
-          "hint": "Öffnet sich als Dialog wie eine Neuigkeit, wenn Nutzende auf das Element klicken, und nur einmal: Nach „Verstanden“ erscheint er nicht wieder."
+          "hint": "Öffnet sich als Dialog wie eine Neuigkeit, wenn Nutzende auf das Element klicken. Die Aktion des Elements folgt erst nach „Verstanden“; danach erscheint der Hinweis nicht wieder."
         },
         "enabled": "Aktiv",
         "enabledHint": "Inaktive Ankündigungen bleiben als Entwurf gespeichert und erreichen niemanden.",
@@ -982,7 +982,7 @@
         "suggestionShell": "App-Rahmen",
         "suggestionSidebar": "Komponenten in der Seitenleiste",
         "selector": "CSS-Selektor",
-        "selectorHint": "Ein Klick auf ein passendes Element oder auf etwas darin öffnet den Hinweis.",
+        "selectorHint": "Ein Klick auf ein passendes Element oder auf etwas darin öffnet zuerst den Hinweis, dann die Aktion.",
         "path": "Seitenpfad",
         "pathHint": "Leer: jede Seite. Ein * am Ende passt auf alle Pfade mit diesem Anfang, z. B. /c/*.",
         "test": "Auf Seite testen",

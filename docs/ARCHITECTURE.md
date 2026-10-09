@@ -687,28 +687,24 @@ allows every signed-in user and is the entry point for future audience rules.
 - Announcements: `AnnouncementHost` (mounted once in `app-layout.tsx`)
   opens the unread news as a paged dialog once the app has started and marks
   every page the user viewed seen when it closes; the account menu's "What's
-  new" reopens all news. Hints never open by themselves: a document-level
-  listener (capture phase, never stopping the event) finds the oldest unread,
-  path-matching hint whose selector `closest()`-matches the clicked element
-  (`hintForClick`) and opens it as a dialog shaped like a news item
-  (`AnnouncementDialog`, shared with the news dialog), while the element's own
-  action runs as usual. On pop-up triggers (`aria-haspopup`) the press and
-  Enter/Space/ArrowDown count too, because Radix opens menus on them and a
-  modal menu keeps the click from its trigger. One hint at a time: clicks open
-  nothing while a hint or the news are open. The hint opens a tick after the
-  click; if a modal layer is open by then (`pointer-events: none` on
-  `<body>`, e.g. the dialog its own button opened) it waits and opens once that
-  closes, a check made only before its own dialog opens. Non-modal panels
-  ("More apps") stay open underneath and ignore clicks into the hint
-  (`isInAnnouncementHint`). "Got it", the close button, Escape and a click
-  beside the dialog mark it seen (retried, else the list goes stale and brings
-  it back); Radix returns the focus to the clicked element. Shell elements
+  new" reopens all news. Hints never open by themselves: document-level
+  listeners (capture phase) find the oldest unread, path-matching hint whose
+  selector `closest()`-matches the pressed or clicked element (`hintForClick`)
+  and open it as a dialog shaped like a news item (`AnnouncementDialog`,
+  shared with the news dialog). The press (or Enter/Space) and the rest of
+  that click are stopped before the app sees them, so the info comes first:
+  "Got it" marks it seen and, once the dialog has returned the focus, plays the
+  click again on the element (`replayClick` in `lib/hint-layer.ts`: press,
+  release and click, so Radix menus that open on the press work too). The close
+  button, Escape and a click beside the dialog mark it seen and cancel the
+  action (retried, else the list goes stale and brings it back). One hint at a
+  time: clicks open nothing while a hint or the news are open. Shell elements
   carry stable `data-tour` attributes (`src/lib/tour-targets.ts`, sidebar rows
   `sidebar-component-<id>`) that the admin editor offers as selectors. "Test
   on page" stores the unsaved form in `sessionStorage`
   (`lib/announcement-preview.ts`); while it is on, a click on the element on
   any page opens the same dialog with a "Preview" badge and "Back to editor" /
-  "End preview", without marking it seen, for the admin who started it only
+  "End preview" (holding the click back, never playing it again), without marking it seen, for the admin who started it only
   (cleared on sign-out); closing it keeps the preview on. A toast says so on
   arrival, and another one when a page has no such element on screen after a
   few seconds (`useVisibleTarget`). The editor takes the form back when it

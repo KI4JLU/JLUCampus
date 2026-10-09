@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -21,7 +21,7 @@ import {
   endAnnouncementPreview,
   useAnnouncementPreview
 } from '@/lib/announcement-preview'
-import { hintMarker, useModalLayerOpen } from '@/lib/hint-layer'
+import { hintMarker, isReplaying, replayClick } from '@/lib/hint-layer'
 import { OpenNewsContext } from '@/lib/news-context'
 import { announcementsQuery, meQuery, useMarkAnnouncementSeen } from '@/lib/queries'
 import { toast } from '@/lib/toast'
@@ -32,27 +32,25 @@ import { NewsDialog } from './news-dialog'
 /** How long a preview looks for its element on a page before it says it found none. */
 const PREVIEW_NOT_FOUND_MS = 4000
 
-function sameHint(a: OpenedHint | null, b: OpenedHint): boolean {
-  if (a?.kind !== b.kind) return false
-  return a.kind === 'preview' || (b.kind === 'hint' && a.id === b.id)
-}
+/** Keys that activate the focused control. */
+const ACTIVATING_KEYS = new Set(['Enter', ' '])
 
-/** Keys that open a pop-up trigger's menu or list. */
-const OPENING_KEYS = new Set(['Enter', ' ', 'ArrowDown'])
+/** The events of a click (or key) a hint holds back; the press opens it, the rest follow. */
+const HELD_EVENTS = [
+  'pointerdown',
+  'mousedown',
+  'pointerup',
+  'mouseup',
+  'click',
+  'keydown'
+] as const
 
-/** Whether `target` is (in) a control that opens a menu, list or dialog. */
-function isPopupTrigger(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest('[aria-haspopup]:not([aria-haspopup="false"])') !== null
-  )
-}
+/** How long after the press the rest of the same click is held back too. */
+const GESTURE_MS = 1000
 
-/**
- * The hint a click opened. `shown` once its dialog is open; until then it waits for a modal layer
- * the click opened (or one already open) to close.
- */
-type OpenedHint = { kind: 'hint'; id: string; shown: boolean } | { kind: 'preview'; shown: boolean }
+/** The hint a click opened, and the element whose action waits for it. */
+type OpenedHint =
+  { kind: 'hint'; id: string; element: Element } | { kind: 'preview'; element: Element }
 
 interface NewsSession {
   /** Remounts the dialog per opening, so it starts on its first page. */
@@ -66,11 +64,11 @@ interface NewsSession {
 /**
  * Shows the user's announcements in the signed-in app: unread news as a dialog once the app has
  * started, and an unread hint, as a dialog of its own, when the user clicks its element.
- * Listeners on the document (capture phase, so they see every click first, and leave it alone)
- * find the hint: the oldest unread one for the page whose element is the clicked one or contains
- * it. The element's own action runs as usual; when that opens a modal layer (a dialog, a menu),
- * the hint waits until it closes. Non-modal panels ("More apps") stay open under it. One hint at
- * a time: clicks open nothing while a hint or the news are open. While an admin tries a hint out
+ * Listeners on the document (capture phase, so they see every click first) find the hint: the
+ * oldest unread one for the page whose element is the clicked one or contains it. The click is held
+ * back, so the info comes first; "Got it" then plays the click again and the element's action
+ * runs. Closing the hint otherwise cancels the action. One hint at a time: clicks open nothing
+ * while a hint or the news are open. While an admin tries a hint out
  * from its editor, that preview takes the hints' place, for that admin only. `children` (the app
  * frame) can reopen the news from `OpenNewsContext`.
  */
@@ -91,7 +89,9 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   }
   const [news, setNews] = useState<NewsSession | null>(null)
   const [opened, setOpened] = useState<OpenedHint | null>(null)
-  const modalOpen = useModalLayerOpen()
+  // The element whose click is being held back, and since when; the click to play after closing.
+  const held = useRef<{ element: Element; since: number } | null>(null)
+  const replay = useRef<Element | null>(null)
   const [startChecked, setStartChecked] = useState(false)
 
   // The first list after the app started opens the unread news, once.
@@ -134,52 +134,61 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
   const openPreview = opened?.kind === 'preview' && previewing ? preview : null
   const active = openHint !== undefined || openPreview !== null
 
-  // Waiting is decided only until the hint's dialog opens: its own dialog is a modal layer too.
-  if (opened && active && !opened.shown && !modalOpen) setOpened({ ...opened, shown: true })
-
-  const activate = useEffectEvent((target: EventTarget | null) => {
-    if (newsOpen || active || !(target instanceof Element)) return
+  const find = useEffectEvent((target: EventTarget | null): OpenedHint | null => {
+    if (newsOpen || active || !(target instanceof Element)) return null
     const closest = (selector: string): Element | null => target.closest(selector)
-    let next: OpenedHint | null = null
     if (previewing) {
-      const hit = closestMatch(preview.form.selector.trim(), closest)
-      if (hit) next = { kind: 'preview', shown: false }
-    } else {
-      const match = announcements ? hintForClick(announcements, pathname, closest) : null
-      if (match) next = { kind: 'hint', id: match.hint.id, shown: false }
+      const element = closestMatch(preview.form.selector.trim(), closest)
+      return element ? { kind: 'preview', element } : null
     }
-    if (!next) return
-    const opening = next
-    // After the element's own handlers and the effects they cause: a dialog or menu it opens has
-    // made the page modal by then, and the hint waits for it. A press and the click it ends may
-    // both ask; the second finds it opened already.
-    window.setTimeout(() =>
-      setOpened((current) => (sameHint(current, opening) ? current : opening))
-    )
+    const match = announcements ? hintForClick(announcements, pathname, closest) : null
+    return match ? { kind: 'hint', id: match.hint.id, element: match.element } : null
   })
 
-  // Clicks (also Enter and Space on buttons) open hints. Radix opens menus and lists on the press
-  // or key instead, and its modal ones then keep the click from reaching their trigger, so on
-  // pop-up triggers the press and the opening keys count too; whichever comes first opens it.
+  // The press (or Enter/Space) on a hint's element opens the hint and is stopped before the app
+  // sees it, like the rest of that click, so neither the press nor the click runs the action.
   useEffect(() => {
-    const onClick = (event: MouseEvent): void => activate(event.target)
-    const onPointerDown = (event: PointerEvent): void => {
-      if (event.button === 0 && isPopupTrigger(event.target)) activate(event.target)
+    const hold = (event: Event): void => {
+      event.preventDefault()
+      event.stopImmediatePropagation()
     }
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (OPENING_KEYS.has(event.key) && isPopupTrigger(event.target)) activate(event.target)
+    const onEvent = (event: Event): void => {
+      if (isReplaying()) return
+      if (event instanceof MouseEvent && event.button !== 0) return
+      if (event instanceof KeyboardEvent && !ACTIVATING_KEYS.has(event.key)) return
+      const target = event.target
+      const current = held.current
+      if (
+        current &&
+        performance.now() - current.since < GESTURE_MS &&
+        target instanceof Node &&
+        current.element.contains(target)
+      ) {
+        hold(event)
+        return
+      }
+      if (event.type === 'pointerup' || event.type === 'mouseup') return
+      const next = find(target)
+      if (!next) return
+      hold(event)
+      held.current = { element: next.element, since: performance.now() }
+      setOpened(next)
     }
-    document.addEventListener('click', onClick, true)
-    document.addEventListener('pointerdown', onPointerDown, true)
-    document.addEventListener('keydown', onKeyDown, true)
+    for (const type of HELD_EVENTS) document.addEventListener(type, onEvent, true)
     return () => {
-      document.removeEventListener('click', onClick, true)
-      document.removeEventListener('pointerdown', onPointerDown, true)
-      document.removeEventListener('keydown', onKeyDown, true)
+      for (const type of HELD_EVENTS) document.removeEventListener(type, onEvent, true)
     }
   }, [])
 
   const close = (): void => setOpened(null)
+
+  // Runs once the dialog has closed and given the focus back, so the action starts from there.
+  const afterClose = (): void => {
+    held.current = null
+    const element = replay.current
+    replay.current = null
+    if (element) window.setTimeout(() => replayClick(element))
+  }
 
   return (
     <OpenNewsContext.Provider value={openNews}>
@@ -199,23 +208,26 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
         />
       ) : null}
       {previewing ? <PreviewNotices pathname={pathname} selector={preview.form.selector} /> : null}
-      {opened?.shown && openPreview ? (
+      {openPreview ? (
         <PreviewHint
           preview={openPreview}
           pathname={pathname}
           language={language}
           onClose={close}
+          onClosed={afterClose}
         />
       ) : null}
-      {opened?.shown && openHint ? (
+      {openHint && opened ? (
         <PageHint
           key={openHint.id}
           hint={openHint}
           language={language}
-          onSeen={() => {
+          onClose={(proceed) => {
             acknowledge(openHint.id)
+            if (proceed) replay.current = opened.element
             close()
           }}
+          onClosed={afterClose}
         />
       ) : null}
     </OpenNewsContext.Provider>
@@ -225,25 +237,29 @@ export function AnnouncementHost({ children }: { children: ReactNode }): React.J
 interface PageHintProps {
   hint: UserHint
   language: Language
-  onSeen: () => void
+  /** `proceed` for "Got it", which goes on with the held-back action. */
+  onClose: (proceed: boolean) => void
+  /** Once the dialog is gone and the focus is back. */
+  onClosed: () => void
 }
 
 /**
- * An unread hint a click opened. Closing it in any way marks it seen; the focus goes back to what
- * had it, the clicked element as a rule.
+ * An unread hint a click opened. Closing it in any way marks it seen; "Got it" also goes on with
+ * the click it held back, the close button and Escape cancel that.
  */
-function PageHint({ hint, language, onSeen }: PageHintProps): React.JSX.Element {
+function PageHint({ hint, language, onClose, onClosed }: PageHintProps): React.JSX.Element {
   const { t } = useTranslation()
   const text = textIn(hint.texts, language)
   return (
     <AnnouncementDialog
       open
-      onClose={onSeen}
+      onClose={() => onClose(false)}
+      onCloseAutoFocus={onClosed}
       meta={t('announcements.hint.label')}
       title={text.title}
       body={text.body}
       frameProps={hintMarker}
-      footer={<Button onClick={onSeen}>{t('announcements.hint.gotIt')}</Button>}
+      footer={<Button onClick={() => onClose(true)}>{t('announcements.hint.gotIt')}</Button>}
     />
   )
 }
@@ -289,18 +305,21 @@ interface PreviewHintProps {
   pathname: string
   language: Language
   onClose: () => void
+  onClosed: () => void
 }
 
 /**
  * The hint an admin tries out, unsaved, opened by a click on its element on whichever page they
  * are, whether or not its page path would offer it there (it says when not). It marks nothing
- * seen; closing it keeps the preview on for the next click.
+ * seen and holds the click back like the real one, but never plays it again; closing it keeps the
+ * preview on for the next click.
  */
 function PreviewHint({
   preview,
   pathname,
   language,
-  onClose
+  onClose,
+  onClosed
 }: PreviewHintProps): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -328,6 +347,7 @@ function PreviewHint({
     <AnnouncementDialog
       open
       onClose={onClose}
+      onCloseAutoFocus={onClosed}
       meta={
         <Badge tone="info" appearance="filled">
           {t('announcements.preview.badge')}

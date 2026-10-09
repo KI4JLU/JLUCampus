@@ -4,8 +4,9 @@
  * - `news` (feature updates and the like) open once as a dialog the next time a user opens the
  *   app; several unread ones are paged. Users can read them again later from the account menu.
  * - `hint` belongs to one element of the app, found by a CSS selector, optionally only on pages
- *   matching `path`. When the user clicks that element (or anything in it), the hint opens as a
- *   dialog like a news item, one at a time; once acknowledged it does not open again.
+ *   matching `path`. When the user clicks that element (or anything in it), the click is held back and the
+ *   hint opens as a dialog like a news item, one at a time; "Got it" then lets the click through.
+ *   Once acknowledged it does not open again.
  *
  * A user sees an announcement until they acknowledge it (`ANNOUNCEMENTS_API.seen`), stored per
  * user on the server, so it does not come back on another device. Who receives an announcement is
