@@ -73,6 +73,7 @@ import {
   type WidgetList
 } from '@justcampus/shared'
 import { transcriptionKeys } from '@/adapters/transcription/api'
+import { accessChanged } from './access'
 import { ApiRequestError, apiFetch, isUnauthorized } from './api'
 import { applyComponentInput } from './component-secrets'
 import { isLater } from './feed'
@@ -127,10 +128,17 @@ export const queryKeys = {
  * The app shell keeps this query mounted, so it doubles as a heartbeat: each request lets the
  * server keep the Keycloak session alive that embedded sites sign in with (`keycloak-session.ts`
  * on the server), also while the user works inside an embedded site, records or transcribes.
+ * When an answer allows other components or functions than the one before (an admin changed the
+ * user's roles), everything they shape loads again (`invalidateAccess`).
  */
 export const meQuery = queryOptions({
   queryKey: queryKeys.me,
-  queryFn: () => apiFetch<Me>(API.me),
+  queryFn: async () => {
+    const me = await apiFetch<Me>(API.me)
+    const previous = queryClient.getQueryData<Me>(queryKeys.me)
+    if (previous && accessChanged(previous, me)) void invalidateAccess(queryClient)
+    return me
+  },
   staleTime: 5 * 60_000,
   refetchInterval: 4 * 60_000,
   refetchIntervalInBackground: true
@@ -501,6 +509,23 @@ export function useSaveDashboard(
       return client.invalidateQueries({ queryKey: queryKeys.dashboard })
     }
   })
+}
+
+/**
+ * Changed roles reach what the user sees: the components and their widgets, sidebar and dashboard,
+ * the folder templates, and what the modules offer. A page of a component no longer allowed then
+ * finds it gone.
+ */
+function invalidateAccess(client: QueryClient): Promise<void> {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: queryKeys.components }),
+    client.invalidateQueries({ queryKey: queryKeys.widgets }),
+    client.invalidateQueries({ queryKey: queryKeys.sidebar }),
+    client.invalidateQueries({ queryKey: queryKeys.dashboard }),
+    client.invalidateQueries({ queryKey: queryKeys.folderTemplates }),
+    client.invalidateQueries({ queryKey: queryKeys.translatorEngines }),
+    client.invalidateQueries({ queryKey: transcriptionKeys.capabilities })
+  ]).then(() => undefined)
 }
 
 /**
