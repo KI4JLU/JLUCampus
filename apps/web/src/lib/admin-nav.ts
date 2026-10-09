@@ -1,12 +1,14 @@
 /** An admin page with its own row in the admin sidebar's "Verwaltung" group. */
-export type AdminSection = 'components' | 'folders' | 'presets' | 'roles' | 'users'
+export type AdminSection =
+  'components' | 'folders' | 'presets' | 'roles' | 'users' | 'announcements'
 
 const ADMIN_SECTIONS: readonly AdminSection[] = [
   'components',
   'folders',
   'presets',
   'roles',
-  'users'
+  'users',
+  'announcements'
 ]
 
 /** The admin sidebar's current row: a section's, or a module's own. */

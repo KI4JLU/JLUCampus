@@ -33,7 +33,8 @@
     "settings": "Einstellungen",
     "admin": "Adminbereich",
     "signOut": "Abmelden",
-    "signOutFailed": "Die Abmeldung ist fehlgeschlagen. Bitte versuchen Sie es erneut."
+    "signOutFailed": "Die Abmeldung ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
+    "news": "Neuigkeiten"
   },
   "language": {
     "label": "Sprache",
@@ -670,7 +671,8 @@
       "presets": "Layout-Vorlagen",
       "roles": "Rollen",
       "users": "Nutzende",
-      "modules": "Module"
+      "modules": "Module",
+      "announcements": "Ankündigungen"
     },
     "table": {
       "caption": "Alle Komponenten in Katalogreihenfolge",
@@ -1031,6 +1033,126 @@
         "lastSignIn": "Letzte Anmeldung",
         "never": "Nicht erfasst"
       }
+    },
+    "announcements": {
+      "title": "Ankündigungen verwalten",
+      "description": "Neuigkeiten öffnen sich für alle Nutzenden einmal als Dialog, wenn sie die App das nächste Mal öffnen. Element-Hinweise öffnen sich einmal als Dialog, wenn Nutzende auf das Element klicken, zu dem sie gehören; die Aktion des Elements folgt erst nach „Verstanden“.",
+      "newAnnouncement": "Neue Ankündigung",
+      "loadFailed": "Die Ankündigungen konnten nicht geladen werden.",
+      "kinds": {
+        "news": "Neuigkeit",
+        "hint": "Element-Hinweis"
+      },
+      "status": {
+        "active": "Aktiv",
+        "draft": "Entwurf"
+      },
+      "table": {
+        "caption": "Alle Ankündigungen, die neuesten zuerst",
+        "title": "Titel",
+        "kind": "Art",
+        "status": "Status",
+        "seen": "Gesehen von",
+        "seenCount_one": "{{count}} Person",
+        "seenCount_other": "{{count}} Personen",
+        "empty": "Noch keine Ankündigungen angelegt."
+      },
+      "actions": {
+        "menu": "Aktionen für {{title}}",
+        "edit": "Bearbeiten",
+        "reset": "Erneut anzeigen"
+      },
+      "delete": {
+        "title": "Ankündigung löschen?",
+        "description": "„{{title}}“ wird gelöscht und niemandem mehr angezeigt.",
+        "done": "„{{title}}“ gelöscht.",
+        "failed": "Die Ankündigung konnte nicht gelöscht werden."
+      },
+      "reset": {
+        "title": "Erneut anzeigen?",
+        "description": "„{{title}}“ wird allen Nutzenden noch einmal angezeigt, auch denen, die sie schon gesehen haben.",
+        "confirm": "Erneut anzeigen",
+        "done": "„{{title}}“ wird allen erneut angezeigt.",
+        "failed": "Die Ankündigung konnte nicht zurückgesetzt werden."
+      },
+      "form": {
+        "createTitle": "Neue Ankündigung",
+        "editTitle": "Ankündigung bearbeiten: {{title}}",
+        "back": "Alle Ankündigungen",
+        "general": "Allgemein",
+        "generalDescription": "Was für eine Ankündigung es ist und ob sie Nutzende erreicht.",
+        "kind": "Art",
+        "kindHints": {
+          "news": "Öffnet sich einmal als Dialog, wenn Nutzende die App das nächste Mal öffnen.",
+          "hint": "Öffnet sich als Dialog wie eine Neuigkeit, wenn Nutzende auf das Element klicken. Die Aktion des Elements folgt erst nach „Verstanden“; danach erscheint der Hinweis nicht wieder."
+        },
+        "enabled": "Aktiv",
+        "enabledHint": "Inaktive Ankündigungen bleiben als Entwurf gespeichert und erreichen niemanden.",
+        "title": "Titel",
+        "body": "Text",
+        "bodyHint": "Reiner Text. Eine Leerzeile beginnt einen neuen Absatz.",
+        "target": "Ziel",
+        "targetDescription": "Das Element, dessen Klick den Hinweis als Dialog öffnet, und auf welchen Seiten. „Auf Seite testen“ zeigt ihn nur Ihnen, ohne zu speichern.",
+        "suggestion": "Bekanntes Element",
+        "suggestionHint": "Setzt den Selektor für ein Element, das die App dauerhaft markiert.",
+        "suggestionPlaceholder": "Element wählen",
+        "suggestionShell": "App-Rahmen",
+        "suggestionSidebar": "Komponenten in der Seitenleiste",
+        "selector": "CSS-Selektor",
+        "selectorHint": "Ein Klick auf ein passendes Element oder auf etwas darin öffnet zuerst den Hinweis, dann die Aktion.",
+        "path": "Seitenpfad",
+        "pathHint": "Leer: jede Seite. Ein * am Ende passt auf alle Pfade mit diesem Anfang, z. B. /c/*.",
+        "test": "Auf Seite testen",
+        "restored": "Ihre ungespeicherten Änderungen aus der Vorschau sind wiederhergestellt.",
+        "saveFailed": "Die Ankündigung konnte nicht gespeichert werden.",
+        "created": "Ankündigung angelegt.",
+        "updated": "Ankündigung gespeichert.",
+        "notFoundTitle": "Ankündigung nicht gefunden",
+        "notFoundDescription": "Diese Ankündigung gibt es nicht mehr.",
+        "loadFailedTitle": "Die Ankündigung konnte nicht geladen werden.",
+        "unsavedDescription": "Ihre Änderungen an dieser Ankündigung sind noch nicht gespeichert. Wenn Sie die Seite verlassen, gehen sie verloren.",
+        "errors": {
+          "title": "Geben Sie einen Titel mit höchstens {{max}} Zeichen ein.",
+          "body": "Geben Sie einen Text mit höchstens {{max}} Zeichen ein.",
+          "selector": "Geben Sie einen CSS-Selektor mit höchstens {{max}} Zeichen ein.",
+          "selectorRequired": "Geben Sie einen CSS-Selektor ein.",
+          "selectorInvalid": "Das ist kein gültiger CSS-Selektor.",
+          "path": "Geben Sie einen Pfad ein, der mit / beginnt und höchstens am Ende ein * hat (höchstens {{max}} Zeichen)."
+        }
+      }
+    }
+  },
+  "announcements": {
+    "news": {
+      "title": "Neuigkeiten",
+      "empty": "Es gibt noch keine Neuigkeiten.",
+      "meta": "{{date}} · {{current}} von {{total}}",
+      "pageChanged": "Neuigkeit {{current}} von {{total}}: {{title}}",
+      "back": "Zurück",
+      "next": "Weiter",
+      "done": "Fertig"
+    },
+    "hint": {
+      "gotIt": "Verstanden",
+      "label": "Hinweis"
+    },
+    "preview": {
+      "badge": "Vorschau",
+      "untitled": "Ohne Titel",
+      "otherPath": "Nutzende sehen den Hinweis auf dieser Seite nicht: Der Seitenpfad passt nicht.",
+      "end": "Vorschau beenden",
+      "back": "Zurück zum Editor",
+      "notFound": "Element nicht gefunden",
+      "notFoundDescription": "Auf dieser Seite passt kein sichtbares Element zum Selektor. Die Vorschau bleibt aktiv, Sie können eine andere Seite öffnen.",
+      "active": "Vorschau aktiv",
+      "activeDescription": "Klicken Sie auf das Element, um den Hinweis zu sehen."
+    },
+    "tourTargets": {
+      "dashboardLink": "Seitenleiste: Dashboard",
+      "moreApps": "Seitenleiste: Mehr Apps",
+      "accountMenu": "Seitenleiste: Kontomenü",
+      "dashboardEdit": "Dashboard: Bearbeiten",
+      "dashboardAddWidget": "Dashboard: Widget hinzufügen"
     }
   },
   "iconPicker": {

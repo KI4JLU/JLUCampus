@@ -12,6 +12,11 @@ import { i18n, currentLanguage } from '@/i18n'
 import { parseLoginSearch, safeRedirect, type LoginSearch } from '@/lib/redirect'
 import { parseAdminUsersSearch, type AdminUsersSearch } from '@/lib/admin-users'
 import { meQuery, queryClient, queryKeys, setUnauthorizedHandler } from '@/lib/queries'
+import {
+  AdminAnnouncementEditorPage,
+  AdminNewAnnouncementPage
+} from './admin-announcement-editor-page'
+import { AdminAnnouncementsPage } from './admin-announcements-page'
 import { AdminComponentEditorPage, AdminNewComponentPage } from './admin-component-editor-page'
 import { AdminComponentsPage } from './admin-components-page'
 import { AdminFoldersPage } from './admin-folders-page'
@@ -136,6 +141,24 @@ const adminUsersRoute = createRoute({
   component: AdminUsersPage
 })
 
+const adminAnnouncementsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/announcements',
+  component: AdminAnnouncementsPage
+})
+
+const adminNewAnnouncementRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/announcements/new',
+  component: AdminNewAnnouncementPage
+})
+
+const adminAnnouncementRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/admin/announcements/$announcementId',
+  component: AdminAnnouncementEditorPage
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   appRoute.addChildren([
@@ -150,7 +173,10 @@ const routeTree = rootRoute.addChildren([
     adminRolesRoute,
     adminNewRoleRoute,
     adminRoleRoute,
-    adminUsersRoute
+    adminUsersRoute,
+    adminAnnouncementsRoute,
+    adminNewAnnouncementRoute,
+    adminAnnouncementRoute
   ])
 ])
 

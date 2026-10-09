@@ -596,13 +596,35 @@ Validation errors return `400` with `code: 'validation'` and Zod issues.
 Responses are shaped exactly as the shared schemas describe (dates as ISO
 strings).
 
+### Announcements
+
+`announcement` stores `news` and element-bound `hint` messages, with German
+and English texts in jsonb, a nullable hint target, an enabled flag and creation
+and update timestamps. `published_at` is the first time the message was enabled
+and stays unchanged after disabling or editing it. `announcement_seen` stores
+acknowledgements with a composite key of announcement and user, a `seen_at`
+timestamp and cascading foreign keys. Hint targets saved while hints were pop-ups
+still carry a `side` in jsonb; responses are parsed through the shared
+schemas, which drop it, so no migration was needed.
+
+`ANNOUNCEMENTS_API` in shared defines the contract. Admins list, create, read,
+replace and delete messages at `/api/admin/announcements` and `/:id`; the list
+sorts by creation time and includes acknowledgement counts. `POST /:id/reset`
+clears all acknowledgements. Signed-in users get enabled messages, newest first
+by publication time, with their own `seen` flag at `GET /api/announcements`.
+`POST /api/announcements/:id/seen` acknowledges a visible message idempotently
+and returns 204; unknown, disabled or invisible messages return 404. Both user
+routes use `visibleTo` in `apps/server/src/announcements.ts`, which currently
+allows every signed-in user and is the entry point for future audience rules.
+
 ## Web app
 
 - Routes (TanStack Router, code-based like JLU Mail, **browser history**):
   `/login`, `/` (dashboard), `/c/$componentId` (component full page),
   `/admin/components`, `/admin/components/new` and `/admin/components/$componentId` (the
   component editor), `/admin/folders`, `/admin/users` ("Nutzer" tab), `/admin/presets` and
-  `/admin/presets/$presetId` (admin only). Settings (language, colour scheme)
+  `/admin/presets/$presetId`, `/admin/announcements`, `/admin/announcements/new` and
+  `/admin/announcements/$announcementId` (admin only). Settings (language, colour scheme)
   are a `SettingsDialog` opened from the user menu, not a route.
   The preset editor reuses the user's dashboard grid and sidebar editor.
   The root route loads the session; unauthenticated users go to `/login`.
@@ -662,6 +684,32 @@ strings).
   Opening an RSS page or pressing a feed tile's "mark as read" button marks
   the feed read (`PUT /api/feed/read`); showing a tile does not, except that
   a feed never read is marked on first display so later entries can be new.
+- Announcements: `AnnouncementHost` (mounted once in `app-layout.tsx`)
+  opens the unread news as a paged dialog once the app has started and marks
+  every page the user viewed seen when it closes; the account menu's "What's
+  new" reopens all news. Hints never open by themselves: document-level
+  listeners (capture phase) find the oldest unread, path-matching hint whose
+  selector `closest()`-matches the pressed or clicked element (`hintForClick`)
+  and open it as a dialog shaped like a news item (`AnnouncementDialog`,
+  shared with the news dialog). The press (or Enter/Space) and the rest of
+  that click are stopped before the app sees them, so the info comes first:
+  "Got it" marks it seen and, once the dialog has returned the focus, plays the
+  click again on the element (`replayClick` in `lib/hint-layer.ts`: press,
+  release and click, so Radix menus that open on the press work too). The close
+  button, Escape and a click beside the dialog mark it seen and cancel the
+  action (retried, else the list goes stale and brings it back). One hint at a
+  time: clicks open nothing while a hint or the news are open. Shell elements
+  carry stable `data-tour` attributes (`src/lib/tour-targets.ts`, sidebar rows
+  `sidebar-component-<id>`) that the admin editor offers as selectors. "Test
+  on page" stores the unsaved form in `sessionStorage`
+  (`lib/announcement-preview.ts`); while it is on, a click on the element on
+  any page opens the same dialog with a "Preview" badge and "Back to editor" /
+  "End preview" (holding the click back, never playing it again), without marking it seen, for the admin who started it only
+  (cleared on sign-out); closing it keeps the preview on. A toast says so on
+  arrival, and another one when a page has no such element on screen after a
+  few seconds (`useVisibleTarget`). The editor takes the form back when it
+  opens. Pure logic sits in `lib/announcements.ts` and
+  `lib/announcement-form.ts`.
 - i18n: `i18next` + `react-i18next`, resources `src/i18n/de.json` and
   `en.json`. Language = user's saved language, else browser detector, else
   `de`. Changing it PATCHes `/api/me` and updates `<html lang>`.

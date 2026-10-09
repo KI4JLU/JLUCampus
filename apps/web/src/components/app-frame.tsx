@@ -15,6 +15,7 @@ import type { Component, Me } from '@justcampus/shared'
 import { isAdminPath } from '@/lib/admin-nav'
 import { CollapseSidebarContext } from '@/lib/collapse-sidebar'
 import { PageSidePanelContext } from '@/lib/page-side-panel'
+import { TOUR } from '@/lib/tour-targets'
 import { cn } from '@/lib/utils'
 import { AccountMenu } from './account-menu'
 import { AdminSidebar } from './admin-sidebar'
@@ -90,7 +91,12 @@ export function AppFrame({ me, sidebarComponents, children }: AppFrameProps): Re
     <AdminSidebar pathname={pathname} />
   ) : (
     <>
-      <NavItem asChild label={t('nav.dashboard')} active={pathname === '/'}>
+      <NavItem
+        asChild
+        label={t('nav.dashboard')}
+        active={pathname === '/'}
+        data-tour={TOUR.dashboardLink}
+      >
         <Link to="/">
           <LayoutDashboardIcon {...icon} />
           <span>{t('nav.dashboard')}</span>

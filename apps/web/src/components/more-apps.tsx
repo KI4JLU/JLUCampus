@@ -13,6 +13,8 @@ import {
 } from '@ki4jlu/design-system'
 import type { Component } from '@justcampus/shared'
 import { useComponentName } from '@/lib/component-name'
+import { isInAnnouncementHint } from '@/lib/hint-layer'
+import { TOUR } from '@/lib/tour-targets'
 import type { SidebarArrangement } from '@/lib/use-sidebar-arrangement'
 import { cn } from '@/lib/utils'
 import { SidebarEditRow } from './sidebar-edit-row'
@@ -35,7 +37,7 @@ export function MoreAppsButton(): React.JSX.Element {
   const label = t('nav.moreApps')
   return (
     <PopoverTrigger asChild>
-      <NavItem type="button" label={label}>
+      <NavItem type="button" label={label} data-tour={TOUR.moreApps}>
         <GripIcon {...icon} />
         <span>{label}</span>
       </NavItem>
@@ -99,10 +101,10 @@ export function MoreAppsPanel({
           : 'flex max-h-(--radix-popover-content-available-height) w-[min(24rem,calc(100vw-1.5rem))] flex-col p-0'
       }
       // Working in the sidebar rows is part of this, not a click away from it.
+      // So is reading the hint dialog a click on "More apps" may have opened over it.
       onInteractOutside={(event) => {
-        if (event.target instanceof Node && listRef.current?.contains(event.target)) {
-          event.preventDefault()
-        }
+        const inList = event.target instanceof Node && listRef.current?.contains(event.target)
+        if (inList || isInAnnouncementHint(event.target)) event.preventDefault()
       }}
       // While a row is lifted by keyboard, Escape cancels that move and keeps the panel.
       onEscapeKeyDown={(event) => {

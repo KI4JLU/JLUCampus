@@ -47,6 +47,7 @@ import { changeUserRoles, listAdminUsers } from './admin-users.js'
 import { getAccess, grantEveryoneComponent } from './access.js'
 import { registerRoleRoutes } from './roles.js'
 import type { UserAccess } from './logic.js'
+import { registerAnnouncementRoutes } from './announcements.js'
 import { auth, getSession } from './auth.js'
 import { applySecretsPatch, componentTypeChangeConflicts } from './component-secrets.js'
 import { db } from './db/index.js'
@@ -304,6 +305,7 @@ app.use('/api/admin/*', async (context, next) => {
 })
 
 registerModuleRoutes(app)
+registerAnnouncementRoutes(app)
 registerRoleRoutes(app)
 
 app.get(API.adminUsers, async (context) => {

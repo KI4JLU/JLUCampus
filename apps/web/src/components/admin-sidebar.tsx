@@ -5,6 +5,7 @@ import {
   ArrowLeftIcon,
   FolderIcon,
   LayoutGridIcon,
+  MegaphoneIcon,
   ShieldCheckIcon,
   UserCogIcon,
   UsersIcon,
@@ -25,7 +26,8 @@ const SECTION_LINKS = [
   { section: 'folders', to: '/admin/folders', Icon: FolderIcon },
   { section: 'presets', to: '/admin/presets', Icon: UsersIcon },
   { section: 'roles', to: '/admin/roles', Icon: ShieldCheckIcon },
-  { section: 'users', to: '/admin/users', Icon: UserCogIcon }
+  { section: 'users', to: '/admin/users', Icon: UserCogIcon },
+  { section: 'announcements', to: '/admin/announcements', Icon: MegaphoneIcon }
 ] as const satisfies readonly { section: AdminSection; to: string; Icon: LucideIcon }[]
 
 /**

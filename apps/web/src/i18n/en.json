@@ -33,7 +33,8 @@
     "settings": "Settings",
     "admin": "Administration",
     "signOut": "Sign out",
-    "signOutFailed": "Signing out failed. Please try again."
+    "signOutFailed": "Signing out failed. Please try again.",
+    "news": "What's new"
   },
   "language": {
     "label": "Language",
@@ -670,7 +671,8 @@
       "presets": "Layout presets",
       "roles": "Roles",
       "users": "Users",
-      "modules": "Modules"
+      "modules": "Modules",
+      "announcements": "Announcements"
     },
     "table": {
       "caption": "All components in catalogue order",
@@ -1031,6 +1033,126 @@
         "lastSignIn": "Last sign-in",
         "never": "Never recorded"
       }
+    },
+    "announcements": {
+      "title": "Manage announcements",
+      "description": "News open once as a dialog for every user the next time they open the app. Element hints open once as a dialog when users click the element they belong to; the element's action follows only after “Got it”.",
+      "newAnnouncement": "New announcement",
+      "loadFailed": "The announcements could not be loaded.",
+      "kinds": {
+        "news": "News",
+        "hint": "Element hint"
+      },
+      "status": {
+        "active": "Active",
+        "draft": "Draft"
+      },
+      "table": {
+        "caption": "All announcements, newest first",
+        "title": "Title",
+        "kind": "Type",
+        "status": "Status",
+        "seen": "Seen by",
+        "seenCount_one": "{{count}} person",
+        "seenCount_other": "{{count}} people",
+        "empty": "No announcements yet."
+      },
+      "actions": {
+        "menu": "Actions for {{title}}",
+        "edit": "Edit",
+        "reset": "Show again"
+      },
+      "delete": {
+        "title": "Delete announcement?",
+        "description": "“{{title}}” will be deleted and no longer shown to anyone.",
+        "done": "“{{title}}” deleted.",
+        "failed": "The announcement could not be deleted."
+      },
+      "reset": {
+        "title": "Show again?",
+        "description": "“{{title}}” will be shown to every user once more, including those who have already seen it.",
+        "confirm": "Show again",
+        "done": "“{{title}}” will be shown to everyone again.",
+        "failed": "The announcement could not be reset."
+      },
+      "form": {
+        "createTitle": "New announcement",
+        "editTitle": "Edit announcement: {{title}}",
+        "back": "All announcements",
+        "general": "General",
+        "generalDescription": "What kind of announcement this is and whether it reaches users.",
+        "kind": "Type",
+        "kindHints": {
+          "news": "Opens once as a dialog the next time users open the app.",
+          "hint": "Opens as a dialog, like a news item, when users click the element. The element's action follows only after “Got it”; after that the hint does not appear again."
+        },
+        "enabled": "Active",
+        "enabledHint": "Inactive announcements stay saved as drafts and reach no one.",
+        "title": "Title",
+        "body": "Text",
+        "bodyHint": "Plain text. A blank line starts a new paragraph.",
+        "target": "Target",
+        "targetDescription": "The element whose click opens the hint as a dialog, and on which pages. “Test on page” shows it only to you, without saving.",
+        "suggestion": "Known element",
+        "suggestionHint": "Sets the selector for an element the app marks permanently.",
+        "suggestionPlaceholder": "Choose an element",
+        "suggestionShell": "App frame",
+        "suggestionSidebar": "Components in the sidebar",
+        "selector": "CSS selector",
+        "selectorHint": "A click on a matching element, or on anything inside it, opens the hint first, then the action.",
+        "path": "Page path",
+        "pathHint": "Empty: every page. A trailing * matches every path that starts with it, e.g. /c/*.",
+        "test": "Test on page",
+        "restored": "Your unsaved changes from the preview have been restored.",
+        "saveFailed": "The announcement could not be saved.",
+        "created": "Announcement created.",
+        "updated": "Announcement saved.",
+        "notFoundTitle": "Announcement not found",
+        "notFoundDescription": "This announcement no longer exists.",
+        "loadFailedTitle": "The announcement could not be loaded.",
+        "unsavedDescription": "Your changes to this announcement are not saved yet. If you leave the page, they will be lost.",
+        "errors": {
+          "title": "Enter a title of at most {{max}} characters.",
+          "body": "Enter a text of at most {{max}} characters.",
+          "selector": "Enter a CSS selector of at most {{max}} characters.",
+          "selectorRequired": "Enter a CSS selector.",
+          "selectorInvalid": "This is not a valid CSS selector.",
+          "path": "Enter a path that starts with / and has at most one * at the end (at most {{max}} characters)."
+        }
+      }
+    }
+  },
+  "announcements": {
+    "news": {
+      "title": "What's new",
+      "empty": "There is no news yet.",
+      "meta": "{{date}} · {{current}} of {{total}}",
+      "pageChanged": "News {{current}} of {{total}}: {{title}}",
+      "back": "Back",
+      "next": "Next",
+      "done": "Done"
+    },
+    "hint": {
+      "gotIt": "Got it",
+      "label": "Tip"
+    },
+    "preview": {
+      "badge": "Preview",
+      "untitled": "Untitled",
+      "otherPath": "Users don't see this hint on this page: the page path does not match.",
+      "end": "End preview",
+      "back": "Back to editor",
+      "notFound": "Element not found",
+      "notFoundDescription": "No visible element on this page matches the selector. The preview stays on, so you can open another page.",
+      "active": "Preview on",
+      "activeDescription": "Click the element to see the hint."
+    },
+    "tourTargets": {
+      "dashboardLink": "Sidebar: Dashboard",
+      "moreApps": "Sidebar: More apps",
+      "accountMenu": "Sidebar: Account menu",
+      "dashboardEdit": "Dashboard: Edit",
+      "dashboardAddWidget": "Dashboard: Add widget"
     }
   },
   "iconPicker": {

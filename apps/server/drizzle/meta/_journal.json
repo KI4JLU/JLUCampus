@@ -148,6 +148,13 @@
       "when": 1791528129130,
       "tag": "0020_app_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791538013073,
+      "tag": "0021_announcements",
+      "breakpoints": true
     }
   ]
 }

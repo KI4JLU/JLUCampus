@@ -13,6 +13,7 @@ import {
 } from './transcription'
 
 export { httpsUrlSchema, SECRET_VALUE_MAX } from './common'
+export * from './announcements'
 export * from './transcription'
 
 // ---------------------------------------------------------------------------
