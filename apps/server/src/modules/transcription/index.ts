@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 
+import { requireFeature } from '../../access.js'
 import { getModuleRuntime } from '../context.js'
 import type { AppEnvironment, ServerModule } from '../types.js'
 import { adminRouter } from './admin/index.js'
@@ -22,6 +23,10 @@ import { startTranscriptRetention } from './transcripts/retention.js'
  * router; this file only puts them together and reports the capabilities.
  */
 export const transcriptionApp = new Hono<AppEnvironment>()
+
+for (const path of ['/summaries', '/summaries/*', '/templates', '/templates/*']) {
+  transcriptionApp.use(path, requireFeature('transcription.summaries'))
+}
 
 transcriptionApp.get('/capabilities', (context) => {
   const { config, secrets } = getModuleRuntime(context, 'transcription')

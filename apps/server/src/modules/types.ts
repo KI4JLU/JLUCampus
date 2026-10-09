@@ -8,6 +8,7 @@ import type { Hono } from 'hono'
 import type { ZodType } from 'zod'
 
 import type { AuthSession } from '../auth.js'
+import type { UserAccess } from '../logic.js'
 
 export type ModuleConfigMap = {
   [T in SingletonComponentType]: Extract<Component, { type: T }>['config']
@@ -31,6 +32,7 @@ export type AnyModuleRuntime = {
 
 export type AppEnvironment = {
   Variables: {
+    access?: Promise<UserAccess>
     session: AuthSession
     module: AnyModuleRuntime
   }

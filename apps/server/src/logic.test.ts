@@ -1,3 +1,5 @@
+import { FEATURE_KEYS } from '@justcampus/shared'
+import { heldRoles, keycloakRoleIds, roleAccess, type AccessRole } from './logic.js'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -340,5 +342,93 @@ describe('tooSmall', () => {
     expect(tooSmall({ w: 4, h: 6 }, { minW: 2, minH: 2 })).toEqual([])
     expect(tooSmall({ w: 2, h: 2 }, { minW: 4, minH: 3 })).toEqual(['w', 'h'])
     expect(tooSmall({ w: 4, h: 2 }, { minW: 4, minH: 3 })).toEqual(['h'])
+  })
+})
+
+describe('app roles and permissions', () => {
+  const claims = { keycloakRoles: ['staff'], keycloakGroups: ['/campus/team'] }
+  const roles: AccessRole[] = [
+    {
+      id: 'everyone',
+      builtIn: 'everyone',
+      keycloakRoles: [],
+      keycloakGroups: [],
+      componentIds: ['public'],
+      features: ['translator.documents']
+    },
+    {
+      id: 'admin',
+      builtIn: 'admin',
+      keycloakRoles: ['admin'],
+      keycloakGroups: ['/admins'],
+      componentIds: [],
+      features: []
+    },
+    {
+      id: 'staff',
+      builtIn: null,
+      keycloakRoles: ['staff'],
+      keycloakGroups: [],
+      componentIds: ['translator'],
+      features: ['translator.rephrase']
+    },
+    {
+      id: 'team',
+      builtIn: null,
+      keycloakRoles: [],
+      keycloakGroups: ['/campus/team'],
+      componentIds: ['public', 'transcription'],
+      features: ['transcription.live']
+    },
+    {
+      id: 'manual',
+      builtIn: null,
+      keycloakRoles: ['unmatched'],
+      keycloakGroups: [],
+      componentIds: ['private'],
+      features: ['translator.documents']
+    }
+  ]
+
+  it('holds everyone, manually assigned roles and exact Keycloak matches', () => {
+    expect(heldRoles(roles, ['manual', 'unknown'], claims).map(({ id }) => id)).toEqual([
+      'everyone',
+      'staff',
+      'team',
+      'manual'
+    ])
+    expect(keycloakRoleIds(roles, { keycloakRoles: ['STAFF'], keycloakGroups: ['team'] })).toEqual(
+      []
+    )
+    expect(keycloakRoleIds(roles, claims)).toEqual(['staff', 'team'])
+  })
+
+  it('unions grants without duplicate permissions', () => {
+    const access = roleAccess(roles, ['manual'], claims, ['unused'])
+    expect(access.isAdmin).toBe(false)
+    expect([...access.componentIds]).toEqual(['public', 'translator', 'transcription', 'private'])
+    expect([...access.features]).toEqual([
+      'translator.documents',
+      'translator.rephrase',
+      'transcription.live'
+    ])
+  })
+
+  it('grants every component and feature to manual or Keycloak admins', () => {
+    for (const access of [
+      roleAccess(roles, ['admin'], claims, ['all']),
+      roleAccess(roles, [], { ...claims, keycloakGroups: ['/admins'] }, ['all'])
+    ]) {
+      expect(access.isAdmin).toBe(true)
+      expect([...access.componentIds]).toEqual(['all'])
+      expect([...access.features]).toEqual(FEATURE_KEYS)
+    }
+  })
+
+  it('gives a user without any other role only everyone grants', () => {
+    const access = roleAccess(roles, [], { keycloakRoles: [], keycloakGroups: [] }, ['all'])
+    expect([...access.componentIds]).toEqual(['public'])
+    expect([...access.features]).toEqual(['translator.documents'])
+    expect(access.isAdmin).toBe(false)
   })
 })

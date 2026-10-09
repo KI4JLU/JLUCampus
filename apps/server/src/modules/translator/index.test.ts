@@ -1,3 +1,4 @@
+import { FEATURE_KEYS } from '@justcampus/shared'
 import { TRANSLATOR_REQUESTS_PER_MINUTE, TRANSLATOR_THROTTLED_MESSAGE } from '@justcampus/shared'
 import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +14,14 @@ function testApp(
 ): Hono<AppEnvironment> {
   const app = new Hono<AppEnvironment>()
   app.use('*', async (context, next) => {
+    context.set(
+      'access',
+      Promise.resolve({
+        isAdmin: false,
+        componentIds: new Set(['component']),
+        features: new Set(FEATURE_KEYS)
+      })
+    )
     context.set('session', { user: { id: userId } } as AppEnvironment['Variables']['session'])
     context.set('module', {
       type: 'translator',

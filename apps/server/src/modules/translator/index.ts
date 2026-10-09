@@ -43,6 +43,7 @@ import { basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
+import { getAccess, requireFeature } from '../../access.js'
 import { ApiError, parseBody, validationIssues } from '../../api.js'
 import { db } from '../../db/index.js'
 import { translatorDocument, translatorGlossary } from '../../db/schema.js'
@@ -104,6 +105,15 @@ import { readLinkedPages } from './web.js'
 
 export const translatorApp = new Hono<AppEnvironment>()
 
+for (const [paths, feature] of [
+  [['/documents', '/documents/*'], 'translator.documents'],
+  [['/rephrase'], 'translator.rephrase'],
+  [['/compose', '/execute-python'], 'translator.compose'],
+  [['/glossaries', '/glossaries/*'], 'translator.glossaries']
+] as const) {
+  for (const path of paths) translatorApp.use(path, requireFeature(feature))
+}
+
 // Reservations cover overlapping requests in this Node process. Multiple server processes need a shared lock.
 const uploadsInFlight = new Map<string, number>()
 
@@ -114,9 +124,9 @@ function upstreamSignal(signal: AbortSignal, timeoutMs = 60_000): AbortSignal {
 /** A text of up to 50,000 characters takes the model a while. */
 const LONG_REQUEST_MS = 180_000
 
-function viewer(context: Context<AppEnvironment>): Promise<GlossaryViewer> {
+async function viewer(context: Context<AppEnvironment>): Promise<GlossaryViewer> {
   const { user } = context.get('session')
-  return glossaryViewer(user.id, user.role === 'admin')
+  return glossaryViewer(user.id, (await getAccess(context)).isAdmin)
 }
 
 function llmTarget(runtime: ModuleRuntime<'translator'>, model: string): LlmTarget {
@@ -134,14 +144,18 @@ async function upstream<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-translatorApp.get('/engines', (context) => {
+translatorApp.get('/engines', async (context) => {
   const { config, secrets } = getModuleRuntime(context, 'translator')
   const engines = listEngines(config, secrets)
   return context.json(
     translatorEngineListSchema.parse({
       engines,
       defaultEngine: resolveDefaultEngine(config, engines),
-      documents: Boolean(config.documentsEnabled && secrets.deeplApiKey),
+      documents: Boolean(
+        config.documentsEnabled &&
+        secrets.deeplApiKey &&
+        (await getAccess(context)).features.has('translator.documents')
+      ),
       llmProvider: config.llmProviderName
     })
   )

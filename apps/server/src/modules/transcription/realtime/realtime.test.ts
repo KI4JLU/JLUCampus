@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net'
 
 import { serve } from '@hono/node-server'
 import {
+  FEATURE_KEYS,
   TRANSCRIPTION_API,
   TRANSCRIPTION_DEFAULT_CONFIG,
   TRANSCRIPTION_LIVE_MESSAGE_MAX_BYTES,
@@ -770,6 +771,14 @@ describe('the live routes', () => {
     mock = await startUpstreamMock()
     const app = new Hono<AppEnvironment>()
     app.use('*', async (context, next) => {
+      context.set(
+        'access',
+        Promise.resolve({
+          isAdmin: false,
+          componentIds: new Set([COMPONENT_ID]),
+          features: new Set(FEATURE_KEYS)
+        })
+      )
       if (!signedOut) {
         context.set('session', {
           user: { id: context.req.header('X-Test-User') ?? 'alice' }
