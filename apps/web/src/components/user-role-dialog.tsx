@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { KeyRoundIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
+  Badge,
   Button,
   Checkbox,
   Dialog,
@@ -38,8 +40,8 @@ interface UserRoleDialogProps {
 
 /**
  * The roles an admin assigns a user by hand, a checkbox each; everyone's role, which everybody
- * holds, is not among them. Roles the user holds through Keycloak show checked and cannot be
- * cleared here.
+ * holds, is not among them. A checkbox is the manual grant only: a role the user also holds
+ * through Keycloak says so beside it, and its manual grant can still be given or taken.
  */
 export function UserRoleDialog({
   user,
@@ -133,19 +135,15 @@ function RoleChoice({ user, roles, isSelf, onDone }: RoleChoiceProps): React.JSX
             const keycloak = user.keycloakRoleIds.includes(role.id)
             const manual = roleIds.includes(role.id)
             // Taking one's own admin role away would lock oneself out; the server refuses it too.
+            // Held through Keycloak as well, the manual grant can go.
             const ownAdmin = isSelf && role.builtIn === 'admin' && manual && !keycloak
-            const hint = keycloak
-              ? t('admin.users.role.viaKeycloak')
-              : ownAdmin
-                ? t('admin.users.assign.selfAdminHint')
-                : null
             return (
               <li key={role.id}>
                 <FormItem className="flex-row items-start gap-3">
                   <FormControl>
                     <Checkbox
-                      checked={keycloak || manual}
-                      disabled={keycloak || ownAdmin}
+                      checked={manual}
+                      disabled={ownAdmin}
                       onCheckedChange={(checked) =>
                         setRoleIds((current) => withId(current, role.id, checked === true))
                       }
@@ -153,7 +151,17 @@ function RoleChoice({ user, roles, isSelf, onDone }: RoleChoiceProps): React.JSX
                   </FormControl>
                   <div className="flex flex-col gap-1">
                     <FormLabel>{roleName(role, t)}</FormLabel>
-                    {hint ? <FormDescription>{hint}</FormDescription> : null}
+                    {keycloak || ownAdmin ? (
+                      <FormDescription className="flex flex-wrap items-center gap-2">
+                        {keycloak ? (
+                          <Badge tone="secondary" appearance="text">
+                            <KeyRoundIcon aria-hidden="true" width="1em" height="1em" />
+                            {t('admin.users.assign.automatic')}
+                          </Badge>
+                        ) : null}
+                        {ownAdmin ? t('admin.users.assign.selfAdminHint') : null}
+                      </FormDescription>
+                    ) : null}
                   </div>
                 </FormItem>
               </li>

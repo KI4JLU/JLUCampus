@@ -1013,8 +1013,9 @@
       },
       "assign": {
         "title": "Rollen zuweisen",
-        "description": "Rollen von „{{name}}“. Rollen über Keycloak ergeben sich aus der letzten Anmeldung und lassen sich hier nicht abwählen.",
+        "description": "Rollen, die „{{name}}“ von Hand zugewiesen sind. Rollen über Keycloak gelten unabhängig davon und richten sich nach der letzten Anmeldung.",
         "roles": "Rollen",
+        "automatic": "Automatisch über Keycloak",
         "selfAdminHint": "Ihre eigene Admin-Rolle können Sie nicht entfernen.",
         "loadFailed": "Die Rollen konnten nicht geladen werden.",
         "empty": "Außer „Alle Nutzenden“ gibt es noch keine Rollen."

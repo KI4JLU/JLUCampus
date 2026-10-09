@@ -1013,8 +1013,9 @@
       },
       "assign": {
         "title": "Assign roles",
-        "description": "Roles of “{{name}}”. Roles via Keycloak come from the last sign-in and cannot be cleared here.",
+        "description": "Roles assigned to “{{name}}” by hand. Roles via Keycloak apply regardless and follow the last sign-in.",
         "roles": "Roles",
+        "automatic": "Automatically via Keycloak",
         "selfAdminHint": "You cannot remove your own admin role.",
         "loadFailed": "The roles could not be loaded.",
         "empty": "There are no roles yet besides “All users”."
