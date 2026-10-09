@@ -133,12 +133,7 @@ export const queryKeys = {
  */
 export const meQuery = queryOptions({
   queryKey: queryKeys.me,
-  queryFn: async () => {
-    const me = await apiFetch<Me>(API.me)
-    const previous = queryClient.getQueryData<Me>(queryKeys.me)
-    if (previous && accessChanged(previous, me)) void invalidateAccess(queryClient)
-    return me
-  },
+  queryFn: async () => checkAccess(queryClient, await apiFetch<Me>(API.me)),
   staleTime: 5 * 60_000,
   refetchInterval: 4 * 60_000,
   refetchIntervalInBackground: true
@@ -435,7 +430,7 @@ export function useUpdateMe(): UseMutationResult<Me, Error, MePatch> {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (patch: MePatch) => apiFetch<Me>(API.me, { method: 'PATCH', json: patch }),
-    onSuccess: (me) => client.setQueryData(queryKeys.me, me)
+    onSuccess: (me) => client.setQueryData(queryKeys.me, checkAccess(client, me))
   })
 }
 
@@ -516,6 +511,16 @@ export function useSaveDashboard(
  * the folder templates, and what the modules offer. A page of a component no longer allowed then
  * finds it gone.
  */
+/**
+ * Reloads what the user's roles shape when a fresh `/me` answer (poll or own PATCH) allows other
+ * components or functions than the cached one; must run before the answer replaces the cache.
+ */
+function checkAccess(client: QueryClient, me: Me): Me {
+  const previous = client.getQueryData<Me>(queryKeys.me)
+  if (previous && accessChanged(previous, me)) void invalidateAccess(client)
+  return me
+}
+
 function invalidateAccess(client: QueryClient): Promise<void> {
   return Promise.all([
     client.invalidateQueries({ queryKey: queryKeys.components }),
