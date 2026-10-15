@@ -95,8 +95,10 @@ Copy `.env.example` to `.env` at the repo root. The server loads the root
   `SameSite=None; Secure`.
 - Sign-in from the client: Better-Auth 1.7 registers generic OAuth providers as
   core social providers, so the call is
-  `authClient.signIn.social({ provider: 'keycloak', callbackURL })` and the
-  server-side callback is `/api/auth/callback/keycloak`. The callback URL is
+  `authClient.signIn.social({ provider: 'keycloak', callbackURL })`. The
+  redirect URI sent to Keycloak, and registered there, is
+  `${BETTER_AUTH_URL}/api/auth/oidc/callback`; the server forwards it to
+  Better-Auth's own callback `/api/auth/callback/keycloak`. The callback URL is
   the frontend's own URL (web origin or `app://-/`).
 - Sign-out: `authClient.signOut()` resolves with `{ success, url?, redirect? }`.
   `url` is the Keycloak RP-initiated logout URL (`end_session_endpoint` from

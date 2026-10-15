@@ -1,4 +1,9 @@
-import { COMPONENT_WIDGETS, widgetRefKey, type ComponentType } from '@justcampus/shared'
+import {
+  COMPONENT_WIDGETS,
+  KEYCLOAK_CALLBACK_PATH,
+  widgetRefKey,
+  type ComponentType
+} from '@justcampus/shared'
 import { and, asc, eq, isNull } from 'drizzle-orm'
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
@@ -24,6 +29,7 @@ const keycloakConfig: GenericOAuthConfig = {
     issuer: env.KEYCLOAK_ISSUER,
     clientId: env.KEYCLOAK_CLIENT_ID,
     clientSecret: env.KEYCLOAK_CLIENT_SECRET,
+    redirectURI: new URL(KEYCLOAK_CALLBACK_PATH, env.BETTER_AUTH_URL).toString(),
     pkce: true,
     scopes: ['openid', 'profile', 'email'],
     postLogoutRedirectURI: env.WEB_ORIGIN

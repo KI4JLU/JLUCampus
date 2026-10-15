@@ -3,6 +3,8 @@ import {
   API,
   COMPONENT_SECRETS,
   COMPONENT_WIDGETS,
+  KEYCLOAK_CALLBACK_PATH,
+  KEYCLOAK_PROVIDER_ID,
   adminComponentSchema,
   adminUserListSchema,
   adminUserPatchSchema,
@@ -280,6 +282,19 @@ app.use('/api/*', async (context, next) => {
 })
 
 app.get(API.health, (context) => context.json({ ok: true }))
+// Keycloak returns to the registered redirect URI, which Better-Auth serves under another path.
+app.on(['GET', 'POST'], KEYCLOAK_CALLBACK_PATH, async (context) => {
+  const request = context.req.raw
+  const url = new URL(request.url)
+  url.pathname = `${API.auth}/callback/${KEYCLOAK_PROVIDER_ID}`
+  return auth.handler(
+    new Request(url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.method === 'POST' ? await request.arrayBuffer() : undefined
+    })
+  )
+})
 app.on(['GET', 'POST'], `${API.auth}/*`, (context) => auth.handler(context.req.raw))
 
 app.use('/api/*', async (context, next) => {
