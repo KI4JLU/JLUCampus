@@ -1793,6 +1793,12 @@ export const API = {
 
 export const KEYCLOAK_PROVIDER_ID = 'keycloak'
 
+/**
+ * Redirect URI path registered with the university's Keycloak. The server forwards it to
+ * Better-Auth's own callback, `${API.auth}/callback/${KEYCLOAK_PROVIDER_ID}`.
+ */
+export const KEYCLOAK_CALLBACK_PATH = `${API.auth}/oidc/callback`
+
 // ---------------------------------------------------------------------------
 // Desktop bridge
 // ---------------------------------------------------------------------------

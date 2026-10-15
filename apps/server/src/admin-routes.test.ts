@@ -7,7 +7,10 @@ import {
   dashboardSchema,
   meSchema,
   folderTemplateListSchema,
-  FEATURE_KEYS
+  FEATURE_KEYS,
+  API,
+  KEYCLOAK_CALLBACK_PATH,
+  KEYCLOAK_PROVIDER_ID
 } from '@justcampus/shared'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -260,6 +263,7 @@ vi.mock('./db/index.js', async () => {
 
 import { app } from './app.js'
 import { runAdminCommand } from './admin-cli.js'
+import { auth } from './auth.js'
 
 beforeEach(() => {
   state.actorId = 'alice'
@@ -803,5 +807,20 @@ describe('admin CLI memberships', () => {
     await expect(runAdminCommand({ command: 'grant', identifier: 'missing' })).rejects.toThrow(
       'The user must sign in first'
     )
+  })
+})
+
+describe('Keycloak redirect URI', () => {
+  it("forwards the registered callback to Better-Auth's own", async () => {
+    const handler = vi.mocked(auth.handler)
+    handler.mockResolvedValueOnce(new Response(null, { status: 302 }))
+
+    const response = await app.request(`${KEYCLOAK_CALLBACK_PATH}?code=abc&state=xyz`)
+
+    expect(response.status).toBe(302)
+    const forwarded = handler.mock.lastCall![0]
+    expect(forwarded.method).toBe('GET')
+    expect(new URL(forwarded.url).pathname).toBe(`${API.auth}/callback/${KEYCLOAK_PROVIDER_ID}`)
+    expect(new URL(forwarded.url).search).toBe('?code=abc&state=xyz')
   })
 })
